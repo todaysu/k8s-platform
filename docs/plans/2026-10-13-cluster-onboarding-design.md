@@ -6,6 +6,18 @@
 
 首个功能是“集群纳管”：管理员通过集群名称和 Kubeconfig，将一套现有 Kubernetes 集群接入平台。
 
+技术架构参考 CNCF Headlamp，但不直接 Fork Headlamp。平台采用 React + TypeScript 前端、Go 单体后端和 Kubernetes 官方 `client-go`。第一版不引入 Headlamp 的 Electron、插件、Helm、通用资源编辑和桌面应用能力。
+
+```text
+浏览器（React + TypeScript + MUI）
+              ↓ JSON API
+Go 单体后端（认证、集群纳管、Kubernetes 访问）
+        ↓                          ↓
+    SQLite/PostgreSQL          多集群 API Server
+```
+
+生产构建时，Go 服务同时托管编译后的前端静态文件，最终仍然只有一个容器和一个服务。
+
 ## 2. 用户与范围
 
 第一版只有一个管理员账号，不开放注册，也不实现角色管理。
@@ -143,22 +155,31 @@
 
 ## 7. 接口
 
-- `POST /api/clusters/validate`：解析并测试新集群，返回非敏感摘要和 `draft_id`。
-- `POST /api/clusters/confirm`：确认临时记录并创建集群。
-- `GET /api/clusters`：集群列表。
-- `GET /api/clusters/{id}`：基础详情。
-- `PATCH /api/clusters/{id}`：修改显示名称。
-- `POST /api/clusters/{id}/validate`：测试更新凭据。
-- `POST /api/clusters/{id}/confirm`：确认替换凭据。
-- `POST /api/clusters/{id}/check`：重新测试当前凭据。
-- `DELETE /api/clusters/{id}`：取消纳管，要求提交确认名称。
+- `POST /api/v1/clusters/validate`：解析并测试新集群，返回非敏感摘要和 `draft_id`。
+- `POST /api/v1/clusters/confirm`：确认临时记录并创建集群。
+- `GET /api/v1/clusters`：集群列表。
+- `GET /api/v1/clusters/{id}`：基础详情。
+- `PATCH /api/v1/clusters/{id}`：修改显示名称。
+- `POST /api/v1/clusters/{id}/validate`：测试更新凭据。
+- `POST /api/v1/clusters/{id}/confirm`：确认替换凭据。
+- `POST /api/v1/clusters/{id}/check`：重新测试当前凭据。
+- `DELETE /api/v1/clusters/{id}`：取消纳管，要求提交确认名称。
 
-第一版使用 Django 模板渲染页面，接口以 Django View 实现，不额外引入前端框架和 Django REST Framework。
+接口由 Go 后端提供 JSON 响应。React 前端使用 TanStack Query 调用接口，并使用 React Router 管理页面路由。接口统一返回：
+
+```json
+{
+  "data": {},
+  "error": null
+}
+```
+
+失败响应只返回稳定错误码和中文安全提示，不返回 Go 内部错误文本。
 
 ## 8. 安全要求
 
 - Token 使用应用层认证加密保存，加密密钥从环境变量读取，不能进入数据库或 Git。
-- 加密密钥与 Django `SECRET_KEY` 分开。
+- 凭据加密密钥必须独立管理，不能复用管理员密码哈希或会话随机值。
 - 测试连接超时五秒。
 - 不跟随 API Server HTTP 跳转。
 - 限制响应大小。
@@ -166,7 +187,10 @@
 - 错误页不显示堆栈和底层敏感异常。
 - 日志禁止记录 Kubeconfig、Token、CA 和完整请求正文。
 - 所有业务页面和接口要求管理员登录。
-- 登录使用 Django CSRF、会话和密码哈希能力。
+- 单管理员密码使用安全密码哈希保存。
+- 登录成功后使用服务端会话和 `HttpOnly`、`SameSite=Strict` Cookie。
+- 所有状态修改接口校验 CSRF Token。
+- 前后端生产环境保持同源部署，不开放任意跨域访问。
 
 ## 9. 错误类型
 
@@ -199,9 +223,11 @@
 
 ## 11. 架构决策
 
-### ADR-001：使用 Django 模块化单体
+### ADR-001：采用 Headlamp 风格的 Go + React 单体部署
 
-第一版采用 Django 模板、Django ORM 和单数据库。相比分离前后端或微服务，它更容易学习、部署和排错，足以支持约六十套集群。
+前端使用 React、TypeScript 和 Material UI；后端使用 Go，并通过 Kubernetes 官方 `client-go` 访问集群。该组合比 Django 更贴近 Kubernetes 生态，后续实现资源 Watch、日志流和容器 Exec 时无需更换后端技术。
+
+前后端在开发时独立运行，生产时将前端编译产物嵌入 Go 二进制或随同镜像发布，由同一个 Go 服务托管，因此不演变为微服务架构。
 
 ### ADR-002：不长期保存原始 Kubeconfig
 
@@ -214,3 +240,7 @@
 ### ADR-004：第一版只支持单管理员
 
 先验证核心功能，不提前构建复杂 RBAC。容器 Exec 上线前必须重新设计用户、环境和操作权限。
+
+### ADR-005：参考 Headlamp，但不直接 Fork
+
+借鉴 Headlamp 的多集群代理、资源列表、详情页和权限感知设计，但不继承其桌面端、插件系统、Helm、通用资源编辑及其他当前不需要的复杂能力。这样既保持 Kubernetes 原生技术路线，又维持产品边界。

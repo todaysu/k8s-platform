@@ -2,860 +2,543 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build the first usable slice of the lightweight Kubernetes multi-cluster platform: one administrator can add, inspect, rename, re-check, update, and remove a cluster using a cluster name and a token-based Kubeconfig.
+**Goal:** Build the first usable feature of a lightweight Headlamp-inspired Kubernetes multi-cluster platform: one administrator can add, inspect, rename, re-check, update, and remove a cluster using a cluster name and a token-based Kubeconfig.
 
-**Architecture:** Use a Django 5.2 LTS modular monolith with server-rendered templates and SQLite during local development. Keep Kubernetes parsing, connection checks, and credential encryption in independent service modules. Test and confirmation are separated by a short-lived encrypted database draft, so raw Kubeconfig data never needs to be returned to the browser.
+**Architecture:** Use a React/TypeScript/Material UI frontend and a Go modular-monolith backend. The Go service owns authentication, encrypted cluster credentials, SQLite persistence, and Kubernetes access through official `client-go`; in production it also serves the compiled frontend so the platform remains one deployable service. Test and confirmation are separated by a ten-minute encrypted draft.
 
-**Tech Stack:** Python 3.12, Django 5.2 LTS, PyYAML, cryptography/Fernet, Python standard-library HTTPS client, pytest, pytest-django, Bootstrap via local template styles.
+**Tech Stack:** Go 1.27, `client-go`, `database/sql`, SQLite, AES-GCM, React 19, TypeScript, Vite, Material UI, React Router, TanStack Query, Vitest, React Testing Library, Go standard testing.
 
 ---
 
-## Before starting
+## Scope guard
 
 Read the approved design first:
 
 ```bash
-sed -n '1,260p' docs/plans/2026-10-13-cluster-onboarding-design.md
+sed -n '1,280p' docs/plans/2026-10-13-cluster-onboarding-design.md
 ```
 
-Work through one task at a time. Do not add nodes, Pods, Events, health scoring, alerts, Exec, REST framework, Redis, Celery, PostgreSQL, or Kubernetes deployment manifests in this implementation.
+This plan implements only cluster onboarding. Do not add nodes, Pods, Events, metrics, health scoring, alerts, logs, Exec, Helm, plugins, YAML editing, multi-user RBAC, Electron, Redis, queues, or Kubernetes deployment manifests.
 
-## Target project structure
+Headlamp is an architectural and interaction reference only. Do not copy its whole repository into this project.
+
+## Target structure
 
 ```text
 .
 ├── .env.example
 ├── .gitignore
+├── Makefile
 ├── README.md
-├── manage.py
-├── requirements.txt
-├── config/
-│   ├── __init__.py
-│   ├── settings.py
-│   ├── urls.py
-│   └── wsgi.py
-├── clusters/
-│   ├── __init__.py
-│   ├── admin.py
-│   ├── apps.py
-│   ├── forms.py
-│   ├── models.py
-│   ├── urls.py
-│   ├── views.py
-│   ├── migrations/
-│   ├── management/commands/cleanup_cluster_drafts.py
-│   ├── services/
-│   │   ├── connection.py
-│   │   ├── crypto.py
-│   │   ├── errors.py
-│   │   ├── fingerprint.py
-│   │   ├── imports.py
-│   │   └── kubeconfig.py
-│   ├── templates/clusters/
-│   │   ├── base.html
-│   │   ├── cluster_confirm_delete.html
-│   │   ├── cluster_detail.html
-│   │   ├── cluster_form.html
-│   │   ├── cluster_list.html
-│   │   └── cluster_preview.html
+├── go.mod
+├── go.sum
+├── cmd/platform/main.go
+├── internal/
+│   ├── auth/session.go
+│   ├── cluster/
+│   │   ├── connection.go
+│   │   ├── crypto.go
+│   │   ├── errors.go
+│   │   ├── fingerprint.go
+│   │   ├── kubeconfig.go
+│   │   ├── model.go
+│   │   ├── repository.go
+│   │   └── service.go
+│   ├── config/config.go
+│   ├── httpapi/
+│   │   ├── auth_handlers.go
+│   │   ├── cluster_handlers.go
+│   │   ├── middleware.go
+│   │   ├── response.go
+│   │   └── router.go
+│   ├── store/
+│   │   ├── migrations/001_initial.sql
+│   │   └── sqlite.go
+│   └── webui/webui.go
+├── web/
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.ts
+│   ├── src/
+│   │   ├── api/client.ts
+│   │   ├── app/App.tsx
+│   │   ├── app/theme.ts
+│   │   ├── components/AppShell.tsx
+│   │   ├── components/ConnectionStatus.tsx
+│   │   ├── pages/ClusterDetailPage.tsx
+│   │   ├── pages/ClusterImportPage.tsx
+│   │   ├── pages/ClusterListPage.tsx
+│   │   ├── pages/ClusterPreviewPage.tsx
+│   │   ├── pages/LoginPage.tsx
+│   │   ├── test/setup.ts
+│   │   └── main.tsx
 │   └── tests/
-│       ├── factories.py
-│       ├── test_connection.py
-│       ├── test_crypto.py
-│       ├── test_import_service.py
-│       ├── test_kubeconfig.py
-│       ├── test_models.py
-│       └── test_views.py
-└── templates/registration/login.html
+└── tests/fixtures/
 ```
 
 ---
 
-### Task 1: Bootstrap Django and prove the app runs
+### Task 1: Bootstrap Go and React projects
 
-**Files:**
+**Files:** `.gitignore`, `.env.example`, `Makefile`, `README.md`, `go.mod`, `cmd/platform/main.go`, `internal/config/config.go`, and the Vite-generated `web/` project.
 
-- Create: `requirements.txt`
-- Create: `.gitignore`
-- Create: `.env.example`
-- Create: `README.md`
-- Create: `manage.py`
-- Create: `config/__init__.py`
-- Create: `config/settings.py`
-- Create: `config/urls.py`
-- Create: `config/wsgi.py`
-- Create: `clusters/__init__.py`
-- Create: `clusters/apps.py`
-- Create: `clusters/urls.py`
-- Create: `clusters/views.py`
-- Create: `clusters/tests/test_views.py`
-
-**Step 1: Create and activate the virtual environment**
-
-Run:
+**Step 1: Verify prerequisites**
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
+go version
+node --version
+npm --version
 ```
 
-Expected: `python --version` reports Python 3.12.x.
+Expected: Go 1.27.x and an actively supported Node.js LTS release. Do not use Node 20 or older.
 
-**Step 2: Add dependencies**
+**Step 2: Initialize Go**
 
-Create `requirements.txt`:
+```bash
+go mod init example.com/k8s-platform
+mkdir -p cmd/platform internal/config
+```
+
+Replace the example module path with an internal company path when one is known; do not invent a public repository URL.
+
+Create a `Config` holding listen address, database path, administrator username, bcrypt password hash, base64 encryption key, secure-cookie flag, and session TTL. `Load()` returns an error when production secrets are absent.
+
+**Step 3: Write a failing config test**
+
+```go
+func TestLoadRejectsMissingSecrets(t *testing.T) {
+    t.Setenv("ADMIN_PASSWORD_HASH", "")
+    t.Setenv("CREDENTIAL_ENCRYPTION_KEY", "")
+    if _, err := Load(); err == nil {
+        t.Fatal("expected missing secret error")
+    }
+}
+```
+
+Run `go test ./internal/config`; expect FAIL until `Load()` is implemented, then PASS.
+
+**Step 4: Create React**
+
+```bash
+npm create vite@latest web -- --template react-ts
+cd web
+npm install
+npm install @mui/material @mui/icons-material @emotion/react @emotion/styled
+npm install react-router-dom @tanstack/react-query
+npm install -D vitest jsdom @testing-library/react @testing-library/jest-dom @testing-library/user-event
+cd ..
+```
+
+Remove demo content. Add a minimal app title and one Vitest render test.
+
+**Step 5: Add commands**
+
+```make
+test:
+	go test ./...
+	cd web && npm test -- --run
+
+dev-backend:
+	go run ./cmd/platform
+
+dev-frontend:
+	cd web && npm run dev
+```
+
+**Step 6: Verify and commit**
+
+```bash
+go test ./...
+cd web && npm test -- --run && npm run build
+cd ..
+git add .
+git commit -m "chore: bootstrap Go and React platform"
+```
+
+---
+
+### Task 2: Add SQLite schema and repositories
+
+**Files:** `internal/store/migrations/001_initial.sql`, `internal/store/sqlite.go`, `internal/store/sqlite_test.go`, `internal/cluster/model.go`, `internal/cluster/repository.go`.
+
+**Step 1: Write a failing migration test**
+
+Open an in-memory SQLite database, run migrations, and assert that `clusters`, `cluster_import_drafts`, and `operation_logs` exist.
+
+**Step 2: Define schema**
+
+- `clusters`: ID, unique name, API Server, Context, CA, encrypted Token, version, unique fingerprint, status, last safe error code and timestamps.
+- `cluster_import_drafts`: ID, optional target cluster ID, parsed connection fields, expiry and timestamps.
+- `operation_logs`: action, result, safe error code, cluster ID/name snapshots and time.
+
+Never add raw Kubeconfig, request body, or plaintext Token columns.
+
+**Step 3: Implement a narrow repository**
+
+```go
+type Repository interface {
+    NameExists(context.Context, string) (bool, error)
+    FingerprintExists(context.Context, string) (bool, error)
+    CreateDraft(context.Context, ImportDraft) error
+    DraftByID(context.Context, string) (ImportDraft, error)
+    CreateClusterFromDraft(context.Context, string, time.Time) (Cluster, error)
+    ListClusters(context.Context) ([]Cluster, error)
+    ClusterByID(context.Context, string) (Cluster, error)
+    UpdateCluster(context.Context, Cluster) error
+    DeleteCluster(context.Context, string) error
+    DeleteExpiredDrafts(context.Context, time.Time) (int64, error)
+    AppendOperation(context.Context, OperationLog) error
+}
+```
+
+Transactions protect confirmation, credential replacement and deletion audit.
+
+**Step 4: Test and commit**
+
+Test uniqueness, expired drafts and rollback, then run:
+
+```bash
+go test ./internal/store ./internal/cluster
+git add internal/store internal/cluster go.mod go.sum
+git commit -m "feat: add cluster persistence"
+```
+
+---
+
+### Task 3: Parse the supported Kubeconfig subset
+
+**Files:** `internal/cluster/errors.go`, `kubeconfig.go`, `kubeconfig_test.go`, `fingerprint.go`, `tests/fixtures/test-ca.pem`.
+
+**Step 1: Add pinned Kubernetes dependencies**
+
+Choose a stable `client-go` minor matching the newest Kubernetes minor in the managed fleet. Keep all Kubernetes Go modules on that minor.
+
+```bash
+go get k8s.io/client-go@v0.X.Y
+go get k8s.io/apimachinery@v0.X.Y
+go mod tidy
+```
+
+Record the chosen version in `README.md`; do not depend on `master`.
+
+**Step 2: Define safe errors**
+
+```go
+type Error struct{ Code string }
+func (e *Error) Error() string { return e.Code }
+```
+
+Include stable codes for invalid YAML, Context, HTTPS, inline CA and Token authentication.
+
+**Step 3: Write parser tests first**
+
+Test valid multi-context input and ensure `current-context` is selected. Reject broken references, HTTP server, CA file path, invalid CA, missing Token, `tokenFile`, exec plugin, client certificate, username/password, empty input and input over 1 MiB.
+
+**Step 4: Implement with client-go**
+
+Use `clientcmd.Load(data)`, then enforce the supported subset explicitly. Return only:
+
+```go
+type ParsedKubeconfig struct {
+    APIServer   string
+    ContextName string
+    CAData      []byte
+    Token       string
+}
+```
+
+Compute the fingerprint from normalized API Server plus CA using SHA-256; never include Token.
+
+**Step 5: Verify and commit**
+
+```bash
+go test ./internal/cluster -run 'TestParse|TestFingerprint'
+git add internal/cluster tests/fixtures go.mod go.sum README.md
+git commit -m "feat: parse restricted kubeconfigs"
+```
+
+---
+
+### Task 4: Encrypt Tokens and test API connectivity
+
+**Files:** `internal/cluster/crypto.go`, `crypto_test.go`, `connection.go`, `connection_test.go`.
+
+**Step 1: Test AES-GCM first**
+
+Test round trip, random nonces, malformed ciphertext, wrong key and missing key. Assert ciphertext never contains plaintext.
+
+**Step 2: Implement encryption**
+
+Accept a base64-encoded 32-byte key. Store base64 of `nonce || ciphertext`. Wrap failures as `ENCRYPTION_FAILED` without logging secrets.
+
+Generate a local key with `openssl rand -base64 32`; never commit it.
+
+**Step 3: Test HTTPS connection behavior**
+
+Using an HTTPS test server, cover success, five-second timeout, TLS failure, 401, 403, redirect, invalid version response and oversized response.
+
+**Step 4: Implement client-go discovery**
+
+Build `rest.Config` from Server, CA and Bearer Token. Use `rest.HTTPClientFor`, reject redirects, set timeout and limit the response body, then call:
+
+```go
+discovery.NewDiscoveryClientForConfigAndClient(cfg, client).ServerVersion()
+```
+
+Return only `GitVersion` and map low-level failures to safe codes.
+
+**Step 5: Verify and commit**
+
+```bash
+go test ./internal/cluster -run 'TestEncrypt|TestDecrypt|TestConnection'
+git add internal/cluster
+git commit -m "feat: secure cluster credentials and connectivity"
+```
+
+---
+
+### Task 5: Implement the onboarding service
+
+**Files:** `internal/cluster/service.go`, `service_test.go`.
+
+**Step 1: Write service tests**
+
+Validation must parse, connect, reject duplicate name/fingerprint, encrypt Token, create a ten-minute draft and return only safe preview fields. Confirmation must reject expired drafts, handle races, atomically create the cluster, delete the draft and write an operation log.
+
+**Step 2: Define dependency interfaces**
+
+```go
+type Connector interface {
+    Version(context.Context, ParsedKubeconfig) (string, error)
+}
+type Cipher interface {
+    Encrypt(string) (string, error)
+    Decrypt(string) (string, error)
+}
+```
+
+Use fakes; unit tests must not reach a real cluster.
+
+**Step 3: Implement workflows**
+
+```go
+func (s *Service) ValidateNew(ctx context.Context, name string, data []byte) (ImportPreview, error)
+func (s *Service) ConfirmNew(ctx context.Context, draftID string) (Cluster, error)
+func (s *Service) List(ctx context.Context) ([]Cluster, error)
+func (s *Service) Get(ctx context.Context, id string) (Cluster, error)
+```
+
+Trim surrounding name whitespace only.
+
+**Step 4: Verify and commit**
+
+```bash
+go test ./internal/cluster -run TestService
+git add internal/cluster/service.go internal/cluster/service_test.go
+git commit -m "feat: add cluster onboarding service"
+```
+
+---
+
+### Task 6: Add single-administrator sessions and CSRF
+
+**Files:** `internal/auth/session.go`, `session_test.go`, `internal/httpapi/auth_handlers.go`, `middleware.go`, `response.go`.
+
+**Step 1: Add bcrypt and write tests**
+
+```bash
+go get golang.org/x/crypto/bcrypt
+```
+
+Test random session IDs, expiry, logout, password verification, `HttpOnly`, `SameSite=Strict`, conditional `Secure` and CSRF rejection.
+
+**Step 2: Implement minimal sessions**
+
+Use an in-memory mutex-protected map because version one has one administrator and one replica. A restart logs the administrator out; document this behavior.
+
+`GET /api/v1/session` creates or reads a session and returns authentication state plus CSRF token. Login and mutations require `X-CSRF-Token`.
+
+**Step 3: Add endpoints**
 
 ```text
-Django>=5.2,<5.3
-PyYAML>=6,<7
-cryptography>=45,<47
-pytest>=8,<10
-pytest-django>=4.11,<5
+GET  /api/v1/session
+POST /api/v1/session/login
+POST /api/v1/session/logout
 ```
 
-Run:
+Every response uses `{"data":{},"error":null}` or a safe coded error.
+
+**Step 4: Verify and commit**
 
 ```bash
-pip install -r requirements.txt
+go test ./internal/auth ./internal/httpapi
+git add internal/auth internal/httpapi go.mod go.sum README.md
+git commit -m "feat: add administrator sessions"
 ```
 
-Expected: installation completes without errors.
+---
 
-**Step 3: Add repository exclusions**
+### Task 7: Expose onboarding APIs
 
-Create `.gitignore`:
+**Files:** `internal/httpapi/cluster_handlers.go`, `cluster_handlers_test.go`, `router.go`, `cmd/platform/main.go`.
+
+**Step 1: Write handler tests**
+
+Use `httptest` and a fake service. Cover authentication, CSRF, file upload, pasted text, both/neither input, size limit, safe preview, confirmation, list, detail and error mapping. Assert responses never contain Token or CA.
+
+**Step 2: Implement routes**
 
 ```text
-.venv/
-__pycache__/
-*.py[cod]
-*.sqlite3
-.env
-.pytest_cache/
-htmlcov/
-.coverage
+POST   /api/v1/clusters/validate
+POST   /api/v1/clusters/confirm
+GET    /api/v1/clusters
+GET    /api/v1/clusters/{id}
+PATCH  /api/v1/clusters/{id}
+POST   /api/v1/clusters/{id}/validate
+POST   /api/v1/clusters/{id}/confirm
+POST   /api/v1/clusters/{id}/check
+DELETE /api/v1/clusters/{id}
 ```
 
-Create `.env.example`:
+Use standard `http.ServeMux`. Keep handlers thin.
 
-```text
-DJANGO_SECRET_KEY=replace-me
-FIELD_ENCRYPTION_KEY=replace-with-a-fernet-key
-DJANGO_DEBUG=true
-```
+**Step 3: Wire the server**
 
-**Step 4: Generate the Django project and app skeleton**
+Load config, open/migrate SQLite, build services and start an HTTP server with header/read/write/idle timeouts and graceful shutdown.
 
-Use Django generators rather than typing boilerplate:
+**Step 4: Verify and commit**
 
 ```bash
-django-admin startproject config .
-python manage.py startapp clusters
-```
-
-Then add `clusters` to `INSTALLED_APPS`, set `TEMPLATES[0]["DIRS"]` to `[BASE_DIR / "templates"]`, and configure:
-
-```python
-LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "cluster-list"
-LOGOUT_REDIRECT_URL = "login"
-```
-
-Read secrets from environment without supplying production defaults:
-
-```python
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "development-only-secret")
-FIELD_ENCRYPTION_KEY = os.environ.get("FIELD_ENCRYPTION_KEY", "")
-DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
-```
-
-**Step 5: Write the first failing route test**
-
-Add `pytest.ini`:
-
-```ini
-[pytest]
-DJANGO_SETTINGS_MODULE = config.settings
-python_files = test_*.py
-```
-
-Add to `clusters/tests/test_views.py`:
-
-```python
-import pytest
-from django.urls import reverse
-
-
-@pytest.mark.django_db
-def test_cluster_list_requires_login(client):
-    response = client.get(reverse("cluster-list"))
-    assert response.status_code == 302
-    assert reverse("login") in response.url
-```
-
-Run:
-
-```bash
-pytest clusters/tests/test_views.py -v
-```
-
-Expected: FAIL because `cluster-list` does not exist.
-
-**Step 6: Implement the minimum route**
-
-In `clusters/views.py`:
-
-```python
-from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
-
-
-@login_required
-def cluster_list(request):
-    return HttpResponse("Clusters")
-```
-
-In `clusters/urls.py`:
-
-```python
-from django.urls import path
-from . import views
-
-urlpatterns = [path("", views.cluster_list, name="cluster-list")]
-```
-
-In `config/urls.py`, include authentication and cluster routes:
-
-```python
-from django.contrib import admin
-from django.urls import include, path
-
-urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("accounts/", include("django.contrib.auth.urls")),
-    path("clusters/", include("clusters.urls")),
-]
-```
-
-Run:
-
-```bash
-python manage.py migrate
-pytest -v
-```
-
-Expected: PASS.
-
-**Step 7: Commit**
-
-```bash
-git add .gitignore .env.example README.md requirements.txt pytest.ini manage.py config clusters
-git commit -m "chore: bootstrap Django cluster platform"
+go test ./...
+go vet ./...
+git add cmd internal/httpapi
+git commit -m "feat: expose cluster onboarding API"
 ```
 
 ---
 
-### Task 2: Add the administrator login and base pages
+### Task 8: Build login and onboarding UI
 
-**Files:**
+**Files:** `web/src/api/client.ts`, `app/App.tsx`, `app/theme.ts`, `components/AppShell.tsx`, `components/ConnectionStatus.tsx`, five page components and matching tests.
 
-- Create: `templates/registration/login.html`
-- Create: `clusters/templates/clusters/base.html`
-- Create: `clusters/templates/clusters/cluster_list.html`
-- Modify: `clusters/views.py`
-- Test: `clusters/tests/test_views.py`
+**Step 1: Build the API client**
 
-**Step 1: Write failing authentication tests**
+Send cookies, bootstrap the CSRF token, add it to mutations and map coded errors. Never log request bodies.
 
-Add tests that:
+**Step 2: Build authentication routing**
 
-```python
-@pytest.mark.django_db
-def test_logged_in_admin_can_open_cluster_list(client, django_user_model):
-    admin = django_user_model.objects.create_superuser(
-        username="admin", email="admin@example.invalid", password="test-password"
-    )
-    client.force_login(admin)
-    response = client.get(reverse("cluster-list"))
-    assert response.status_code == 200
-    assert "尚未纳管任何集群" in response.content.decode()
+Unauthenticated users see only Login. Authenticated users see the app shell, username, cluster navigation and logout.
 
+**Step 3: Build cluster pages**
 
-@pytest.mark.django_db
-def test_non_staff_user_is_rejected(client, django_user_model):
-    user = django_user_model.objects.create_user("viewer", password="test-password")
-    client.force_login(user)
-    response = client.get(reverse("cluster-list"))
-    assert response.status_code == 403
-```
+- List: name, version, status, created time, loading/error/empty states.
+- Import: file and paste tabs, one mode per request, disabled button while testing.
+- Preview: API Server, Context, version and expiry only.
+- Detail: non-sensitive fields and lifecycle actions.
 
-Run the tests and expect failure because the template and staff check are absent.
+Do not put Kubeconfig in browser storage, URL state, query parameters or logs.
 
-**Step 2: Add a reusable administrator guard**
+**Step 4: Test journeys**
 
-Use `@user_passes_test(lambda user: user.is_active and user.is_staff)` together with `@login_required` on all cluster views. Do not create a custom user model in this version.
+Use React Testing Library for login, empty list, upload/paste, error, preview/confirm and detail. Assert fixture secrets never enter the DOM.
 
-**Step 3: Add server-rendered templates**
-
-`base.html` must contain navigation, the logged-in username, logout form using POST, and Django messages. `cluster_list.html` must extend it and show the empty state plus an “添加集群” link.
-
-`login.html` must contain only username, password, CSRF token, and submit button. Do not add registration or password-reset links.
-
-**Step 4: Run tests and create the administrator**
+**Step 5: Verify and commit**
 
 ```bash
-pytest clusters/tests/test_views.py -v
-python manage.py createsuperuser
-python manage.py runserver
-```
-
-Expected: login succeeds and `/clusters/` shows the empty state.
-
-**Step 5: Commit**
-
-```bash
-git add templates clusters/templates clusters/views.py clusters/tests/test_views.py
-git commit -m "feat: add single administrator login"
+cd web
+npm test -- --run
+npm run build
+cd ..
+git add web
+git commit -m "feat: add cluster onboarding interface"
 ```
 
 ---
 
-### Task 3: Add cluster, draft, and operation-log models
+### Task 9: Add rename, re-check, credential update and removal
 
-**Files:**
+**Files:** cluster service/repository/handlers, `ClusterDetailPage.tsx`, new `ClusterCredentialUpdatePage.tsx`, backend and frontend tests.
 
-- Create: `clusters/models.py`
-- Create: `clusters/admin.py`
-- Create: `clusters/tests/test_models.py`
-- Create: migration generated by Django
+**Step 1: Write backend tests first**
 
-**Step 1: Write failing model tests**
+Cover duplicate rename; re-check updates; safe failure codes; failed replacement preserving ciphertext; atomic replacement; API Server change warning; and exact-name removal without remote API calls.
 
-Cover:
+**Step 2: Implement service methods**
 
-```python
-@pytest.mark.django_db
-def test_cluster_name_and_fingerprint_are_unique():
-    # Create one Cluster, then assert duplicate name and duplicate fingerprint
-    # each raise django.db.IntegrityError.
-    ...
-
-
-@pytest.mark.django_db
-def test_draft_expires_after_ten_minutes():
-    draft = ClusterImportDraft.objects.create(...)
-    assert draft.is_expired is False
+```go
+func (s *Service) Rename(ctx context.Context, id, name string) error
+func (s *Service) Check(ctx context.Context, id string) (Cluster, error)
+func (s *Service) ValidateReplacement(ctx context.Context, id string, data []byte) (ImportPreview, error)
+func (s *Service) ConfirmReplacement(ctx context.Context, id, draftID string) (Cluster, error)
+func (s *Service) Remove(ctx context.Context, id, confirmationName string) error
 ```
 
-Run:
+Plaintext Token exists only during the connection call.
+
+**Step 3: Add UI actions**
+
+Use dialogs for rename and removal. Removal requires the exact name. Reuse import components for credential update and warn prominently if API Server changes.
+
+**Step 4: Verify and commit**
 
 ```bash
-pytest clusters/tests/test_models.py -v
-```
-
-Expected: import failure because models are absent.
-
-**Step 2: Implement enums and models**
-
-Use UUID primary keys and Django `TextChoices`:
-
-```python
-class ConnectionStatus(models.TextChoices):
-    CONNECTED = "connected", "正常"
-    UNREACHABLE = "unreachable", "无法连接"
-    AUTH_FAILED = "authentication_failed", "认证失败"
-    TLS_FAILED = "tls_failed", "证书失败"
-
-
-class Cluster(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=50, unique=True)
-    api_server = models.URLField(max_length=500)
-    context_name = models.CharField(max_length=253)
-    ca_certificate = models.TextField()
-    encrypted_token = models.TextField()
-    kubernetes_version = models.CharField(max_length=64)
-    fingerprint = models.CharField(max_length=64, unique=True)
-    connection_status = models.CharField(
-        max_length=32, choices=ConnectionStatus.choices, default=ConnectionStatus.CONNECTED
-    )
-    last_error_code = models.CharField(max_length=64, blank=True)
-    last_checked_at = models.DateTimeField()
-    credentials_updated_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-```
-
-`ClusterImportDraft` holds the same parsed connection fields, a nullable `cluster` foreign key for updates, and `expires_at`. Its `is_expired` property compares `timezone.now()` with `expires_at`.
-
-`OperationLog` stores action, result, error code, cluster UUID snapshot, name snapshot, and creation time. Do not add request bodies or generic JSON metadata.
-
-**Step 3: Generate and inspect migration**
-
-```bash
-python manage.py makemigrations clusters
-python manage.py sqlmigrate clusters 0001
-python manage.py migrate
-```
-
-Expected: three tables and uniqueness constraints are present.
-
-**Step 4: Register safe fields in Django admin**
-
-Register models, but exclude `encrypted_token` and CA contents from list and readonly displays. Do not make drafts editable.
-
-**Step 5: Run tests and commit**
-
-```bash
-pytest clusters/tests/test_models.py -v
-git add clusters/models.py clusters/admin.py clusters/migrations clusters/tests/test_models.py
-git commit -m "feat: add cluster onboarding models"
+go test ./...
+cd web && npm test -- --run && npm run build
+cd ..
+git add internal web
+git commit -m "feat: manage cluster onboarding lifecycle"
 ```
 
 ---
 
-### Task 4: Parse only the supported Kubeconfig subset
+### Task 10: Ship one service and run security regression
 
-**Files:**
+**Files:** `internal/webui/webui.go`, frontend embed output, `cmd/platform/main.go`, `internal/httpapi/security_test.go`, `README.md`, `Makefile`.
 
-- Create: `clusters/services/__init__.py`
-- Create: `clusters/services/errors.py`
-- Create: `clusters/services/kubeconfig.py`
-- Create: `clusters/services/fingerprint.py`
-- Create: `clusters/tests/factories.py`
-- Create: `clusters/tests/test_kubeconfig.py`
+**Step 1: Embed the frontend**
 
-**Step 1: Define safe domain errors**
+Build React, embed its output in Go and serve it for non-API routes. React Router fallback returns `index.html`; API paths never fall through. Development uses Vite proxy. Production stays same-origin and does not enable permissive CORS.
 
-Create:
+**Step 2: Add security tests**
 
-```python
-class ClusterOnboardingError(Exception):
-    def __init__(self, code: str):
-        self.code = code
-        super().__init__(code)
-```
+Verify authentication, CSRF, cookie flags, HTTPS-only clusters, redirect rejection, safe errors, no secrets in HTTP/logs/database plaintext, expired draft rejection, timeouts and graceful shutdown.
 
-Views must display a translated message by error code, never `str()` from third-party exceptions.
+**Step 3: Add draft cleanup**
 
-**Step 2: Create a valid Kubeconfig test factory**
+Run at startup and periodically. Log only deletion count.
 
-The factory should produce YAML with two contexts and a configurable `current-context`, an HTTPS server, `certificate-authority-data`, and token. Use a small test CA fixture rather than production data.
+**Step 4: Document local use**
 
-**Step 3: Write parameterized failing parser tests**
+Explain Go/Node installation, npm install, AES key and bcrypt hash generation, development startup, safe test Kubeconfig, tests and production build. Never include real credentials.
 
-Test valid parsing plus every rejection:
-
-- empty or invalid YAML;
-- missing/invalid `current-context`;
-- missing cluster or user reference;
-- non-HTTPS server;
-- missing/invalid base64 CA;
-- missing token;
-- `tokenFile`, `exec`, client certificate, username/password only;
-- document larger than 1 MiB.
-
-**Step 4: Implement the parser**
-
-Return a frozen dataclass:
-
-```python
-@dataclass(frozen=True)
-class ParsedKubeconfig:
-    api_server: str
-    context_name: str
-    ca_pem: str
-    token: str
-```
-
-Use `yaml.safe_load`. Resolve items by their `name` field. Decode CA with strict base64 validation. Confirm that decoded data contains PEM certificate markers. Normalize the API Server by removing only a trailing slash.
-
-**Step 5: Add fingerprinting**
-
-```python
-def cluster_fingerprint(api_server: str, ca_pem: str) -> str:
-    material = f"{api_server.rstrip('/')}\0{ca_pem.strip()}".encode()
-    return hashlib.sha256(material).hexdigest()
-```
-
-Run:
+**Step 5: Final verification and commit**
 
 ```bash
-pytest clusters/tests/test_kubeconfig.py -v
-```
-
-Expected: all parser tests pass.
-
-**Step 6: Commit**
-
-```bash
-git add clusters/services clusters/tests/factories.py clusters/tests/test_kubeconfig.py
-git commit -m "feat: parse restricted token kubeconfigs"
-```
-
----
-
-### Task 5: Encrypt tokens and test Kubernetes connectivity
-
-**Files:**
-
-- Create: `clusters/services/crypto.py`
-- Create: `clusters/services/connection.py`
-- Create: `clusters/tests/test_crypto.py`
-- Create: `clusters/tests/test_connection.py`
-- Modify: `config/settings.py`
-
-**Step 1: Write encryption tests**
-
-Assert that encrypting a token does not include plaintext, decrypting restores it, and a missing/invalid key raises `ENCRYPTION_FAILED` without exposing the token.
-
-**Step 2: Implement Fernet encryption**
-
-```python
-def encrypt_secret(value: str) -> str:
-    try:
-        return Fernet(settings.FIELD_ENCRYPTION_KEY.encode()).encrypt(value.encode()).decode()
-    except Exception as exc:
-        raise ClusterOnboardingError("ENCRYPTION_FAILED") from exc
-```
-
-Implement `decrypt_secret` symmetrically. Never log `value` or the exception contents.
-
-Generate a local key:
-
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-Export the result as `FIELD_ENCRYPTION_KEY` only in the local shell; do not commit it.
-
-**Step 3: Write mocked connection tests**
-
-Cover successful `/version` JSON plus timeout, refused connection, TLS verification failure, HTTP 401, HTTP 403, redirect, invalid JSON, and response larger than 64 KiB.
-
-**Step 4: Implement the connection checker**
-
-Use `ssl.create_default_context(cadata=ca_pem)` and the standard library HTTPS client with:
-
-- five-second total timeout;
-- `Authorization: Bearer ...`;
-- no redirect following;
-- maximum 64 KiB response;
-- URL fixed to `{api_server}/version`;
-- mapping of expected failures to approved error codes.
-
-Return only:
-
-```python
-@dataclass(frozen=True)
-class ClusterVersion:
-    git_version: str
-```
-
-**Step 5: Run tests and commit**
-
-```bash
-pytest clusters/tests/test_crypto.py clusters/tests/test_connection.py -v
-git add config/settings.py clusters/services/crypto.py clusters/services/connection.py clusters/tests
-git commit -m "feat: encrypt credentials and check cluster API"
-```
-
----
-
-### Task 6: Implement the test-and-confirm import service
-
-**Files:**
-
-- Create: `clusters/services/imports.py`
-- Create: `clusters/tests/test_import_service.py`
-
-**Step 1: Write failing service tests**
-
-Test that validation:
-
-- parses and checks a valid Kubeconfig;
-- rejects duplicate names and fingerprints;
-- encrypts the token before storing the draft;
-- creates a ten-minute expiry;
-- returns only safe summary data.
-
-Test that confirmation:
-
-- creates one Cluster from a valid draft inside a transaction;
-- deletes the draft;
-- rejects expired drafts;
-- safely handles a duplicate created between validation and confirmation;
-- writes a successful or failed OperationLog.
-
-**Step 2: Implement orchestration services**
-
-Expose narrow functions:
-
-```python
-def validate_new_cluster(*, name: str, kubeconfig_bytes: bytes) -> ImportPreview:
-    ...
-
-
-@transaction.atomic
-def confirm_new_cluster(*, draft_id: UUID) -> Cluster:
-    ...
-```
-
-`ImportPreview` contains only draft ID, API Server, Context, Kubernetes version, and expiry time. It must not contain Token or CA.
-
-Normalize the display name by trimming surrounding whitespace, but do not silently change internal characters.
-
-**Step 3: Run tests and commit**
-
-```bash
-pytest clusters/tests/test_import_service.py -v
-git add clusters/services/imports.py clusters/tests/test_import_service.py
-git commit -m "feat: add cluster import draft workflow"
-```
-
----
-
-### Task 7: Build add, preview, list, and detail pages
-
-**Files:**
-
-- Create: `clusters/forms.py`
-- Create: `clusters/templates/clusters/cluster_form.html`
-- Create: `clusters/templates/clusters/cluster_preview.html`
-- Create: `clusters/templates/clusters/cluster_detail.html`
-- Modify: `clusters/templates/clusters/cluster_list.html`
-- Modify: `clusters/views.py`
-- Modify: `clusters/urls.py`
-- Modify: `clusters/tests/test_views.py`
-
-**Step 1: Write failing form and view tests**
-
-Test both upload and paste modes, rejection when both/neither are present, the 1 MiB file limit, safe error messages, preview contents, confirmation, empty list, populated list, and detail view.
-
-Also assert that response HTML never contains the fixture token or CA PEM.
-
-**Step 2: Implement the form**
-
-```python
-class ClusterImportForm(forms.Form):
-    name = forms.CharField(max_length=50, label="集群名称")
-    kubeconfig_file = forms.FileField(required=False, label="上传文件")
-    kubeconfig_text = forms.CharField(
-        required=False, widget=forms.Textarea, label="粘贴内容"
-    )
-
-    def clean(self):
-        cleaned = super().clean()
-        supplied = bool(cleaned.get("kubeconfig_file")) + bool(
-            cleaned.get("kubeconfig_text", "").strip()
-        )
-        if supplied != 1:
-            raise forms.ValidationError("请选择上传文件或粘贴内容中的一种方式。")
-        return cleaned
-```
-
-Read uploaded data once, enforce size before parsing, and pass bytes into the service.
-
-**Step 3: Implement POST/Redirect/GET views**
-
-Use named routes:
-
-```text
-clusters/                       cluster-list
-clusters/add/                   cluster-add
-clusters/import/<uuid>/         cluster-preview
-clusters/import/<uuid>/confirm/ cluster-confirm
-clusters/<uuid>/                cluster-detail
-```
-
-Every view requires an authenticated staff user. Confirmation uses POST and CSRF. Successful confirmation redirects to detail, preventing refresh from creating duplicates.
-
-**Step 4: Render plain, usable templates**
-
-Use semantic HTML and a small local stylesheet. Do not use CDN JavaScript. The preview page shows only the approved safe fields and expiry time.
-
-**Step 5: Test and manually exercise**
-
-```bash
-pytest clusters/tests/test_views.py -v
-python manage.py runserver
-```
-
-Expected: a valid test Kubeconfig reaches preview and confirmation; secrets never appear in page source.
-
-**Step 6: Commit**
-
-```bash
-git add clusters/forms.py clusters/templates clusters/views.py clusters/urls.py clusters/tests/test_views.py
-git commit -m "feat: add cluster onboarding pages"
-```
-
----
-
-### Task 8: Add rename, re-check, and credential replacement
-
-**Files:**
-
-- Modify: `clusters/forms.py`
-- Modify: `clusters/services/imports.py`
-- Modify: `clusters/views.py`
-- Modify: `clusters/urls.py`
-- Modify: `clusters/templates/clusters/cluster_detail.html`
-- Create: `clusters/templates/clusters/cluster_rename.html`
-- Modify: `clusters/tests/test_import_service.py`
-- Modify: `clusters/tests/test_views.py`
-
-**Step 1: Write failing tests**
-
-Cover:
-
-- rename success and duplicate-name rejection;
-- re-check updates status, version, error code, and time;
-- failed re-check stores only the safe error code;
-- credential validation links the draft to the existing cluster;
-- failed validation leaves the old encrypted token unchanged;
-- confirmation replaces all connection fields atomically;
-- changing API Server displays a warning before confirmation.
-
-**Step 2: Implement rename and re-check**
-
-Use POST for both. `check` decrypts the current token only inside the service, calls the connection checker, updates status, and discards plaintext immediately.
-
-**Step 3: Reuse the import form for credential update**
-
-The update page does not ask for a new name. Create an update draft associated with the Cluster. Confirmation locks the row with `select_for_update()` before replacing credentials.
-
-**Step 4: Run tests and commit**
-
-```bash
-pytest clusters/tests/test_import_service.py clusters/tests/test_views.py -v
-git add clusters
-git commit -m "feat: update cluster identity and credentials"
-```
-
----
-
-### Task 9: Add safe removal and draft cleanup
-
-**Files:**
-
-- Create: `clusters/templates/clusters/cluster_confirm_delete.html`
-- Create: `clusters/management/__init__.py`
-- Create: `clusters/management/commands/__init__.py`
-- Create: `clusters/management/commands/cleanup_cluster_drafts.py`
-- Modify: `clusters/forms.py`
-- Modify: `clusters/views.py`
-- Modify: `clusters/urls.py`
-- Modify: `clusters/tests/test_views.py`
-- Create: `clusters/tests/test_cleanup_command.py`
-
-**Step 1: Write failing deletion tests**
-
-Assert that GET only shows confirmation, wrong confirmation text does not delete, exact cluster name deletes the platform record, and no remote connection method is called during deletion.
-
-**Step 2: Implement explicit confirmation**
-
-The form has one field named `confirmation_name`. The view compares it exactly with `cluster.name`, deletes inside a transaction, writes the audit snapshot first, and redirects to the list.
-
-**Step 3: Write and implement cleanup tests**
-
-The management command deletes only expired drafts:
-
-```bash
-python manage.py cleanup_cluster_drafts
-```
-
-Output only the number of deleted drafts, never draft contents.
-
-**Step 4: Run tests and commit**
-
-```bash
-pytest clusters/tests/test_views.py clusters/tests/test_cleanup_command.py -v
-git add clusters
-git commit -m "feat: safely remove clusters and expired drafts"
-```
-
----
-
-### Task 10: Security regression and end-to-end verification
-
-**Files:**
-
-- Create: `clusters/tests/test_security.py`
-- Modify: `config/settings.py`
-- Modify: `README.md`
-
-**Step 1: Add security regression tests**
-
-Test:
-
-- every cluster route redirects anonymous users;
-- logged-in non-staff users receive 403;
-- state-changing requests require POST and CSRF;
-- unsafe HTTP API Servers are rejected;
-- redirects from API Servers are rejected;
-- Token and CA never appear in HTML, messages, OperationLog, or captured application logs;
-- `DEBUG` defaults to false when the environment variable is absent;
-- the app refuses to start a credential operation without a valid encryption key.
-
-**Step 2: Add production-safe settings**
-
-When `DEBUG` is false, require `DJANGO_SECRET_KEY`, set secure session and CSRF cookies, and read allowed hosts from an environment variable. Keep local defaults only when `DEBUG=true` is explicitly set.
-
-**Step 3: Document local setup**
-
-`README.md` must include:
-
-1. Install Python 3.12.
-2. Create `.venv` and install requirements.
-3. Generate `DJANGO_SECRET_KEY` and `FIELD_ENCRYPTION_KEY`.
-4. Run migrations.
-5. Create the single superuser.
-6. Start the server.
-7. Prepare a read-only, token-based test Kubeconfig with inline CA data.
-8. Run all tests.
-
-Do not put a real key or Kubeconfig in the README.
-
-**Step 4: Run final verification**
-
-```bash
-python manage.py check --deploy
-pytest -v
-python manage.py cleanup_cluster_drafts
+go test -race ./...
+go vet ./...
+cd web && npm test -- --run && npm run build
+cd ..
+make test
+git diff --check
 git status --short
-```
-
-Expected:
-
-- deployment check has no unreviewed critical warning;
-- all tests pass;
-- cleanup runs without exposing data;
-- only intended files are changed.
-
-**Step 5: Commit**
-
-```bash
-git add README.md config/settings.py clusters/tests/test_security.py
-git commit -m "test: verify cluster onboarding security"
+git add Makefile README.md cmd internal web
+git commit -m "build: ship single-service cluster platform"
 ```
 
 ---
 
 ## Final manual acceptance
 
-Use a non-production test cluster and work through the approved acceptance list:
+Use a non-production cluster:
 
-1. Log in as the only administrator.
-2. Add the cluster by file upload.
-3. Remove it, then add it by pasted text.
-4. Confirm that a multi-context file uses `current-context`.
-5. Try invalid current Context, CA, Token, and unreachable API.
-6. Try to add the same cluster with another display name.
-7. Update with an invalid Kubeconfig and verify the old credential still works.
-8. Update with a valid new Token.
-9. Rename the display name.
-10. Remove the platform record and verify the real cluster still runs.
-11. Search HTML, application logs, database operation logs, and Git history for the test Token; it must not appear.
+1. Log in as the administrator.
+2. Add by file, remove, then add by pasted text.
+3. Verify multi-context input selects `current-context`.
+4. Test invalid Context, CA, Token and unreachable API.
+5. Attempt duplicate onboarding under another name.
+6. Attempt a bad credential update and verify old credentials still work.
+7. Apply a valid Token update and rename the display name.
+8. Remove the record and verify the real cluster remains unchanged.
+9. Search pages, logs, SQLite text and Git history for the test Token; plaintext must not appear.
 
-Only after these checks pass should development move to the next feature, “集群列表与周期连接状态”。
+Only after this passes should the next feature begin: “集群列表与周期连接状态”。
