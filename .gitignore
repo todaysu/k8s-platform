@@ -1,0 +1,9 @@
+.DS_Store
+.env
+data/
+*.db
+*.db-shm
+*.db-wal
+coverage/
+web/dist/
+web/node_modules/
