@@ -14,7 +14,7 @@
 
 ## 当前开发状态
 
-项目目前只有后端配置加载和前端基础骨架，尚不能连接 Kubernetes 集群。
+项目目前包含后端健康检查接口和前端基础骨架，尚不能连接 Kubernetes 集群。
 
 ## 本地工具
 
@@ -29,6 +29,26 @@ export PATH="/opt/homebrew/bin:$PATH"
 ```bash
 make test
 cd web && npm run build && npm run lint
+```
+
+启动后端前，需要提供开发用配置：
+
+```bash
+export ADMIN_PASSWORD_HASH="仅限本地学习的占位值"
+export CREDENTIAL_ENCRYPTION_KEY="仅限本地学习的占位值"
+make dev-backend
+```
+
+后端启动后，可访问健康检查接口：
+
+```text
+GET http://127.0.0.1:8080/api/v1/health
+```
+
+启动前端：
+
+```bash
+make dev-frontend
 ```
 
 详细设计与开发步骤位于 [`docs/plans`](docs/plans)。
