@@ -10,6 +10,8 @@ import (
 	"example.com/k8s-platform/internal/httpapi"
 )
 
+const platformVersion = "0.1.0-dev"
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -18,7 +20,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewRouter(),
+		Handler:           httpapi.NewRouter(platformVersion),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

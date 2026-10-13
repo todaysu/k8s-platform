@@ -43,6 +43,7 @@ make dev-backend
 
 ```text
 GET http://127.0.0.1:8080/api/v1/health
+GET http://127.0.0.1:8080/api/v1/version
 ```
 
 启动前端：
