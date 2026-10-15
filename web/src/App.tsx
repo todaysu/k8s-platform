@@ -1,77 +1,30 @@
-import { Box, Chip, Container, Stack, Typography } from '@mui/material'
-import { useEffect, useState } from 'react'
+import { CssBaseline, ThemeProvider, createTheme } from '@mui/material'
 
-type HealthState = 'checking' | 'connected' | 'unavailable'
+import ClusterManagementPage from './pages/ClusterManagementPage'
 
-const healthDisplay = {
-  checking: { color: 'default' as const, label: '正在检查后端' },
-  connected: { color: 'success' as const, label: '后端连接正常' },
-  unavailable: { color: 'error' as const, label: '后端连接失败' },
-}
+const theme = createTheme({
+  palette: {
+    background: { default: '#f3f5f4', paper: '#ffffff' },
+    error: { main: '#c8473a' },
+    primary: { dark: '#083c43', main: '#0a6671' },
+    success: { main: '#21835b' },
+    text: { primary: '#172a2d', secondary: '#607276' },
+    warning: { main: '#d48318' },
+  },
+  shape: { borderRadius: 10 },
+  typography: {
+    fontFamily: '"Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif',
+    h4: { fontSize: '1.9rem', fontWeight: 720, letterSpacing: '-0.03em' },
+    h6: { fontWeight: 700 },
+  },
+})
 
 function App() {
-  const [health, setHealth] = useState<HealthState>('checking')
-
-  useEffect(() => {
-    let active = true
-
-    async function checkHealth() {
-      try {
-        const response = await fetch('/api/v1/health')
-        if (!response.ok) {
-          throw new Error('health request failed')
-        }
-
-        const body = await response.json()
-        if (body.data?.status !== 'ok') {
-          throw new Error('unexpected health response')
-        }
-
-        if (active) {
-          setHealth('connected')
-        }
-      } catch {
-        if (active) {
-          setHealth('unavailable')
-        }
-      }
-    }
-
-    void checkHealth()
-
-    return () => {
-      active = false
-    }
-  }, [])
-
-  const healthStatus = healthDisplay[health]
-
   return (
-    <Box
-      component="main"
-      sx={{
-        alignItems: 'center',
-        backgroundColor: 'grey.50',
-        display: 'flex',
-        minHeight: '100vh',
-      }}
-    >
-      <Container maxWidth="md">
-        <Stack spacing={3} sx={{ alignItems: 'flex-start' }}>
-          <Chip
-            color={healthStatus.color}
-            label={healthStatus.label}
-            size="small"
-          />
-          <Typography component="h1" variant="h3" sx={{ fontWeight: 700 }}>
-            Kubernetes 多集群管理平台
-          </Typography>
-          <Typography color="text.secondary" variant="h6">
-            聚焦集群稳定性的轻量运维平台
-          </Typography>
-        </Stack>
-      </Container>
-    </Box>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <ClusterManagementPage />
+    </ThemeProvider>
   )
 }
 
