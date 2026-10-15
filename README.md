@@ -52,4 +52,6 @@ GET http://127.0.0.1:8080/api/v1/version
 make dev-frontend
 ```
 
-详细设计与开发步骤位于 [`docs/plans`](docs/plans)。
+整体产品与架构基线见 [`docs/product/2026-10-15-multi-cluster-operations-platform-requirements.md`](docs/product/2026-10-15-multi-cluster-operations-platform-requirements.md)。
+
+历史模块设计与开发步骤位于 [`docs/plans`](docs/plans)。
