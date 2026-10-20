@@ -6,7 +6,7 @@ import {auditExportCommand,type AuditExportFilters} from '../components/AuditExp
 import {parseAudit} from '../tools/audit'
 class AuditWorker {onmessage:null|((event:{data:unknown})=>void)=null;onerror=null;terminate=vi.fn();postMessage(text:string){queueMicrotask(()=>this.onmessage?.({data:{data:parseAudit(text)}}))}}
 afterEach(()=>{vi.unstubAllGlobals();history.replaceState({},'','/')})
-it('opens audit tool from the tools catalog',async()=>{history.replaceState({},'','/tools');render(<OperationsToolsPage clusters={[]}/>);await userEvent.click(screen.getByRole('button',{name:'打开工具'}));expect(location.pathname).toBe('/tools/audit');expect(screen.getByLabelText('导入审计日志')).toBeInTheDocument()})
+it('opens audit tool from the tools catalog',async()=>{history.replaceState({},'','/tools');render(<OperationsToolsPage clusters={[]}/>);await userEvent.click(screen.getAllByRole('button',{name:'打开工具'})[0]);expect(location.pathname).toBe('/tools/audit');expect(screen.getByLabelText('导入审计日志')).toBeInTheDocument()})
 it('imports a log, selects its resource and shows failed requests without sensitive body',async()=>{
  vi.stubGlobal('Worker',AuditWorker);history.replaceState({},'','/tools/audit');render(<OperationsToolsPage clusters={[]}/>);const user=userEvent.setup()
  const text=JSON.stringify({auditID:'a',stage:'ResponseComplete',level:'RequestResponse',verb:'patch',requestReceivedTimestamp:'2026-10-19T00:00:00Z',user:{username:'deployer'},sourceIPs:['192.0.2.10'],objectRef:{resource:'deployments',name:'web',namespace:'myapp',uid:'uid1'},responseStatus:{code:403,reason:'Forbidden'},requestObject:{spec:{template:{spec:{containers:[{image:'nginx:1.27',env:[{value:'SECRET_VALUE'}]}]}}}}})

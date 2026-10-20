@@ -6,20 +6,21 @@ import './OperationsToolsPage.css'
 import {auditSample} from '../tools/auditSample'
 import {operationsTools} from '../tools/catalog'
 import AuditExportDialog from '../components/AuditExportDialog'
+import JvmAnalysisPage from './JvmAnalysisPage'
 const writes=new Set(['create','update','patch','delete','deletecollection'])
 const verbs:Record<string,string>={create:'创建',update:'更新',patch:'修改',delete:'删除',deletecollection:'批量删除',get:'读取',list:'列举',watch:'监听'}
 // 关联类型 → 中文标签与视觉层级。inferred 表示 ownerReferences 缺失、按命名规则推断。
 const relationLabels:Record<RelationKind,string>={self:'当前资源',child:'下级 · 创建链',parent:'上级 · 触发方','inferred-child':'下级 · 按命名推断','inferred-parent':'上级 · 按命名推断'}
 const showTime=(time:string)=>time?new Date(time).toLocaleString('zh-CN',{hour12:false}):'—'
 export default function OperationsToolsPage({clusters}:{clusters:Pick<ManagedCluster,'id'|'name'>[]}){
- const [audit,setAudit]=useState(location.pathname==='/tools/audit')
+ const [activePath,setActivePath]=useState(location.pathname)
  const [data,setData]=useState<AuditImport|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[filenames,setFilenames]=useState<string[]>([]),[exportOpen,setExportOpen]=useState(false)
  const [cluster,setCluster]=useState(''),[namespace,setNamespace]=useState(''),[query,setQuery]=useState(''),[selected,setSelected]=useState(''),[children,setChildren]=useState(true),[requestSourceIp,setRequestSourceIp]=useState(''),[requestUser,setRequestUser]=useState(''),[requestVerb,setRequestVerb]=useState(''),[requestResult,setRequestResult]=useState(''),[page,setPage]=useState(1)
  const worker=useRef<Worker|null>(null), generation=useRef(0)
  // Worker and generation refs intentionally use their latest values during teardown.
  // eslint-disable-next-line react-hooks/exhaustive-deps
- useEffect(()=>{const change=()=>setAudit(location.pathname==='/tools/audit');window.addEventListener('popstate',change);return()=>{window.removeEventListener('popstate',change);generation.current++;worker.current?.terminate()}},[])
- const navigate=(path:string)=>{history.pushState({},'',path);setAudit(path==='/tools/audit')}
+ useEffect(()=>{const change=()=>setActivePath(location.pathname);window.addEventListener('popstate',change);return()=>{window.removeEventListener('popstate',change);generation.current++;worker.current?.terminate()}},[])
+ const navigate=(path:string)=>{history.pushState({},'',path);setActivePath(path)}
  const clearRequestFilters=()=>{setRequestSourceIp('');setRequestUser('');setRequestVerb('');setRequestResult('');setSelected('');setPage(1)}
  const reset=()=>{generation.current++;worker.current?.terminate();worker.current=null;setBusy(false);setData(null);setFilenames([]);setSelected('');setError('');clearRequestFilters()}
  const load=async(files:File[])=>{
@@ -53,7 +54,8 @@ export default function OperationsToolsPage({clusters}:{clusters:Pick<ManagedClu
  const hasRequestFilters=Boolean(requestSourceIp||requestUser||requestVerb||requestResult)
  const changeRequestFilter=(change:()=>void)=>{change();setSelected('');setPage(1)}
  const downloadSample=()=>{const url=URL.createObjectURL(new Blob([auditSample+'\n'],{type:'application/x-ndjson'}));const anchor=document.createElement('a');anchor.href=url;anchor.download='kubernetes-audit-demo-2026-10-19.jsonl';anchor.click();URL.revokeObjectURL(url)}
- if(!audit)return <div className="ks-tools"><p className="ks-tools-lead">选择工具，围绕集群或资源开展排障。</p><div className="ks-tools-catalog">{operationsTools.map(tool=><article key={tool.id}><span className="ks-tool-symbol" aria-hidden="true">{tool.symbol}</span><div><h2>{tool.title}</h2><p>{tool.description}</p><span className="ks-tool-tag">{tool.tag}</span></div><Button onClick={()=>navigate(tool.path)}>打开工具</Button></article>)}</div></div>
+ if(activePath==='/tools/jvm')return <JvmAnalysisPage onBack={()=>navigate('/tools')}/>
+ if(activePath!=='/tools/audit')return <div className="ks-tools"><p className="ks-tools-lead">选择工具，围绕集群或资源开展排障。</p><div className="ks-tools-catalog">{operationsTools.map(tool=><article key={tool.id}><span className="ks-tool-symbol" aria-hidden="true">{tool.symbol}</span><div><h2>{tool.title}</h2><p>{tool.description}</p><span className="ks-tool-tag">{tool.tag}</span></div><Button onClick={()=>navigate(tool.path)}>打开工具</Button></article>)}</div></div>
  return <div className="ks-tools"><div className="ks-tool-heading"><div><Button variant="link" isInline onClick={()=>navigate('/tools')}>运维工具</Button><h2>审计日志分析</h2><p>追踪一个资源从创建到变更的操作过程。</p></div><span className="ks-tool-tag">日志仅在当前浏览器处理</span></div>
  <section className="ks-tool-panel"><div className="ks-tool-import"><div><h3>导入审计日志</h3><p>Kubernetes audit JSON Lines，一次可选 1–5 个同集群文件，每个最大 20 MiB。关闭页面后清除分析数据。</p></div><div className="ks-tool-import-buttons"><Button variant="link" isDisabled={busy} onClick={()=>void load([new File([auditSample],'示例日志.jsonl',{type:'application/json'})])}>查看示例</Button><Button variant="link" isDisabled={busy} onClick={downloadSample}>下载示例文件</Button><Button variant="secondary" isDisabled={busy} onClick={()=>setExportOpen(true)}>生成导出命令</Button><label className="ks-tool-upload">{busy?'正在解析…':'选择日志文件'}<input aria-label="导入审计日志" multiple type="file" accept=".log,.json,.jsonl,.ndjson,text/plain,application/json" onChange={event=>{const files=Array.from(event.target.files||[]);if(files.length)void load(files);event.target.value=''}}/></label></div></div>
  <div className="ks-tool-import-meta"><label>来源集群<select aria-label="日志来源集群" value={cluster} onChange={e=>setCluster(e.target.value)}><option value="">未绑定（离线分析）</option>{clusters.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><span>本次所有文件必须来自同一集群；重叠 auditID 会自动合并。</span>{filenames.length>0&&<><span className="ks-tool-filename" title={filenames.join('、')}>{filenames.length===1?filenames[0]:`${filenames.length} 个文件：${filenames.join('、')}`}</span><Button variant="link" onClick={reset}>清除数据</Button></>}</div></section>
