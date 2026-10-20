@@ -1,7 +1,7 @@
 .ks-arthas-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 .ks-arthas-header {
@@ -105,7 +105,7 @@
 /* Target + launch */
 .ks-arthas-setup {
   display: grid;
-  gap: 14px;
+  gap: 18px;
   grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.8fr);
 }
 
@@ -214,8 +214,8 @@
 .ks-arthas-workspace {
   align-items: start;
   display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(0, 1.55fr) minmax(380px, 0.85fr);
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(400px, 0.85fr);
 }
 
 .ks-arthas-main {
@@ -420,14 +420,14 @@
 
 .ks-arthas-side .ks-arthas-scenarios strong {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.35;
 }
 
 .ks-arthas-side .ks-arthas-scenarios button > span {
   color: var(--pf-t--global--text--color--subtle);
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.35;
   margin-top: 2px;
 }
@@ -456,9 +456,9 @@
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 12px;
   gap: 4px;
-  padding: 5px 7px;
+  padding: 6px 8px;
 }
 
 .ks-arthas-side .ks-arthas-playbook-body nav button[aria-current=step] {
@@ -481,7 +481,7 @@
 .ks-arthas-side .ks-arthas-playbook-body p,
 .ks-arthas-side .ks-arthas-playbook-body dd {
   color: var(--pf-t--global--text--color--subtle);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -519,7 +519,7 @@
 }
 
 .ks-arthas-side .ks-arthas-command-preview code {
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -585,14 +585,16 @@
 
 @media (max-width: 1350px) {
   .ks-arthas-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ks-arthas-workspace { grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.85fr); }
 }
 
-@media (max-width: 1100px) {
-  .ks-arthas-setup { grid-template-columns: 1fr; }
+@media (max-width: 1280px) {
   .ks-arthas-workspace { grid-template-columns: 1fr; }
   .ks-arthas-side { max-height: none; position: static; }
-  .ks-arthas-side .ks-arthas-scenarios { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .ks-arthas-side .ks-arthas-scenarios { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+}
+
+@media (max-width: 1200px) {
+  .ks-arthas-setup { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {
@@ -650,6 +652,6 @@
   max-height: calc(100vh - 350px);
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1280px) {
   .ks-arthas-page.is-session .ks-arthas-side { max-height: none; }
 }

@@ -140,7 +140,7 @@ const ArthasTerminal = forwardRef<ArthasTerminalHandle, Props>(function ArthasTe
         if (message.type === 'closed') next.close()
       } catch { term.write(String(event.data)) }
     }
-    next.onerror = () => onError('无法连接 Arthas 会话。请确认平台已开启 Pod Exec，且当前账号是管理员。')
+    next.onerror = () => onError('无法建立 Arthas 终端连接。请检查：平台已开启容器终端、当前账号是管理员，以及开发代理/Ingress 已转发 WebSocket。')
     next.onclose = () => {
       input.dispose(); resize.dispose(); socket.current = null
       changeState('idle')

@@ -220,7 +220,7 @@ export default function ArthasPage({ clusters, onBack }: Props) {
                 podName={selectedPod.name}
                 onAttached={() => { setAttached(true); setNotice('Arthas 已附加到 JVM，可以发送预设命令了。') }}
                 onError={setError}
-                onState={setConnectionState}
+                onState={value => { setConnectionState(value); if (value === 'connected') setError('') }}
                 ref={terminalRef}
               />
               <div className="ks-arthas-command-bar">
