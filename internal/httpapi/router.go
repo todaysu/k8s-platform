@@ -20,6 +20,13 @@ type clusterValidator interface {
 	Validate(context.Context, string, []byte) (cluster.ValidationPreview, error)
 }
 
+// requestTimeout bounds live Kubernetes calls made by a single HTTP request.
+// The connector also has a total per-call timeout; this deadline stops a
+// handler that needs several sequential calls.
+func requestTimeout(request *http.Request, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(request.Context(), timeout)
+}
+
 type clusterManager interface {
 	Delete(context.Context, string) error
 	GetCapacity(context.Context, string) (cluster.ClusterCapacity, error)
@@ -316,7 +323,9 @@ func getClusterWorkloadYAML(manager workloadYAMLManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodeConnectionFailed)
 			return
 		}
-		result, err := manager.GetWorkloadYAML(request.Context(), request.PathValue("id"), request.PathValue("kind"), request.PathValue("namespace"), request.PathValue("name"))
+		ctx, cancel := requestTimeout(request, 15*time.Second)
+		defer cancel()
+		result, err := manager.GetWorkloadYAML(ctx, request.PathValue("id"), request.PathValue("kind"), request.PathValue("namespace"), request.PathValue("name"))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -355,7 +364,9 @@ func getClusterEvents(manager clusterEventManager) http.HandlerFunc {
 			return
 		}
 		componentOnly, _ := strconv.ParseBool(request.URL.Query().Get("component"))
-		page, err := manager.GetEvents(request.Context(), request.PathValue("id"), cluster.EventQuery{Since: since, Until: until, Type: request.URL.Query().Get("type"), Namespace: request.URL.Query().Get("namespace"), Kind: request.URL.Query().Get("kind"), Search: request.URL.Query().Get("q"), ComponentOnly: componentOnly, Limit: limit, CursorTime: cursorTime, CursorUID: cursorUID})
+		ctx, cancel := requestTimeout(request, 20*time.Second)
+		defer cancel()
+		page, err := manager.GetEvents(ctx, request.PathValue("id"), cluster.EventQuery{Since: since, Until: until, Type: request.URL.Query().Get("type"), Namespace: request.URL.Query().Get("namespace"), Kind: request.URL.Query().Get("kind"), Search: request.URL.Query().Get("q"), ComponentOnly: componentOnly, Limit: limit, CursorTime: cursorTime, CursorUID: cursorUID})
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -371,7 +382,9 @@ func getClusterEventSummary(manager clusterEventManager) http.HandlerFunc {
 			return
 		}
 		since, until := eventRange(request)
-		summary, err := manager.GetEventSummary(request.Context(), request.PathValue("id"), since, until)
+		ctx, cancel := requestTimeout(request, 15*time.Second)
+		defer cancel()
+		summary, err := manager.GetEventSummary(ctx, request.PathValue("id"), since, until)
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -387,7 +400,9 @@ func getClusterEventFacets(manager clusterEventManager) http.HandlerFunc {
 			return
 		}
 		since, until := eventRange(request)
-		facets, err := manager.GetEventFacets(request.Context(), request.PathValue("id"), since, until)
+		ctx, cancel := requestTimeout(request, 15*time.Second)
+		defer cancel()
+		facets, err := manager.GetEventFacets(ctx, request.PathValue("id"), since, until)
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -425,8 +440,10 @@ func getClusterPodLogs(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusBadRequest, cluster.CodeInvalidLogTimeRange)
 			return
 		}
+		ctx, cancel := requestTimeout(request, 20*time.Second)
+		defer cancel()
 		logs, err := manager.GetPodLogs(
-			request.Context(), request.PathValue("id"), request.PathValue("namespace"), request.PathValue("name"),
+			ctx, request.PathValue("id"), request.PathValue("namespace"), request.PathValue("name"),
 			cluster.PodLogOptions{
 				Container: request.URL.Query().Get("container"), TailLines: tailLines, Previous: previous,
 				SinceTime: sinceTime, UntilTime: untilTime,
@@ -457,7 +474,9 @@ func getClusterPod(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		pod, err := manager.GetPod(request.Context(), request.PathValue("id"), request.PathValue("namespace"), request.PathValue("name"))
+		ctx, cancel := requestTimeout(request, 15*time.Second)
+		defer cancel()
+		pod, err := manager.GetPod(ctx, request.PathValue("id"), request.PathValue("namespace"), request.PathValue("name"))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -472,7 +491,9 @@ func getClusterPods(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		pods, err := manager.GetPods(request.Context(), request.PathValue("id"))
+		ctx, cancel := requestTimeout(request, 30*time.Second)
+		defer cancel()
+		pods, err := manager.GetPods(ctx, request.PathValue("id"))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -487,7 +508,9 @@ func getClusterWorkloads(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		workloads, err := manager.GetWorkloads(request.Context(), request.PathValue("id"))
+		ctx, cancel := requestTimeout(request, 30*time.Second)
+		defer cancel()
+		workloads, err := manager.GetWorkloads(ctx, request.PathValue("id"))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -502,8 +525,10 @@ func getClusterWorkload(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
+		ctx, cancel := requestTimeout(request, 30*time.Second)
+		defer cancel()
 		workload, err := manager.GetWorkload(
-			request.Context(),
+			ctx,
 			request.PathValue("id"),
 			request.PathValue("kind"),
 			request.PathValue("namespace"),
@@ -523,7 +548,9 @@ func getClusterNodes(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		nodes, err := manager.GetNodes(request.Context(), request.PathValue("id"))
+		ctx, cancel := requestTimeout(request, 20*time.Second)
+		defer cancel()
+		nodes, err := manager.GetNodes(ctx, request.PathValue("id"))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -538,7 +565,9 @@ func getCluster(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		managedCluster, err := manager.Get(request.Context(), request.PathValue("id"))
+		ctx, cancel := requestTimeout(request, 20*time.Second)
+		defer cancel()
+		managedCluster, err := manager.Get(ctx, request.PathValue("id"))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -576,7 +605,9 @@ func deleteCluster(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		if err := manager.Delete(request.Context(), request.PathValue("id")); err != nil {
+		ctx, cancel := requestTimeout(request, 20*time.Second)
+		defer cancel()
+		if err := manager.Delete(ctx, request.PathValue("id")); err != nil {
 			writeClusterError(writer, err)
 			return
 		}
@@ -594,7 +625,9 @@ func onboardCluster(manager clusterManager) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		managedCluster, err := manager.Onboard(request.Context(), payload.Name, payload.Environment, payload.ClusterType, payload.TechnologyStack, []byte(payload.Kubeconfig))
+		ctx, cancel := requestTimeout(request, 30*time.Second)
+		defer cancel()
+		managedCluster, err := manager.Onboard(ctx, payload.Name, payload.Environment, payload.ClusterType, payload.TechnologyStack, []byte(payload.Kubeconfig))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -651,7 +684,9 @@ func validateCluster(validator clusterValidator) http.HandlerFunc {
 			return
 		}
 
-		preview, err := validator.Validate(request.Context(), payload.Name, []byte(payload.Kubeconfig))
+		ctx, cancel := requestTimeout(request, 30*time.Second)
+		defer cancel()
+		preview, err := validator.Validate(ctx, payload.Name, []byte(payload.Kubeconfig))
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -776,7 +811,9 @@ func getEventResource(manager clusterManager) http.HandlerFunc {
 			writeAPIError(w, http.StatusBadRequest, "INVALID_EVENT_RESOURCE")
 			return
 		}
-		result, err := live.GetEventResource(r.Context(), cluster.EventResourceQuery{ClusterID: q.Get("cluster_id"), Namespace: q.Get("namespace"), Kind: q.Get("kind"), Name: q.Get("name"), UID: q.Get("uid")})
+		ctx, cancel := requestTimeout(r, 15*time.Second)
+		defer cancel()
+		result, err := live.GetEventResource(ctx, cluster.EventResourceQuery{ClusterID: q.Get("cluster_id"), Namespace: q.Get("namespace"), Kind: q.Get("kind"), Name: q.Get("name"), UID: q.Get("uid")})
 		if err != nil {
 			writeClusterError(w, err)
 			return
