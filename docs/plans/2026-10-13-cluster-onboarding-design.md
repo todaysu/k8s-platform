@@ -1,5 +1,7 @@
 # Kubernetes 多集群平台：集群纳管功能设计
 
+> 2026-10-16 决策更新：新集群采用单步纳管。点击“纳管集群”后，平台一次完成解析、连接验证、凭据加密和持久化，不再创建待确认草稿。具体实现以 `2026-10-16-direct-cluster-onboarding.md` 为准。
+
 ## 1. 背景
 
 平台面向 Kubernetes 集群运维人员，目标是维护多集群稳定性，不承担业务发布、流量管理和有状态业务编排。平台采用轻量设计，一次只实现一个完整功能。
@@ -27,7 +29,7 @@ Go 单体后端（认证、集群纳管、Kubernetes 访问）
 - 管理员登录。
 - 上传 Kubeconfig 文件或粘贴 Kubeconfig 文本。
 - 自动选择 Kubeconfig 的 `current-context`。
-- 解析 API Server、CA 证书和 Token。
+- 解析 API Server、CA 证书和内嵌认证凭据。
 - 测试连接并获取 Kubernetes 版本。
 - 确认纳管。
 - 查看集群基础信息。
@@ -47,10 +49,10 @@ Go 单体后端（认证、集群纳管、Kubernetes 访问）
 3. 选择上传文件或粘贴内容。
 4. 点击“测试连接”。
 5. 后端解析 `current-context`，找到关联的 cluster 和 user。
-6. 后端提取 API Server、内嵌 CA 和 Token。
+6. 后端提取 API Server、内嵌 CA，以及 Bearer Token 或客户端证书凭据。
 7. 后端使用 TLS 校验访问 Kubernetes `/version`。
 8. 测试成功后，创建十分钟有效的临时导入记录。
-9. 页面展示 API Server、Context、Kubernetes 版本和认证方式，不展示 Token。
+9. 页面展示 API Server、Context、Kubernetes 版本和认证方式，不展示任何凭据。
 10. 管理员点击“确认纳管”。
 11. 后端重新检查临时记录有效性和重复集群，将其转为正式集群记录，并删除临时记录。
 
@@ -73,9 +75,9 @@ Go 单体后端（认证、集群纳管、Kubernetes 访问）
 - 支持 `.yaml`、`.yml` 和无扩展名文件。
 - 最大文件大小为 1 MiB。
 - 必须存在有效的 `current-context`，不自动猜测其他 Context。
-- 第一版只支持直接内嵌的 Bearer Token。
+- 第一版支持直接内嵌的 Bearer Token，或内嵌的客户端证书与私钥。
 - 第一版只支持 `certificate-authority-data`，不支持本地 CA 文件路径。
-- 不支持 `exec` 认证插件、`tokenFile`、用户名密码和客户端证书认证。
+- 不支持 `exec`、`auth-provider`、`tokenFile`、用户名密码，以及引用本地文件路径的证书认证。
 - API Server 必须使用 HTTPS。
 - 原始 Kubeconfig 不长期保存。
 
@@ -122,7 +124,7 @@ Go 单体后端（认证、集群纳管、Kubernetes 访问）
 - `api_server`: HTTPS 地址。
 - `context_name`: 默认 Context 名称。
 - `ca_certificate`: CA PEM 内容。
-- `encrypted_token`: 加密后的 Token。
+- `encrypted_credentials`: 加密后的 Token，或客户端证书与私钥凭据包。
 - `kubernetes_version`: 探测到的版本。
 - `fingerprint`: API Server 与 CA 的 SHA-256 指纹，唯一。
 - `connection_status`: connected、unreachable、authentication_failed、tls_failed。
@@ -178,7 +180,7 @@ Go 单体后端（认证、集群纳管、Kubernetes 访问）
 
 ## 8. 安全要求
 
-- Token 使用应用层认证加密保存，加密密钥从环境变量读取，不能进入数据库或 Git。
+- Token、客户端证书和私钥使用应用层认证加密保存，加密密钥从环境变量读取，不能进入 Git 或以明文进入数据库。
 - 凭据加密密钥必须独立管理，不能复用管理员密码哈希或会话随机值。
 - 测试连接超时五秒。
 - 不跟随 API Server HTTP 跳转。
@@ -212,13 +214,13 @@ Go 单体后端（认证、集群纳管、Kubernetes 访问）
 
 1. 文件上传和文本粘贴均可完成纳管。
 2. 多 Context 配置正确使用 `current-context`。
-3. 无默认 Context、错误 Token、错误 CA 和网络超时均有明确提示。
+3. 无默认 Context、错误 Token、错误客户端证书、错误 CA 和网络超时均有明确提示。
 4. 同一集群更换显示名称后仍不能重复纳管。
 5. 测试成功后十分钟内可以确认，过期后必须重新测试。
 6. 凭据更新失败不影响旧凭据，成功后旧凭据不再保留。
 7. 取消纳管不影响真实 Kubernetes 集群。
 8. 未登录请求被拒绝。
-9. 页面、应用日志和操作日志不出现明文 Token。
+9. 页面、应用日志和操作日志不出现明文 Token、客户端证书或私钥。
 10. 原始 Kubeconfig 无下载和查看入口。
 
 ## 11. 架构决策

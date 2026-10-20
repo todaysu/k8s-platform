@@ -2,21 +2,30 @@
 
 一个参考 CNCF Headlamp 技术架构、聚焦集群稳定性的轻量多集群管理平台。
 
-当前正在实现第一个纵向功能：使用集群名称和 Token 类型的 Kubeconfig 纳管已有 Kubernetes 集群。
+当前正在实现第一个纵向功能：使用集群名称和上传的 Kubeconfig 纳管已有 Kubernetes 集群。
 
 ## 技术栈
 
 - Go 后端
 - React + TypeScript 前端
-- Material UI
-- Kubernetes `client-go`（后续任务接入）
+- PatternFly 6（ACM 风格）
+- Kubernetes `client-go` v0.32.x
 - SQLite（本地开发）
+- MySQL 8.4（生产环境统一存储）
 
 ## 当前开发状态
 
-项目目前包含后端健康检查接口和集群管理 UI 原型。UI 使用模拟数据，尚不能连接 Kubernetes 集群。
+项目已包含真实集群纳管、健康概览、全局资源池容量、单集群容量基线、节点、工作负载、Pod 详情与日志，以及单集群 Event 中心。Event 由平台通过 Kubernetes API `List + Watch` 非侵入式采集，按 UID 更新重复次数，保存 30 天。
 
 平台最终以 Web 服务形式部署到 Kubernetes，不开发桌面端，也不要求用户单独运行客户端程序。
+
+### 多集群健康快照
+
+集群列表和全局概览读取平台数据库中的最近健康快照，不会因页面刷新而同时扫描所有集群。后台采集器默认每 60 秒错峰刷新一轮，最多同时检查 5 套集群，单集群检查超时为 20 秒；某套集群失败只会将该集群标记为连接失败，并保留上一次成功指标及检查时间。
+
+可通过 `HEALTH_COLLECTION_INTERVAL`、`HEALTH_COLLECTION_WORKERS` 和 `HEALTH_COLLECTION_TIMEOUT` 调整采集周期、并发上限和单集群超时。60 套集群建议先保持 `1m / 5 / 20s`，经过压测后再调高并发。
+
+节点、工作负载、Pod 日志和 Exec 等单集群详情仍按需实时访问目标集群。当前 SQLite 方案面向单副本第一阶段；生产多副本前需迁移到共享 MySQL，并为后台采集器增加 Leader Election。详细决策见 [`docs/adr/0002-cache-fleet-health-snapshots.md`](docs/adr/0002-cache-fleet-health-snapshots.md)。
 
 ## 本地工具
 
@@ -41,6 +50,19 @@ export CREDENTIAL_ENCRYPTION_KEY="仅限本地学习的占位值"
 make dev-backend
 ```
 
+`make dev-backend` 仅在本地开发时默认开启 Pod Exec。如需关闭，使用 `ENABLE_POD_EXEC=false make dev-backend`。直接运行 `go run ./cmd/platform` 时 Pod Exec 仍默认关闭。
+
+不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到本地 SQLite，便于开发验证。部署到 Kubernetes 时使用统一 MySQL：
+
+```yaml
+env:
+  - name: PLATFORM_DATABASE_DSN
+    valueFrom:
+      secretKeyRef: { name: ftc-platform, key: mysql-dsn }
+```
+
+配置 MySQL 后，平台启动时自动创建集群、健康、容量、事件、账号和会话所需的全部表及索引；多个平台 Pod 通过数据库迁移锁和 Kubernetes Lease 安全启动。部署示例见 [`deploy/platform.yaml`](deploy/platform.yaml) 与 [`deploy/mysql.yaml`](deploy/mysql.yaml)。
+
 后端启动后，可访问健康检查接口：
 
 ```text
@@ -57,3 +79,5 @@ make dev-frontend
 整体产品与架构基线见 [`docs/product/2026-10-15-multi-cluster-operations-platform-requirements.md`](docs/product/2026-10-15-multi-cluster-operations-platform-requirements.md)。
 
 历史模块设计与开发步骤位于 [`docs/plans`](docs/plans)。
+
+Kubernetes 内部署 MySQL、平台数据库接入和 Pod Exec 开启方法见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
