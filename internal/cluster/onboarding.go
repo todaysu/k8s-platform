@@ -505,14 +505,19 @@ func (service *OnboardingService) Delete(ctx context.Context, id string) error {
 		service.storageStatsMu.Lock()
 		service.storageStatsAt = time.Time{}
 		service.storageStatsMu.Unlock()
-		service.ownerCacheMu.Lock()
-		delete(service.ownerCache, id)
-		service.ownerCacheMu.Unlock()
-		service.resourceCacheMu.Lock()
-		delete(service.resourceCache, id)
-		delete(service.resourceLoads, id)
-		service.resourceCacheMu.Unlock()
 	}
+	if indexRepository, ok := service.repository.(ResourceIndexRepository); ok {
+		if err := indexRepository.DeleteClusterResources(ctx, id); err != nil {
+			return err
+		}
+	}
+	service.ownerCacheMu.Lock()
+	delete(service.ownerCache, id)
+	service.ownerCacheMu.Unlock()
+	service.resourceCacheMu.Lock()
+	delete(service.resourceCache, id)
+	delete(service.resourceLoads, id)
+	service.resourceCacheMu.Unlock()
 	return service.repository.Delete(ctx, id)
 }
 

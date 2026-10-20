@@ -27,6 +27,65 @@ type cachedResources struct {
 }
 
 func (service *OnboardingService) SearchResources(ctx context.Context, rawQuery string) (GlobalResourceSearch, error) {
+	if repository, ok := service.repository.(ResourceIndexRepository); ok {
+		return service.searchResourceIndex(ctx, repository, rawQuery)
+	}
+	return service.searchResourcesLive(ctx, rawQuery)
+}
+
+// searchResourceIndex answers searches from the persisted index. The request
+// path never calls a managed cluster, regardless of fleet size.
+func (service *OnboardingService) searchResourceIndex(ctx context.Context, repository ResourceIndexRepository, rawQuery string) (GlobalResourceSearch, error) {
+	query := strings.ToLower(strings.TrimSpace(rawQuery))
+	if len([]rune(query)) < 2 {
+		return GlobalResourceSearch{}, newError(CodeSearchQueryInvalid)
+	}
+	count, err := repository.CountClusterResources(ctx)
+	if err != nil {
+		return GlobalResourceSearch{}, err
+	}
+	if count == 0 {
+		// The first index build can take a few minutes; keep search usable
+		// during that window, then never fan out again.
+		return service.searchResourcesLive(ctx, rawQuery)
+	}
+	items, err := repository.SearchClusterResources(ctx, query, 800)
+	if err != nil {
+		return GlobalResourceSearch{}, err
+	}
+	sortGlobalResourceResults(items, rawQuery, query)
+	result := GlobalResourceSearch{Items: items, FailedClusters: []string{}}
+	if len(result.Items) > 200 {
+		result.Items = result.Items[:200]
+		result.Truncated = true
+	}
+	return result, nil
+}
+
+func sortGlobalResourceResults(items []GlobalResourceResult, rawQuery, query string) {
+	sort.Slice(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		leftExact := strings.EqualFold(left.Name, rawQuery)
+		rightExact := strings.EqualFold(right.Name, rawQuery)
+		if leftExact != rightExact {
+			return leftExact
+		}
+		leftPrefix := strings.HasPrefix(strings.ToLower(left.Name), query)
+		rightPrefix := strings.HasPrefix(strings.ToLower(right.Name), query)
+		if leftPrefix != rightPrefix {
+			return leftPrefix
+		}
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		if left.ClusterName != right.ClusterName {
+			return left.ClusterName < right.ClusterName
+		}
+		return left.Kind < right.Kind
+	})
+}
+
+func (service *OnboardingService) searchResourcesLive(ctx context.Context, rawQuery string) (GlobalResourceSearch, error) {
 	query := strings.ToLower(strings.TrimSpace(rawQuery))
 	if len([]rune(query)) < 2 {
 		return GlobalResourceSearch{}, newError(CodeSearchQueryInvalid)
@@ -64,26 +123,7 @@ func (service *OnboardingService) SearchResources(ctx context.Context, rawQuery 
 	if ctx.Err() != nil {
 		return GlobalResourceSearch{}, ctx.Err()
 	}
-	sort.Slice(result.Items, func(i, j int) bool {
-		left, right := result.Items[i], result.Items[j]
-		leftExact := strings.EqualFold(left.Name, rawQuery)
-		rightExact := strings.EqualFold(right.Name, rawQuery)
-		if leftExact != rightExact {
-			return leftExact
-		}
-		leftPrefix := strings.HasPrefix(strings.ToLower(left.Name), query)
-		rightPrefix := strings.HasPrefix(strings.ToLower(right.Name), query)
-		if leftPrefix != rightPrefix {
-			return leftPrefix
-		}
-		if left.Name != right.Name {
-			return left.Name < right.Name
-		}
-		if left.ClusterName != right.ClusterName {
-			return left.ClusterName < right.ClusterName
-		}
-		return left.Kind < right.Kind
-	})
+	sortGlobalResourceResults(result.Items, rawQuery, query)
 	if len(result.Items) > 200 {
 		result.Items = result.Items[:200]
 		result.Truncated = true

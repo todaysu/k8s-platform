@@ -73,7 +73,7 @@ func main() {
 		Name: cfg.LeaderElectionName, Identity: os.Getenv("POD_NAME"),
 	}, func(leaderContext context.Context) {
 		var collectors sync.WaitGroup
-		collectors.Add(3)
+		collectors.Add(4)
 		go func() {
 			defer collectors.Done()
 			cluster.NewHealthCollector(manager, cfg.HealthCollectionInterval, cfg.HealthCollectionWorkers, cfg.HealthCollectionTimeout).Run(leaderContext)
@@ -85,6 +85,10 @@ func main() {
 		go func() {
 			defer collectors.Done()
 			cluster.NewEventCollector(manager, eventRepository).Run(leaderContext)
+		}()
+		go func() {
+			defer collectors.Done()
+			cluster.NewResourceIndexCollector(manager, database, cfg.ResourceIndexInterval, cfg.ResourceIndexWorkers, cfg.ResourceIndexTimeout).Run(leaderContext)
 		}()
 		collectors.Wait()
 	})

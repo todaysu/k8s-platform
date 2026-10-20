@@ -12,28 +12,31 @@ import (
 const defaultSessionTTL = 8 * time.Hour
 
 type Config struct {
-	ListenAddr               string
-	DatabasePath             string
-	PlatformDatabaseDSN      string
-	EventDatabaseDSN         string
-	BootstrapTokenPath       string
-	WebDistDir               string
-	PodExecEnabled           bool
-	AdminUsername            string
-	AdminPasswordHash        string
-	CredentialEncryptionKey  string
-	SecureCookies            bool
-	SessionTTL               time.Duration
-	SystemNamespaces         []string
-	HealthCollectionInterval time.Duration
-	HealthCollectionTimeout  time.Duration
-	HealthCollectionWorkers  int
+	ListenAddr                 string
+	DatabasePath               string
+	PlatformDatabaseDSN        string
+	EventDatabaseDSN           string
+	BootstrapTokenPath         string
+	WebDistDir                 string
+	PodExecEnabled             bool
+	AdminUsername              string
+	AdminPasswordHash          string
+	CredentialEncryptionKey    string
+	SecureCookies              bool
+	SessionTTL                 time.Duration
+	SystemNamespaces           []string
+	HealthCollectionInterval   time.Duration
+	HealthCollectionTimeout    time.Duration
+	HealthCollectionWorkers    int
 	CapacityCollectionInterval time.Duration
 	CapacityCollectionTimeout  time.Duration
 	CapacityCollectionWorkers  int
-	LeaderElectionEnabled    bool
-	LeaderElectionNamespace  string
-	LeaderElectionName       string
+	ResourceIndexInterval      time.Duration
+	ResourceIndexTimeout       time.Duration
+	ResourceIndexWorkers       int
+	LeaderElectionEnabled      bool
+	LeaderElectionNamespace    string
+	LeaderElectionName         string
 }
 
 func Load() (Config, error) {
@@ -74,34 +77,49 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	resourceIndexInterval, err := envDuration("RESOURCE_INDEX_INTERVAL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	resourceIndexTimeout, err := envDuration("RESOURCE_INDEX_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	resourceIndexWorkers, err := envPositiveInt("RESOURCE_INDEX_WORKERS", 2)
+	if err != nil {
+		return Config{}, err
+	}
 	leaderElectionEnabled, err := envBool("LEADER_ELECTION_ENABLED", true)
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
-		ListenAddr:               envOrDefault("LISTEN_ADDR", ":8080"),
-		DatabasePath:             envOrDefault("DATABASE_PATH", "./data/platform.db"),
-		PlatformDatabaseDSN:      os.Getenv("PLATFORM_DATABASE_DSN"),
-		EventDatabaseDSN:         os.Getenv("EVENT_DATABASE_DSN"),
-		BootstrapTokenPath:       envOrDefault("BOOTSTRAP_TOKEN_PATH", "./data/bootstrap-token"),
-		WebDistDir:               os.Getenv("WEB_DIST_DIR"),
-		PodExecEnabled:           podExecEnabled,
-		AdminUsername:            envOrDefault("ADMIN_USERNAME", "admin"),
-		AdminPasswordHash:        os.Getenv("ADMIN_PASSWORD_HASH"),
-		CredentialEncryptionKey:  os.Getenv("CREDENTIAL_ENCRYPTION_KEY"),
-		SecureCookies:            secureCookies,
-		SessionTTL:               sessionTTL,
-		SystemNamespaces:         csvList(envOrDefault("SYSTEM_NAMESPACES", "kube-system,cmb-monitoring")),
-		HealthCollectionInterval: healthInterval,
-		HealthCollectionTimeout:  healthTimeout,
-		HealthCollectionWorkers:  healthWorkers,
+		ListenAddr:                 envOrDefault("LISTEN_ADDR", ":8080"),
+		DatabasePath:               envOrDefault("DATABASE_PATH", "./data/platform.db"),
+		PlatformDatabaseDSN:        os.Getenv("PLATFORM_DATABASE_DSN"),
+		EventDatabaseDSN:           os.Getenv("EVENT_DATABASE_DSN"),
+		BootstrapTokenPath:         envOrDefault("BOOTSTRAP_TOKEN_PATH", "./data/bootstrap-token"),
+		WebDistDir:                 os.Getenv("WEB_DIST_DIR"),
+		PodExecEnabled:             podExecEnabled,
+		AdminUsername:              envOrDefault("ADMIN_USERNAME", "admin"),
+		AdminPasswordHash:          os.Getenv("ADMIN_PASSWORD_HASH"),
+		CredentialEncryptionKey:    os.Getenv("CREDENTIAL_ENCRYPTION_KEY"),
+		SecureCookies:              secureCookies,
+		SessionTTL:                 sessionTTL,
+		SystemNamespaces:           csvList(envOrDefault("SYSTEM_NAMESPACES", "kube-system,cmb-monitoring")),
+		HealthCollectionInterval:   healthInterval,
+		HealthCollectionTimeout:    healthTimeout,
+		HealthCollectionWorkers:    healthWorkers,
 		CapacityCollectionInterval: capacityInterval,
 		CapacityCollectionTimeout:  capacityTimeout,
 		CapacityCollectionWorkers:  capacityWorkers,
-		LeaderElectionEnabled:    leaderElectionEnabled,
-		LeaderElectionNamespace:  envOrDefault("POD_NAMESPACE", "kubescope"),
-		LeaderElectionName:       envOrDefault("LEADER_ELECTION_NAME", "ftc-platform-collectors"),
+		ResourceIndexInterval:      resourceIndexInterval,
+		ResourceIndexTimeout:       resourceIndexTimeout,
+		ResourceIndexWorkers:       resourceIndexWorkers,
+		LeaderElectionEnabled:      leaderElectionEnabled,
+		LeaderElectionNamespace:    envOrDefault("POD_NAMESPACE", "kubescope"),
+		LeaderElectionName:         envOrDefault("LEADER_ELECTION_NAME", "ftc-platform-collectors"),
 	}
 
 	if cfg.AdminPasswordHash == "" {
