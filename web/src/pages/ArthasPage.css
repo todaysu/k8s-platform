@@ -1,0 +1,655 @@
+.ks-arthas-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ks-arthas-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+}
+
+.ks-arthas-header h1 {
+  margin: 4px 0 6px;
+}
+
+.ks-arthas-header p {
+  color: var(--pf-t--global--text--color--subtle);
+  margin: 0;
+  max-width: 860px;
+}
+
+.ks-arthas-header-status {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ks-arthas-session-clock {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+}
+
+/* Wizard progress */
+.ks-arthas-progress {
+  background: var(--pf-t--global--background--color--secondary--default);
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 8px;
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ks-arthas-progress li {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px;
+  position: relative;
+}
+
+.ks-arthas-progress li + li::before {
+  background: var(--pf-t--global--border--color--default);
+  content: '';
+  height: 28px;
+  left: 0;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+}
+
+.ks-arthas-progress li > span {
+  align-items: center;
+  background: var(--pf-t--global--background--color--primary--default);
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 50%;
+  color: var(--pf-t--global--text--color--subtle);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
+
+.ks-arthas-progress li.is-current > span,
+.ks-arthas-progress li.is-done > span {
+  background: var(--pf-t--global--color--brand--default);
+  border-color: var(--pf-t--global--color--brand--default);
+  color: var(--pf-t--global--text--color--on-brand--default);
+}
+
+.ks-arthas-progress strong,
+.ks-arthas-progress small {
+  display: block;
+}
+
+.ks-arthas-progress strong {
+  font-size: 13px;
+}
+
+.ks-arthas-progress small {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+/* Target + launch */
+.ks-arthas-setup {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.8fr);
+}
+
+.ks-arthas-card {
+  min-width: 0;
+}
+
+.ks-arthas-step-title {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ks-arthas-step-title > span {
+  align-items: center;
+  background: var(--pf-t--global--color--brand--default);
+  border-radius: 50%;
+  color: var(--pf-t--global--text--color--on-brand--default);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.ks-arthas-step-title small {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.ks-arthas-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 0.9fr 0.9fr 1.3fr 0.9fr;
+}
+
+.ks-arthas-form label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ks-arthas-form input,
+.ks-arthas-form select {
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 6px;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+.ks-arthas-form select[size] {
+  height: 94px;
+  padding: 4px;
+}
+
+.ks-arthas-selection {
+  align-items: center;
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 6px 18px;
+  margin-top: 12px;
+  padding: 8px 10px;
+}
+
+.ks-arthas-selection span {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.ks-arthas-selection strong {
+  color: var(--pf-t--global--text--color--regular);
+  font-weight: 600;
+}
+
+.ks-arthas-safety-text {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 10px;
+}
+
+.ks-arthas-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ks-arthas-actions-hint {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+}
+
+/* Terminal + visible guide */
+.ks-arthas-workspace {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(380px, 0.85fr);
+}
+
+.ks-arthas-main {
+  min-width: 0;
+}
+
+.ks-arthas-side {
+  margin: 0;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding-right: 4px;
+  position: sticky;
+  top: 16px;
+}
+
+.ks-arthas-side::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ks-arthas-side::-webkit-scrollbar-thumb {
+  background: var(--pf-t--global--border--color--default);
+  border-radius: 3px;
+}
+
+.ks-arthas-session-card {
+  border-top: 3px solid var(--pf-t--global--color--brand--default);
+}
+
+.ks-arthas-session-head {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ks-arthas-session-head p {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 12px;
+  margin: 2px 0 10px;
+}
+
+.ks-arthas-terminal-wrap {
+  background: #151515;
+  border-radius: 8px;
+  min-height: 440px;
+  overflow: hidden;
+  position: relative;
+}
+
+.ks-arthas-terminal {
+  height: 440px;
+  padding: 8px;
+}
+
+.ks-arthas-terminal-cover {
+  align-items: center;
+  background: rgba(21, 21, 21, 0.85);
+  color: #f0f0f0;
+  display: flex;
+  font-size: 13px;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+}
+
+.ks-arthas-quick {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.ks-arthas-quick > span {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+  margin-right: 2px;
+}
+
+.ks-arthas-quick .pf-v6-c-button {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.ks-arthas-command-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ks-arthas-command-bar input {
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 6px;
+  flex: 1;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+/* Empty terminal state */
+.ks-arthas-empty {
+  border: 1px dashed var(--pf-t--global--border--color--default);
+  min-height: 440px;
+}
+
+.ks-arthas-empty > .pf-v6-c-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+}
+
+.ks-arthas-empty p {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 12px;
+  margin: 0;
+}
+
+.ks-arthas-empty-steps {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 4px 0;
+}
+
+.ks-arthas-empty-steps > div {
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.ks-arthas-empty-steps span {
+  align-items: center;
+  background: var(--pf-t--global--color--brand--default);
+  border-radius: 50%;
+  color: var(--pf-t--global--text--color--on-brand--default);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  height: 22px;
+  justify-content: center;
+  margin-bottom: 6px;
+  width: 22px;
+}
+
+.ks-arthas-empty-steps strong {
+  display: block;
+  font-size: 12px;
+}
+
+.ks-arthas-empty-steps p {
+  margin-top: 2px;
+}
+
+/* Guide overrides inside the side rail */
+.ks-arthas-side .ks-arthas-playbook {
+  border: 1px solid var(--pf-t--global--border--color--default);
+}
+
+.ks-arthas-side .ks-arthas-playbook-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-heading p {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 4px 0 0;
+}
+
+.ks-arthas-side .ks-arthas-playbook-heading > span {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ks-arthas-side .ks-arthas-scenarios {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.ks-arthas-side .ks-arthas-scenarios button {
+  background: var(--pf-t--global--background--color--primary--default);
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 6px;
+  color: var(--pf-t--global--text--color--regular);
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+}
+
+.ks-arthas-side .ks-arthas-scenarios button[aria-pressed=true] {
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-color: var(--pf-t--global--color--brand--default);
+  box-shadow: inset 3px 0 var(--pf-t--global--color--brand--default);
+}
+
+.ks-arthas-side .ks-arthas-scenarios strong {
+  display: block;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ks-arthas-side .ks-arthas-scenarios button > span {
+  color: var(--pf-t--global--text--color--subtle);
+  display: block;
+  font-size: 10px;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body {
+  border-top: 1px solid var(--pf-t--global--border--color--default);
+  display: block;
+  margin-bottom: 12px;
+  padding-top: 12px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body nav {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body nav button {
+  align-items: center;
+  background: var(--pf-t--global--background--color--secondary--default);
+  border: 0;
+  border-radius: 4px;
+  color: var(--pf-t--global--text--color--subtle);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  gap: 4px;
+  padding: 5px 7px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body nav button[aria-current=step] {
+  background: var(--pf-t--global--background--color--primary--default);
+  box-shadow: inset 0 -2px var(--pf-t--global--color--brand--default);
+  color: var(--pf-t--global--text--color--regular);
+  font-weight: 600;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body nav button span {
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  display: inline-flex;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body p,
+.ks-arthas-side .ks-arthas-playbook-body dd {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.ks-arthas-side .ks-arthas-method-fields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
+  margin-top: 10px;
+}
+
+.ks-arthas-side .ks-arthas-method-fields label {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  gap: 4px;
+}
+
+.ks-arthas-side .ks-arthas-method-fields input {
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 4px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
+.ks-arthas-side .ks-arthas-command-preview {
+  align-items: stretch;
+  background: var(--pf-t--global--background--color--secondary--default);
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 10px;
+}
+
+.ks-arthas-side .ks-arthas-command-preview code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ks-arthas-side .ks-arthas-command-preview .pf-v6-c-button {
+  align-self: flex-start;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body dl {
+  font-size: 11px;
+  margin-block: 12px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body dt {
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body dd {
+  margin: 2px 0 0;
+}
+
+.ks-arthas-side .ks-arthas-playbook-body pre {
+  background: #182633;
+  border-radius: 5px;
+  color: #e2ecf4;
+  font-size: 10px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.ks-arthas-side .ks-arthas-guide-footer {
+  align-items: center;
+  border-top: 1px solid var(--pf-t--global--border--color--default);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.ks-arthas-side .ks-arthas-guide-footer span {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 10px;
+}
+
+.ks-arthas-side .ks-arthas-community-cases {
+  display: none;
+}
+
+.ks-arthas-side .ks-arthas-guide-hint {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+}
+
+.ks-arthas-page code {
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-radius: 4px;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+@media (max-width: 1350px) {
+  .ks-arthas-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ks-arthas-workspace { grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.85fr); }
+}
+
+@media (max-width: 1100px) {
+  .ks-arthas-setup { grid-template-columns: 1fr; }
+  .ks-arthas-workspace { grid-template-columns: 1fr; }
+  .ks-arthas-side { max-height: none; position: static; }
+  .ks-arthas-side .ks-arthas-scenarios { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .ks-arthas-header { flex-direction: column; }
+  .ks-arthas-progress { grid-template-columns: 1fr; }
+  .ks-arthas-progress li + li::before { display: none; }
+  .ks-arthas-form { grid-template-columns: 1fr; }
+  .ks-arthas-empty-steps { grid-template-columns: 1fr; }
+  .ks-arthas-command-bar { flex-direction: column; }
+  .ks-arthas-terminal, .ks-arthas-terminal-wrap { min-height: 360px; height: 360px; }
+}
+
+.ks-arthas-activebar {
+  align-items: center;
+  background: var(--pf-t--global--background--color--secondary--default);
+  border: 1px solid var(--pf-t--global--color--brand--default);
+  border-radius: 8px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+
+.ks-arthas-activebar > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.ks-arthas-activebar strong {
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: 12px;
+}
+
+.ks-arthas-activebar span {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: 11px;
+}
+
+.ks-arthas-page.is-session .ks-arthas-progress {
+  padding-block: 2px;
+}
+
+@media (max-width: 620px) {
+  .ks-arthas-activebar { align-items: flex-start; flex-direction: column; }
+}
+
+.ks-arthas-activebar .pf-v6-c-button.pf-m-danger,
+.ks-arthas-activebar .pf-v6-c-button.pf-m-danger * {
+  color: #fff !important;
+}
+
+.ks-arthas-page.is-session .ks-arthas-side {
+  max-height: calc(100vh - 350px);
+}
+
+@media (max-width: 1100px) {
+  .ks-arthas-page.is-session .ks-arthas-side { max-height: none; }
+}

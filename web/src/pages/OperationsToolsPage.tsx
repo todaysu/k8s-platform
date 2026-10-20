@@ -7,6 +7,7 @@ import {auditSample} from '../tools/auditSample'
 import {operationsTools} from '../tools/catalog'
 import AuditExportDialog from '../components/AuditExportDialog'
 import JvmAnalysisPage from './JvmAnalysisPage'
+import ArthasPage from './ArthasPage'
 const writes=new Set(['create','update','patch','delete','deletecollection'])
 const verbs:Record<string,string>={create:'创建',update:'更新',patch:'修改',delete:'删除',deletecollection:'批量删除',get:'读取',list:'列举',watch:'监听'}
 // 关联类型 → 中文标签与视觉层级。inferred 表示 ownerReferences 缺失、按命名规则推断。
@@ -55,6 +56,7 @@ export default function OperationsToolsPage({clusters}:{clusters:Pick<ManagedClu
  const changeRequestFilter=(change:()=>void)=>{change();setSelected('');setPage(1)}
  const downloadSample=()=>{const url=URL.createObjectURL(new Blob([auditSample+'\n'],{type:'application/x-ndjson'}));const anchor=document.createElement('a');anchor.href=url;anchor.download='kubernetes-audit-demo-2026-10-19.jsonl';anchor.click();URL.revokeObjectURL(url)}
  if(activePath==='/tools/jvm')return <JvmAnalysisPage onBack={()=>navigate('/tools')}/>
+ if(activePath==='/tools/arthas')return <ArthasPage clusters={clusters} onBack={()=>navigate('/tools')}/>
  if(activePath!=='/tools/audit')return <div className="ks-tools"><p className="ks-tools-lead">选择工具，围绕集群或资源开展排障。</p><div className="ks-tools-catalog">{operationsTools.map(tool=><article key={tool.id}><span className="ks-tool-symbol" aria-hidden="true">{tool.symbol}</span><div><h2>{tool.title}</h2><p>{tool.description}</p><span className="ks-tool-tag">{tool.tag}</span></div><Button onClick={()=>navigate(tool.path)}>打开工具</Button></article>)}</div></div>
  return <div className="ks-tools"><div className="ks-tool-heading"><div><Button variant="link" isInline onClick={()=>navigate('/tools')}>运维工具</Button><h2>审计日志分析</h2><p>追踪一个资源从创建到变更的操作过程。</p></div><span className="ks-tool-tag">日志仅在当前浏览器处理</span></div>
  <section className="ks-tool-panel"><div className="ks-tool-import"><div><h3>导入审计日志</h3><p>Kubernetes audit JSON Lines，一次可选 1–5 个同集群文件，每个最大 20 MiB。关闭页面后清除分析数据。</p></div><div className="ks-tool-import-buttons"><Button variant="link" isDisabled={busy} onClick={()=>void load([new File([auditSample],'示例日志.jsonl',{type:'application/json'})])}>查看示例</Button><Button variant="link" isDisabled={busy} onClick={downloadSample}>下载示例文件</Button><Button variant="secondary" isDisabled={busy} onClick={()=>setExportOpen(true)}>生成导出命令</Button><label className="ks-tool-upload">{busy?'正在解析…':'选择日志文件'}<input aria-label="导入审计日志" multiple type="file" accept=".log,.json,.jsonl,.ndjson,text/plain,application/json" onChange={event=>{const files=Array.from(event.target.files||[]);if(files.length)void load(files);event.target.value=''}}/></label></div></div>
