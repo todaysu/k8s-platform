@@ -15,7 +15,7 @@
 
 ## 当前开发状态
 
-项目已包含真实集群纳管、健康概览、全局资源池容量、单集群容量基线、节点、工作负载、Pod 详情与日志，以及单集群 Event 中心。Event 由平台通过 Kubernetes API `List + Watch` 非侵入式采集，按 UID 更新重复次数；Warning 保留 30 天，Normal 保留 7 天，小时聚合保留 365 天。
+项目已包含真实集群纳管、健康概览、全局资源池容量、单集群容量基线、节点、工作负载、Pod 详情与日志，以及单集群 Event 中心。Event 由平台通过 Kubernetes API `List + Watch` 非侵入式采集，按 UID 更新重复次数；Warning 保留 30 天，Normal 保留 7 天，小时聚合保留 365 天；24 小时以上窗口优先读取按天/对象/类别生成的日聚合。
 
 平台最终以 Web 服务形式部署到 Kubernetes，不开发桌面端，也不要求用户单独运行客户端程序。
 
@@ -27,7 +27,7 @@
 
 集群列表和全局概览读取平台数据库中的最近健康快照，不会因页面刷新而同时扫描所有集群。后台采集器默认每 60 秒错峰刷新一轮，最多同时检查 5 套集群，单集群检查超时为 20 秒；某套集群失败只会将该集群标记为连接失败，并保留上一次成功指标及检查时间。
 
-可通过 `HEALTH_COLLECTION_INTERVAL`、`HEALTH_COLLECTION_WORKERS` 和 `HEALTH_COLLECTION_TIMEOUT` 调整采集周期、并发上限和单集群超时。60 套集群建议先保持 `1m / 5 / 20s`，经过压测后再调高并发。
+可通过 `HEALTH_COLLECTION_INTERVAL`、`HEALTH_COLLECTION_WORKERS` 和 `HEALTH_COLLECTION_TIMEOUT` 调整采集周期、并发上限和单集群超时。设置 `HEALTH_INSTANCE_SOURCE=workloads` 后，实例数来自 Deployment/StatefulSet/DaemonSet 状态，健康采集只列 kube-system Pod，不再每分钟全量读取业务 Pod；`deploy/platform.yaml` 默认启用该模式。60 套集群建议先保持 `1m / 5 / 20s`，经过压测后再调高并发。
 
 集群概览与容量默认读取采集快照，只有显式刷新才实时访问目标集群；节点、工作负载、Pod 日志和 Exec 仍按需实时访问。跨集群事件的问题与对象视图在数据库内完成聚合，只有单个资源的证据查询才读取原始 Event。跨集群搜索读取平台持久化资源索引，由 Leader 每 10 分钟刷新一轮，浏览器搜索不再访问目标集群；索引为空时回退到受控的实时加载。
 
@@ -87,3 +87,5 @@ make dev-frontend
 历史模块设计与开发步骤位于 [`docs/plans`](docs/plans)。
 
 Kubernetes 内部署 MySQL、平台数据库接入和 Pod Exec 开启方法见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
+
+设置 `METRICS_ADDR`（例如 `:9090`）后，平台在独立端口暴露 Prometheus 文本指标：采集轮次/错误/耗时、事件 List/Watch 重连、API 请求量与 5xx、托管集群数。该端口不经过登录认证，生产环境只应通过内网 Service 或 NetworkPolicy 暴露。

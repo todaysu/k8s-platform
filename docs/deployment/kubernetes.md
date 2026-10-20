@@ -70,11 +70,11 @@ kubectl -n ftc-platform rollout status deployment/ftc-platform
 kubectl -n ftc-platform logs deployment/ftc-platform --all-containers --tail=100
 ```
 
-日志中只有一个 Pod 显示 `became leader`。打开任意已纳管集群的“事件”页，采集状态应变为 `watching`。无需在被纳管集群内安装 Agent。
+日志中只有一个 Pod 显示 `became leader`。设置 `METRICS_ADDR=:9090` 后，可通过同 Namespace 内的 `ftc-platform:9090/metrics` 抓取采集器、事件 Watch 和 API 指标；该端口不经过登录认证，不要通过 Ingress 暴露。打开任意已纳管集群的“事件”页，采集状态应变为 `watching`。无需在被纳管集群内安装 Agent。
 
 平台会自动建立“集群 + 时间”、“类型 + 时间”、“命名空间 + 时间”和“资源种类 + 时间”组合索引，使常用筛选不需要全表扫描。自由文本搜索使用模糊匹配并受页面时间范围约束。
 
-Event 使用分级保留策略控制数据量：Normal 原始事件保留 7 天，Warning/异常原始事件保留 30 天，按事件指纹生成的小时聚合保留 365 天。重复的 Watch 更新只把新增次数写入小时聚合，不会重复累计整条 Event 的历史次数。清理任务每小时执行，单批最多删除 5000 行，避免大事务阻塞在线查询。如果原始表仍增长到数千万行，再评估 MySQL 月分区或独立检索系统，第一版不预先引入重型组件。
+Event 使用分级保留策略控制数据量：Normal 原始事件保留 7 天，Warning/异常原始事件保留 30 天，按事件指纹生成的小时聚合保留 365 天，按天/对象/类别生成的日聚合保留 31 天。24 小时以上窗口优先读取日聚合，6 小时以内仍读原始表；某集群日聚合为空时回退原始表。日聚合的事件数是“首次观察”口径，累计发生次数仍是精确值。重复的 Watch 更新只把新增次数写入小时聚合，不会重复累计整条 Event 的历史次数。清理任务每小时执行，单批最多删除 5000 行，避免大事务阻塞在线查询。如果原始表仍增长到数千万行，再评估 MySQL 月分区或独立检索系统，第一版不预先引入重型组件。
 
 ## 5. 开启 Pod 终端
 
@@ -104,7 +104,16 @@ rules:
 
 - 当 PVC 使用率超过 70% 时，先扩容 PVC，不要删除 StatefulSet 的数据卷。
 - 每日备份 `ftc_platform` 数据库。该库同时包含纳管凭据、账号、快照和 Event。
-- 该 YAML 是单实例第一版，不提供 MySQL 高可用。如果平台成为生产核心系统，应改用公司已有的高可用 MySQL 服务。
+- 备份示例见 [`deploy/mysql-backup.yaml`](../../deploy/mysql-backup.yaml)：每天 02:00 用 `mysqldump --single-transaction` 导出并 gzip 到 20 GiB PVC，保留 7 天。备份卷与数据卷分离，避免 StatefulSet 删除时一起丢失：
+
+  ```bash
+  kubectl apply -f deploy/mysql-backup.yaml
+  kubectl -n ftc-platform create job --from=cronjob/platform-mysql-backup platform-mysql-backup-manual
+  ```
+
+  备份仍在同一集群内，生产环境应把 `/backup` 同步到对象存储或异地备份系统，并定期做恢复演练。
+- 该 YAML 是单实例第一版，不提供 MySQL 高可用。平台使用单个 DSN，不包含读写分离；如果平台成为生产核心系统，应改用公司已有的高可用 MySQL 服务或 MySQL Operator，并把 `PLATFORM_DATABASE_DSN` 指向其 Service。
+- 平台健康采集在 `deploy/platform.yaml` 中默认使用 `HEALTH_INSTANCE_SOURCE=workloads`，不再每分钟全量读取业务 Pod；资源搜索索引由 Leader 每 10 分钟刷新。若需要 Pod 级精确实例口径，可改回 `pods`。
 
 ## 7. 配置全局业务 Namespace 与交付基线
 
