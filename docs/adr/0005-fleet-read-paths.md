@@ -17,7 +17,7 @@
 1. 跨集群事件的 issues/objects 视图使用 SQL `GROUP BY` 聚合，只返回聚合行；`event` 视图保留原始行，但仅用于单集群、短时间窗的证据查询。
 2. 工作负载归属只在查询已经限定到单套集群时解析，并按集群缓存 5 分钟；全集群视图不调用任何目标集群 API。
 3. `GET /clusters/{id}` 与 `GET /clusters/{id}/capacity` 默认读取采集快照；`refresh=1` 才实时采集。容量实时刷新会回写快照，保证新建基线立即可见。
-4. 跨集群搜索按集群 singleflight，结果缓存 120 秒，接口超时 30 秒；缓存仍保存资源摘要，不保存完整 Kubernetes 对象。
+4. 跨集群搜索按集群 singleflight，结果缓存 120 秒，接口超时 30 秒；缓存仍保存资源摘要，不保存完整 Kubernetes 对象。该请求路径随后由 ADR-0006 的持久化资源索引取代，singleflight 仅保留为索引为空时的降级。
 5. 列表读取使用 `ResourceVersion: "0"` 和 protobuf 响应，避免每次刷新都从 etcd 做 quorum read，并降低大列表的解码成本。
 
 ## 后果
