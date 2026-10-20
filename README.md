@@ -15,7 +15,7 @@
 
 ## 当前开发状态
 
-项目已包含真实集群纳管、健康概览、全局资源池容量、单集群容量基线、节点、工作负载、Pod 详情与日志，以及单集群 Event 中心。Event 由平台通过 Kubernetes API `List + Watch` 非侵入式采集，按 UID 更新重复次数，保存 30 天。
+项目已包含真实集群纳管、健康概览、全局资源池容量、单集群容量基线、节点、工作负载、Pod 详情与日志，以及单集群 Event 中心。Event 由平台通过 Kubernetes API `List + Watch` 非侵入式采集，按 UID 更新重复次数；Warning 保留 30 天，Normal 保留 7 天，小时聚合保留 365 天。
 
 平台最终以 Web 服务形式部署到 Kubernetes，不开发桌面端，也不要求用户单独运行客户端程序。
 
@@ -25,7 +25,9 @@
 
 可通过 `HEALTH_COLLECTION_INTERVAL`、`HEALTH_COLLECTION_WORKERS` 和 `HEALTH_COLLECTION_TIMEOUT` 调整采集周期、并发上限和单集群超时。60 套集群建议先保持 `1m / 5 / 20s`，经过压测后再调高并发。
 
-节点、工作负载、Pod 日志和 Exec 等单集群详情仍按需实时访问目标集群。当前 SQLite 方案面向单副本第一阶段；生产多副本前需迁移到共享 MySQL，并为后台采集器增加 Leader Election。详细决策见 [`docs/adr/0002-cache-fleet-health-snapshots.md`](docs/adr/0002-cache-fleet-health-snapshots.md)。
+集群概览与容量默认读取采集快照，只有显式刷新才实时访问目标集群；节点、工作负载、Pod 日志和 Exec 仍按需实时访问。跨集群事件的问题与对象视图在数据库内完成聚合，只有单个资源的证据查询才读取原始 Event；跨集群搜索按集群去重加载并缓存 120 秒。
+
+当前 SQLite 方案面向单副本第一阶段；生产多副本前需迁移到共享 MySQL，并为后台采集器增加 Leader Election。详细决策见 [`docs/adr/0002-cache-fleet-health-snapshots.md`](docs/adr/0002-cache-fleet-health-snapshots.md)。
 
 ## 本地工具
 
