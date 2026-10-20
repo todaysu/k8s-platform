@@ -9,6 +9,17 @@ import (
 	"time"
 )
 
+const (
+	resourceCacheTTL    = 120 * time.Second
+	resourceLoadTimeout = 25 * time.Second
+)
+
+type resourceLoad struct {
+	done     chan struct{}
+	snapshot cachedResources
+	err      error
+}
+
 type cachedResources struct {
 	workloads []ClusterWorkload
 	pods      []ClusterPod
@@ -25,7 +36,7 @@ func (service *OnboardingService) SearchResources(ctx context.Context, rawQuery 
 		return GlobalResourceSearch{}, err
 	}
 	result := GlobalResourceSearch{Items: []GlobalResourceResult{}, FailedClusters: []string{}}
-	semaphore := make(chan struct{}, 10)
+	semaphore := make(chan struct{}, 20)
 	var mutex sync.Mutex
 	var wait sync.WaitGroup
 	for _, current := range records {
@@ -83,10 +94,49 @@ func (service *OnboardingService) SearchResources(ctx context.Context, rawQuery 
 
 func (service *OnboardingService) resourcesForSearch(ctx context.Context, record ClusterRecord) (cachedResources, error) {
 	service.resourceCacheMu.Lock()
-	cached, ok := service.resourceCache[record.ID]
-	service.resourceCacheMu.Unlock()
-	if ok && service.now().Sub(cached.loadedAt) < 30*time.Second {
+	cached, hasCache := service.resourceCache[record.ID]
+	if hasCache && service.now().Sub(cached.loadedAt) < resourceCacheTTL {
+		service.resourceCacheMu.Unlock()
 		return cached, nil
+	}
+	load, loading := service.resourceLoads[record.ID]
+	if !loading {
+		if service.resourceLoads == nil {
+			service.resourceLoads = map[string]*resourceLoad{}
+		}
+		load = &resourceLoad{done: make(chan struct{})}
+		service.resourceLoads[record.ID] = load
+	}
+	service.resourceCacheMu.Unlock()
+	if loading {
+		select {
+		case <-load.done:
+			return load.snapshot, load.err
+		case <-ctx.Done():
+			return cachedResources{}, ctx.Err()
+		}
+	}
+
+	// Load once even when several users search at the same time. The loader is
+	// detached from a single request so one cancellation does not fail peers.
+	loadCtx, cancel := context.WithTimeout(context.Background(), resourceLoadTimeout)
+	defer cancel()
+	snapshot, err := service.loadResources(loadCtx, record)
+	service.resourceCacheMu.Lock()
+	if err == nil {
+		service.resourceCache[record.ID] = snapshot
+	}
+	load.snapshot = snapshot
+	load.err = err
+	delete(service.resourceLoads, record.ID)
+	close(load.done)
+	service.resourceCacheMu.Unlock()
+	return snapshot, err
+}
+
+func (service *OnboardingService) loadResources(ctx context.Context, record ClusterRecord) (cachedResources, error) {
+	if service.connector == nil {
+		return cachedResources{}, newError(CodeConnectionFailed)
 	}
 	parsed, err := service.parsedCredentials(record)
 	if err != nil {
@@ -110,13 +160,7 @@ func (service *OnboardingService) resourcesForSearch(ctx context.Context, record
 	workloadData := <-workloads
 	podData := <-pods
 	snapshot := cachedResources{workloads: workloadData.items, pods: podData.items, loadedAt: service.now()}
-	loadErr := errors.Join(workloadData.err, podData.err)
-	if loadErr == nil {
-		service.resourceCacheMu.Lock()
-		service.resourceCache[record.ID] = snapshot
-		service.resourceCacheMu.Unlock()
-	}
-	return snapshot, loadErr
+	return snapshot, errors.Join(workloadData.err, podData.err)
 }
 
 func matchingResources(managed ManagedCluster, snapshot cachedResources, query string) []GlobalResourceResult {

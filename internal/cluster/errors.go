@@ -45,6 +45,7 @@ const (
 	CodeAuthenticationFailed     = "AUTHENTICATION_FAILED"
 	CodeAuthorizationFailed      = "AUTHORIZATION_FAILED"
 	CodeCapacityRulesInvalid     = "CAPACITY_RULES_INVALID"
+	CodeCapacityPending          = "CAPACITY_PENDING"
 	CodeBaselineReasonRequired   = "BASELINE_REASON_REQUIRED"
 )
 

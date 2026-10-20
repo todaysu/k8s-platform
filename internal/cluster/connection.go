@@ -29,6 +29,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// cachedListOptions reads from the API server watch cache instead of issuing a
+// quorum read to etcd for every snapshot refresh. Health and capacity tolerate
+// a slightly stale view; detail pages still get a consistent object on write.
+var cachedListOptions = metav1.ListOptions{ResourceVersion: "0"}
+
 type Connector interface {
 	Version(context.Context, ParsedKubeconfig) (string, error)
 	Health(context.Context, ParsedKubeconfig) (HealthSnapshot, error)
@@ -58,20 +63,20 @@ type CapacityConnector interface {
 }
 
 func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed ParsedKubeconfig, rule CapacityRule) (ClusterCapacity, error) {
-	clientset, err := connector.clientset(parsed)
+	clientset, err := connector.listClientset(parsed)
 	if err != nil {
 		return ClusterCapacity{}, err
 	}
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, cachedListOptions)
 	if err != nil {
 		return ClusterCapacity{}, mapConnectionError(err)
 	}
-	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
 	if err != nil {
 		return ClusterCapacity{}, mapConnectionError(err)
 	}
 
-	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, cachedListOptions)
 	if err != nil {
 		return ClusterCapacity{}, mapConnectionError(err)
 	}
@@ -152,7 +157,7 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 		return snapshot.Namespaces[left].Namespace < snapshot.Namespaces[right].Namespace
 	})
 
-	services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	services, err := clientset.CoreV1().Services("").List(ctx, cachedListOptions)
 	if err == nil {
 		connector.collectCapacityUsage(ctx, clientset, services.Items, rule, &snapshot)
 	}
@@ -374,11 +379,11 @@ var (
 )
 
 func (connector *KubernetesConnector) ListEvents(ctx context.Context, parsed ParsedKubeconfig) (EventBatch, error) {
-	clientset, err := connector.clientset(parsed)
+	clientset, err := connector.listClientset(parsed)
 	if err != nil {
 		return EventBatch{}, err
 	}
-	events, err := clientset.EventsV1().Events("").List(ctx, metav1.ListOptions{})
+	events, err := clientset.EventsV1().Events("").List(ctx, cachedListOptions)
 	if err == nil {
 		items := make([]ClusterEvent, 0, len(events.Items))
 		for index := range events.Items {
@@ -389,7 +394,7 @@ func (connector *KubernetesConnector) ListEvents(ctx context.Context, parsed Par
 	if !apierrors.IsNotFound(err) {
 		return EventBatch{}, mapConnectionError(err)
 	}
-	legacy, err := clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{})
+	legacy, err := clientset.CoreV1().Events("").List(ctx, cachedListOptions)
 	if err != nil {
 		return EventBatch{}, mapConnectionError(err)
 	}
@@ -466,6 +471,20 @@ func (connector *KubernetesConnector) clientset(parsed ParsedKubeconfig) (*kuber
 func (connector *KubernetesConnector) clientsetWithTimeout(parsed ParsedKubeconfig, timeout time.Duration) (*kubernetes.Clientset, error) {
 	config := connector.restConfig(parsed)
 	config.Timeout = timeout
+	httpClient, err := connector.httpClient(config)
+	if err != nil {
+		return nil, err
+	}
+	clientset, err := kubernetes.NewForConfigAndClient(config, httpClient)
+	if err != nil {
+		return nil, mapConnectionError(err)
+	}
+	return clientset, nil
+}
+
+func (connector *KubernetesConnector) listClientset(parsed ParsedKubeconfig) (*kubernetes.Clientset, error) {
+	config := connector.restConfig(parsed)
+	config.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
 	httpClient, err := connector.httpClient(config)
 	if err != nil {
 		return nil, err
@@ -622,7 +641,7 @@ func (connector *KubernetesConnector) Pod(ctx context.Context, parsed ParsedKube
 	if err != nil {
 		return ClusterPodDetail{}, mapConnectionError(err)
 	}
-	replicaSets, err := clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+	replicaSets, err := clientset.AppsV1().ReplicaSets(namespace).List(ctx, cachedListOptions)
 	if err != nil {
 		return ClusterPodDetail{}, mapConnectionError(err)
 	}
@@ -639,20 +658,15 @@ func (connector *KubernetesConnector) Pod(ctx context.Context, parsed ParsedKube
 }
 
 func (connector *KubernetesConnector) Pods(ctx context.Context, parsed ParsedKubeconfig) ([]ClusterPod, error) {
-	config := connector.restConfig(parsed)
-	httpClient, err := connector.httpClient(config)
+	clientset, err := connector.listClientset(parsed)
 	if err != nil {
 		return nil, err
 	}
-	clientset, err := kubernetes.NewForConfigAndClient(config, httpClient)
+	replicaSets, err := clientset.AppsV1().ReplicaSets("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
-	replicaSets, err := clientset.AppsV1().ReplicaSets("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, mapConnectionError(err)
-	}
-	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
@@ -800,23 +814,18 @@ func (connector *KubernetesConnector) Version(ctx context.Context, parsed Parsed
 }
 
 func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedKubeconfig) (HealthSnapshot, error) {
-	config := connector.restConfig(parsed)
-	httpClient, err := connector.httpClient(config)
+	clientset, err := connector.listClientset(parsed)
 	if err != nil {
 		return HealthSnapshot{}, err
 	}
-	clientset, err := kubernetes.NewForConfigAndClient(config, httpClient)
-	if err != nil {
-		return HealthSnapshot{}, mapConnectionError(err)
-	}
 
 	startedAt := time.Now()
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, cachedListOptions)
 	if err != nil {
 		return HealthSnapshot{}, mapConnectionError(err)
 	}
 	latency := time.Since(startedAt).Milliseconds()
-	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
 	if err != nil {
 		return HealthSnapshot{}, mapConnectionError(err)
 	}
@@ -851,7 +860,7 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 			}
 		}
 	}
-	services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	services, err := clientset.CoreV1().Services("").List(ctx, cachedListOptions)
 	if err == nil {
 		connector.collectPrometheusMetrics(ctx, clientset, services.Items, totalCPUMilli, totalMemoryBytes, &snapshot)
 	}
@@ -859,17 +868,12 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 }
 
 func (connector *KubernetesConnector) Nodes(ctx context.Context, parsed ParsedKubeconfig) ([]ClusterNode, error) {
-	config := connector.restConfig(parsed)
-	httpClient, err := connector.httpClient(config)
+	clientset, err := connector.listClientset(parsed)
 	if err != nil {
 		return nil, err
 	}
-	clientset, err := kubernetes.NewForConfigAndClient(config, httpClient)
-	if err != nil {
-		return nil, mapConnectionError(err)
-	}
 
-	items, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	items, err := clientset.CoreV1().Nodes().List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
@@ -919,33 +923,28 @@ func (connector *KubernetesConnector) Workload(ctx context.Context, parsed Parse
 }
 
 func (connector *KubernetesConnector) collectWorkloads(ctx context.Context, parsed ParsedKubeconfig) ([]ClusterWorkloadDetail, error) {
-	config := connector.restConfig(parsed)
-	httpClient, err := connector.httpClient(config)
+	clientset, err := connector.listClientset(parsed)
 	if err != nil {
 		return nil, err
 	}
-	clientset, err := kubernetes.NewForConfigAndClient(config, httpClient)
-	if err != nil {
-		return nil, mapConnectionError(err)
-	}
 
-	deployments, err := clientset.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
+	deployments, err := clientset.AppsV1().Deployments("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
-	statefulSets, err := clientset.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{})
+	statefulSets, err := clientset.AppsV1().StatefulSets("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
-	daemonSets, err := clientset.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{})
+	daemonSets, err := clientset.AppsV1().DaemonSets("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
-	replicaSets, err := clientset.AppsV1().ReplicaSets("").List(ctx, metav1.ListOptions{})
+	replicaSets, err := clientset.AppsV1().ReplicaSets("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
-	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}

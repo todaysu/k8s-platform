@@ -7,23 +7,30 @@ import (
 	"time"
 )
 
+const ownerCacheTTL = 5 * time.Minute
+
+type cachedOwners struct {
+	owners   map[string]EventResourceReference
+	loadedAt time.Time
+}
+
 // Resolve by controller references and UIDs, never by a Pod name prefix.
 type eventWorkloadConnector interface {
 	EventWorkloadOwners(context.Context, ParsedKubeconfig) (map[string]EventResourceReference, error)
 }
 
 func (connector *KubernetesConnector) EventWorkloadOwners(ctx context.Context, parsed ParsedKubeconfig) (map[string]EventResourceReference, error) {
-	client, err := connector.clientset(parsed)
+	client, err := connector.listClientset(parsed)
 	if err != nil {
 		return nil, err
 	}
-	pods, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	pods, err := client.CoreV1().Pods("").List(ctx, cachedListOptions)
 	if err != nil {
 		return nil, err
 	}
 	result := map[string]EventResourceReference{}
 	// Failure to list ReplicaSets still allows grouping by the verified direct controller.
-	sets, _ := client.AppsV1().ReplicaSets("").List(ctx, metav1.ListOptions{})
+	sets, _ := client.AppsV1().ReplicaSets("").List(ctx, cachedListOptions)
 	parents := map[string]EventResourceReference{}
 	if sets != nil {
 		for _, rs := range sets.Items {
@@ -100,6 +107,12 @@ func (service *OnboardingService) eventWorkloadGroups(ctx context.Context, recor
 	if !hasPod {
 		return objects
 	}
+	service.ownerCacheMu.Lock()
+	cached, cachedOK := service.ownerCache[record.ID]
+	service.ownerCacheMu.Unlock()
+	if cachedOK && service.now().Sub(cached.loadedAt) < ownerCacheTTL {
+		return groupEventWorkloads(objects, cached.owners)
+	}
 	parsed, err := service.parsedCredentials(record)
 	if err != nil {
 		return objects
@@ -110,5 +123,11 @@ func (service *OnboardingService) eventWorkloadGroups(ctx context.Context, recor
 	if err != nil {
 		return objects
 	}
+	service.ownerCacheMu.Lock()
+	if service.ownerCache == nil {
+		service.ownerCache = map[string]cachedOwners{}
+	}
+	service.ownerCache[record.ID] = cachedOwners{owners: owners, loadedAt: service.now()}
+	service.ownerCacheMu.Unlock()
 	return groupEventWorkloads(objects, owners)
 }

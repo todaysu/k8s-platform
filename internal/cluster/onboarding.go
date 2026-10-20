@@ -26,6 +26,9 @@ type OnboardingService struct {
 	systemNamespaces   []string
 	resourceCacheMu    sync.Mutex
 	resourceCache      map[string]cachedResources
+	resourceLoads      map[string]*resourceLoad
+	ownerCacheMu       sync.Mutex
+	ownerCache         map[string]cachedOwners
 	storageStatsMu     sync.Mutex
 	storageStatsAt     time.Time
 	storageStats       EventStorageStats
@@ -47,6 +50,8 @@ func NewOnboardingService(connector Connector, cipher CredentialCipher, reposito
 		repository:       repository,
 		now:              time.Now,
 		resourceCache:    make(map[string]cachedResources),
+		resourceLoads:    make(map[string]*resourceLoad),
+		ownerCache:       make(map[string]cachedOwners),
 		systemNamespaces: []string{"kube-system", "cmb-monitoring"},
 	}
 	if capacityRepo, ok := repository.(CapacityRepository); ok {
@@ -500,6 +505,13 @@ func (service *OnboardingService) Delete(ctx context.Context, id string) error {
 		service.storageStatsMu.Lock()
 		service.storageStatsAt = time.Time{}
 		service.storageStatsMu.Unlock()
+		service.ownerCacheMu.Lock()
+		delete(service.ownerCache, id)
+		service.ownerCacheMu.Unlock()
+		service.resourceCacheMu.Lock()
+		delete(service.resourceCache, id)
+		delete(service.resourceLoads, id)
+		service.resourceCacheMu.Unlock()
 	}
 	return service.repository.Delete(ctx, id)
 }
@@ -541,7 +553,94 @@ func (service *OnboardingService) Get(ctx context.Context, id string) (ManagedCl
 	if err != nil {
 		return ManagedCluster{}, err
 	}
-	return service.inspectRecord(ctx, record), nil
+	// Detail pages poll this method; return the background snapshot instead of
+	// listing every Pod in the target cluster on each poll.
+	return record.ManagedCluster, nil
+}
+
+// Refresh performs a live health check and writes the resulting snapshot so
+// list and detail views agree. It is used by the explicit refresh action.
+func (service *OnboardingService) Refresh(ctx context.Context, id string) (ManagedCluster, error) {
+	record, err := service.repository.GetRecord(ctx, id)
+	if err != nil {
+		return ManagedCluster{}, err
+	}
+	value := service.inspectRecord(ctx, record)
+	if repository, ok := service.repository.(ClusterHealthRepository); ok {
+		if err := repository.UpdateClusterHealth(ctx, value); err != nil {
+			return ManagedCluster{}, err
+		}
+	}
+	return value, nil
+}
+
+// GetCachedCapacity returns the collector's capacity snapshot. It falls back
+// to a live collection when the cluster has no snapshot yet or when a new
+// delivery baseline has been created since the snapshot was taken.
+func (service *OnboardingService) GetCachedCapacity(ctx context.Context, id string) (ClusterCapacity, error) {
+	repository, ok := service.repository.(FleetCapacityRepository)
+	if !ok {
+		return service.RefreshCapacity(ctx, id)
+	}
+	fleet, err := repository.ListFleetCapacitySnapshots(ctx)
+	if err != nil {
+		return ClusterCapacity{}, err
+	}
+	for _, item := range fleet.Items {
+		if item.ClusterID != id {
+			continue
+		}
+		if service.capacityBaselineChanged(ctx, id, item.Capacity) {
+			return service.RefreshCapacity(ctx, id)
+		}
+		return item.Capacity, nil
+	}
+	for _, failure := range fleet.Failures {
+		if failure.ClusterID == id {
+			if failure.Code == CodeCapacityPending {
+				return service.RefreshCapacity(ctx, id)
+			}
+			return ClusterCapacity{}, newError(failure.Code)
+		}
+	}
+	return service.RefreshCapacity(ctx, id)
+}
+
+// RefreshCapacity computes a live capacity snapshot and persists it so the
+// next snapshot read (and the fleet page) sees the same baseline immediately.
+func (service *OnboardingService) RefreshCapacity(ctx context.Context, id string) (ClusterCapacity, error) {
+	value, err := service.GetCapacity(ctx, id)
+	if err != nil {
+		return ClusterCapacity{}, err
+	}
+	repository, ok := service.repository.(FleetCapacityRepository)
+	if !ok {
+		return value, nil
+	}
+	record, recordErr := service.repository.GetRecord(ctx, id)
+	if recordErr != nil {
+		return value, nil
+	}
+	item := FleetCapacityItem{
+		ClusterID: id, ClusterName: record.Name, Environment: record.Environment,
+		ClusterType: record.ClusterType, TechnologyStack: record.TechnologyStack, Capacity: value,
+	}
+	_ = repository.SaveFleetCapacitySuccess(ctx, item, service.now().UTC())
+	return value, nil
+}
+
+func (service *OnboardingService) capacityBaselineChanged(ctx context.Context, id string, snapshot ClusterCapacity) bool {
+	if service.capacityRepo == nil {
+		return false
+	}
+	latest, err := service.capacityRepo.LatestCapacityBaseline(ctx, id)
+	if err != nil {
+		return false
+	}
+	if latest == nil {
+		return snapshot.Baseline != nil
+	}
+	return snapshot.Baseline == nil || snapshot.Baseline.ID != latest.ID
 }
 
 func (service *OnboardingService) GetNodes(ctx context.Context, id string) ([]ClusterNode, error) {

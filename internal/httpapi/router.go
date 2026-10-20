@@ -27,6 +27,18 @@ func requestTimeout(request *http.Request, timeout time.Duration) (context.Conte
 	return context.WithTimeout(request.Context(), timeout)
 }
 
+type clusterRefresher interface {
+	Refresh(context.Context, string) (cluster.ManagedCluster, error)
+}
+
+type clusterCapacitySnapshotter interface {
+	GetCachedCapacity(context.Context, string) (cluster.ClusterCapacity, error)
+}
+
+type clusterCapacityRefresher interface {
+	RefreshCapacity(context.Context, string) (cluster.ClusterCapacity, error)
+}
+
 type clusterManager interface {
 	Delete(context.Context, string) error
 	GetCapacity(context.Context, string) (cluster.ClusterCapacity, error)
@@ -268,9 +280,22 @@ func getClusterCapacity(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodeConnectionFailed)
 			return
 		}
-		ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 		defer cancel()
-		capacity, err := manager.GetCapacity(ctx, request.PathValue("id"))
+		refresh, _ := strconv.ParseBool(request.URL.Query().Get("refresh"))
+		var capacity cluster.ClusterCapacity
+		var err error
+		if refresh {
+			if refresher, ok := manager.(clusterCapacityRefresher); ok {
+				capacity, err = refresher.RefreshCapacity(ctx, request.PathValue("id"))
+			} else {
+				capacity, err = manager.GetCapacity(ctx, request.PathValue("id"))
+			}
+		} else if snapshotter, ok := manager.(clusterCapacitySnapshotter); ok {
+			capacity, err = snapshotter.GetCachedCapacity(ctx, request.PathValue("id"))
+		} else {
+			capacity, err = manager.GetCapacity(ctx, request.PathValue("id"))
+		}
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -285,7 +310,7 @@ func lockClusterCapacityBaseline(manager clusterManager) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
 			return
 		}
-		ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 		defer cancel()
 		baseline, err := manager.LockCapacityBaseline(ctx, request.PathValue("id"))
 		if err != nil {
@@ -302,7 +327,7 @@ func searchGlobalResources(searcher globalResourceSearcher) http.HandlerFunc {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodeConnectionFailed)
 			return
 		}
-		ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 		defer cancel()
 		result, err := searcher.SearchResources(ctx, request.URL.Query().Get("q"))
 		if err != nil {
@@ -567,7 +592,18 @@ func getCluster(manager clusterManager) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(request, 20*time.Second)
 		defer cancel()
-		managedCluster, err := manager.Get(ctx, request.PathValue("id"))
+		refresh, _ := strconv.ParseBool(request.URL.Query().Get("refresh"))
+		var managedCluster cluster.ManagedCluster
+		var err error
+		if refresh {
+			if refresher, ok := manager.(clusterRefresher); ok {
+				managedCluster, err = refresher.Refresh(ctx, request.PathValue("id"))
+			} else {
+				managedCluster, err = manager.Get(ctx, request.PathValue("id"))
+			}
+		} else {
+			managedCluster, err = manager.Get(ctx, request.PathValue("id"))
+		}
 		if err != nil {
 			writeClusterError(writer, err)
 			return
@@ -727,7 +763,7 @@ func writeClusterError(writer http.ResponseWriter, err error) {
 		status = http.StatusInternalServerError
 	case cluster.CodePodNotRunning, cluster.CodeContainerNotFound:
 		status = http.StatusConflict
-	case cluster.CodePodExecUnavailable:
+	case cluster.CodePodExecUnavailable, cluster.CodeCapacityPending:
 		status = http.StatusServiceUnavailable
 	}
 	writeAPIError(writer, status, code)
@@ -783,6 +819,7 @@ func errorMessage(code string) string {
 		cluster.CodeAuthorizationFailed:      "Kubeconfig 中的连接凭据没有读取集群版本的权限。",
 		cluster.CodeConnectionFailed:         "无法连接 Kubernetes API Server。",
 		cluster.CodeCapacityRulesInvalid:     "容量分类规则无效或存在 Namespace 冲突。",
+		cluster.CodeCapacityPending:          "容量数据尚未采集完成，请稍后重试。",
 		cluster.CodeBaselineReasonRequired:   "暂不更新基线时必须填写原因。",
 	}
 	if message, ok := messages[code]; ok {

@@ -462,3 +462,42 @@ func TestVersion(t *testing.T) {
 		t.Fatalf("expected body %q, got %q", want, got)
 	}
 }
+
+type refreshingManager struct {
+	fakeManager
+	refreshed         bool
+	capacityRefreshed bool
+}
+
+func (manager *refreshingManager) Refresh(context.Context, string) (cluster.ManagedCluster, error) {
+	manager.refreshed = true
+	return manager.managed, nil
+}
+
+func (manager *refreshingManager) RefreshCapacity(context.Context, string) (cluster.ClusterCapacity, error) {
+	manager.capacityRefreshed = true
+	return manager.capacity, nil
+}
+
+func TestSnapshotEndpointsUseLiveRefreshOnlyWhenRequested(t *testing.T) {
+	manager := &refreshingManager{fakeManager: fakeManager{}}
+	router := NewRouter("test", manager)
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/clusters/cluster-1", nil))
+	if manager.refreshed {
+		t.Fatal("snapshot cluster read must not call live refresh")
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/clusters/cluster-1?refresh=1", nil))
+	if !manager.refreshed {
+		t.Fatal("refresh=1 must call live refresh")
+	}
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/clusters/cluster-1/capacity", nil))
+	if manager.capacityRefreshed {
+		t.Fatal("snapshot capacity read must not call live refresh")
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/clusters/cluster-1/capacity?refresh=1", nil))
+	if !manager.capacityRefreshed {
+		t.Fatal("capacity refresh=1 must call live refresh")
+	}
+}

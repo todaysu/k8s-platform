@@ -122,7 +122,7 @@ func assembleFleetCapacity(records []cluster.ClusterRecord, values map[string]st
 			result.Items = append(result.Items, cluster.FleetCapacityItem{ClusterID: metadata.ID, ClusterName: metadata.Name, Environment: metadata.Environment, ClusterType: metadata.ClusterType, TechnologyStack: metadata.TechnologyStack, Capacity: value.capacity})
 		}
 		if !exists || value.failure != "" || !value.hasValue {
-			code := "CAPACITY_PENDING"
+			code := cluster.CodeCapacityPending
 			if exists && value.failure != "" {
 				code = value.failure
 			}

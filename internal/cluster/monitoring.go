@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"math"
@@ -167,7 +166,7 @@ func (service *OnboardingService) GetMonitoring(ctx context.Context, id string, 
 	if err != nil {
 		return MonitoringSnapshot{}, err
 	}
-	services, err := client.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	services, err := client.CoreV1().Services("").List(ctx, cachedListOptions)
 	if err != nil {
 		return MonitoringSnapshot{}, monitoringConnectionError(err)
 	}
