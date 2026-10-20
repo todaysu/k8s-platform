@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"example.com/k8s-platform/internal/metrics"
 )
 
 type CapacityCollector struct {
@@ -56,6 +58,9 @@ func (collector *CapacityCollector) collect(ctx context.Context, stagger bool) {
 	if collector == nil || collector.service == nil {
 		return
 	}
+	metrics.CapacityCollectorRuns.Inc()
+	startedAt := time.Now()
+	defer func() { metrics.CapacityCollectorDurationMS.Set(time.Since(startedAt).Milliseconds()) }()
 	repository, ok := collector.service.repository.(FleetCapacityRepository)
 	if !ok {
 		return
@@ -67,6 +72,7 @@ func (collector *CapacityCollector) collect(ctx context.Context, stagger bool) {
 		}
 		return
 	}
+	metrics.ClustersTotal.Set(int64(len(records)))
 	classification, err := collector.service.activeCapacityClassification(ctx)
 	if err != nil {
 		log.Printf("capacity collector: read classification: %v", err)
@@ -89,6 +95,7 @@ func (collector *CapacityCollector) collect(ctx context.Context, stagger bool) {
 				at := collector.service.now().UTC()
 				metadata := record.ManagedCluster
 				if collectErr != nil {
+					metrics.CapacityCollectorErrors.Inc()
 					failure := FleetCapacityFailure{ClusterID: metadata.ID, ClusterName: metadata.Name, Environment: metadata.Environment, ClusterType: metadata.ClusterType, TechnologyStack: metadata.TechnologyStack, Code: ErrorCode(collectErr)}
 					if persistErr := repository.SaveFleetCapacityFailure(ctx, failure, at); persistErr != nil {
 						log.Printf("capacity collector: persist cluster %s failure: %v", record.ID, persistErr)

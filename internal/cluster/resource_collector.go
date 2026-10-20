@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"example.com/k8s-platform/internal/metrics"
 )
 
 const (
@@ -72,6 +74,9 @@ func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bo
 	if collector == nil || collector.service == nil || collector.repository == nil {
 		return
 	}
+	metrics.ResourceIndexRuns.Inc()
+	startedAt := time.Now()
+	defer func() { metrics.ResourceIndexDurationMS.Set(time.Since(startedAt).Milliseconds()) }()
 	records, err := collector.service.repository.ListRecords(ctx)
 	if err != nil {
 		log.Printf("resource index: list managed clusters: %v", err)
@@ -80,6 +85,7 @@ func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bo
 	if len(records) == 0 {
 		return
 	}
+	metrics.ClustersTotal.Set(int64(len(records)))
 	workers := collector.concurrency
 	if workers > len(records) {
 		workers = len(records)
@@ -94,12 +100,14 @@ func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bo
 				requestContext, cancel := context.WithTimeout(ctx, collector.timeout)
 				snapshot, loadErr := collector.service.loadResources(requestContext, record)
 				if loadErr != nil {
+					metrics.ResourceIndexErrors.Inc()
 					log.Printf("resource index: load cluster %s: %v", record.ID, loadErr)
 					cancel()
 					continue
 				}
 				resources := buildIndexedResources(record.ID, snapshot, collector.service.now().UTC())
 				if persistErr := collector.repository.ReplaceClusterResources(requestContext, record.ID, resources); persistErr != nil {
+					metrics.ResourceIndexErrors.Inc()
 					log.Printf("resource index: persist cluster %s: %v", record.ID, persistErr)
 				}
 				cancel()

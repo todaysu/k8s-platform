@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Categories are navigation indexes, never claims of a common root cause.
@@ -326,6 +327,7 @@ func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEve
 		Until:              q.Until,
 		BusinessConfigured: len(classification.BusinessNamespaces) > 0,
 	}
+	useDaily := q.Until.Sub(q.Since) > 6*time.Hour
 	statuses := map[string]EventCollectorStatus{}
 	if values, statusErr := service.eventRepository.ListEventCollectorStatuses(ctx); statusErr == nil {
 		for _, value := range values {
@@ -336,15 +338,15 @@ func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEve
 	case "events":
 		return service.getFleetEventRows(ctx, q, records, classification, statuses, result)
 	case "objects", "resources":
-		return service.getFleetEventObjects(ctx, q, records, classification, statuses, result)
+		return service.getFleetEventObjects(ctx, q, records, classification, statuses, useDaily, result)
 	default:
-		return service.getFleetEventIssues(ctx, q, records, classification, statuses, result)
+		return service.getFleetEventIssues(ctx, q, records, classification, statuses, useDaily, result)
 	}
 }
 
 // getFleetEventIssues answers the fleet issue view with grouped SQL. It never
 // materializes raw events or calls a target cluster from the request path.
-func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, result FleetEventOverview) (FleetEventOverview, error) {
+func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, useDaily bool, result FleetEventOverview) (FleetEventOverview, error) {
 	buckets := map[string]*eventBucket{}
 	types, namespaces, kinds := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var total, affectedObjects int64
@@ -355,7 +357,7 @@ func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q Fle
 		}
 		result.Summary.TotalClusters++
 		scanQuery := fleetScanQuery(q, classification)
-		groups, err := service.eventRepository.AggregateEvents(ctx, record.ID, scanQuery)
+		groups, err := service.aggregateEventGroups(ctx, record.ID, scanQuery, useDaily)
 		if err != nil {
 			appendFleetFailure(&result, record, err)
 			continue
@@ -439,7 +441,7 @@ func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q Fle
 // getFleetEventObjects returns one row per object (and category) grouped by
 // SQL. Owner grouping is only attempted when the caller narrowed the query to
 // one cluster; fleet-wide requests never fan out to every API server.
-func (service *OnboardingService) getFleetEventObjects(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, result FleetEventOverview) (FleetEventOverview, error) {
+func (service *OnboardingService) getFleetEventObjects(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, useDaily bool, result FleetEventOverview) (FleetEventOverview, error) {
 	business := namespaceSet(classification.BusinessNamespaces)
 	objects := map[string]FleetEventObject{}
 	categories := map[string]bool{}
@@ -452,7 +454,7 @@ func (service *OnboardingService) getFleetEventObjects(ctx context.Context, q Fl
 		}
 		result.Summary.TotalClusters++
 		scanQuery := fleetScanQuery(q, classification)
-		rows, err := service.eventRepository.AggregateEventObjects(ctx, record.ID, scanQuery)
+		rows, err := service.aggregateEventObjects(ctx, record.ID, scanQuery, useDaily)
 		if err != nil {
 			appendFleetFailure(&result, record, err)
 			continue
@@ -623,6 +625,26 @@ func (service *OnboardingService) getFleetEventRows(ctx context.Context, q Fleet
 	}
 	result.Storage = storage
 	return result, nil
+}
+
+func (service *OnboardingService) aggregateEventGroups(ctx context.Context, id string, q EventQuery, useDaily bool) ([]EventGroupAggregate, error) {
+	if useDaily {
+		rows, err := service.eventRepository.AggregateDailyEvents(ctx, id, q)
+		if err == nil && len(rows) > 0 {
+			return rows, nil
+		}
+	}
+	return service.eventRepository.AggregateEvents(ctx, id, q)
+}
+
+func (service *OnboardingService) aggregateEventObjects(ctx context.Context, id string, q EventQuery, useDaily bool) ([]EventObjectAggregate, error) {
+	if useDaily {
+		rows, err := service.eventRepository.AggregateDailyEventObjects(ctx, id, q)
+		if err == nil && len(rows) > 0 {
+			return rows, nil
+		}
+	}
+	return service.eventRepository.AggregateEventObjects(ctx, id, q)
 }
 
 func (service *OnboardingService) scanEventPages(ctx context.Context, id string, q EventQuery, visit func(ClusterEvent) error) error {

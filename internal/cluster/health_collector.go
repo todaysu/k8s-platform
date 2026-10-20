@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"example.com/k8s-platform/internal/metrics"
 )
 
 const (
@@ -68,6 +70,9 @@ func (collector *HealthCollector) collect(ctx context.Context, stagger bool) {
 	if collector == nil || collector.service == nil {
 		return
 	}
+	metrics.HealthCollectorRuns.Inc()
+	startedAt := time.Now()
+	defer func() { metrics.HealthCollectorDurationMS.Set(time.Since(startedAt).Milliseconds()) }()
 	if _, ok := collector.service.repository.(ClusterHealthRepository); !ok {
 		return
 	}
@@ -79,6 +84,7 @@ func (collector *HealthCollector) collect(ctx context.Context, stagger bool) {
 	if len(records) == 0 {
 		return
 	}
+	metrics.ClustersTotal.Set(int64(len(records)))
 
 	jobs := make(chan ClusterRecord)
 	workers := collector.concurrency
@@ -93,6 +99,7 @@ func (collector *HealthCollector) collect(ctx context.Context, stagger bool) {
 			for record := range jobs {
 				requestContext, cancel := context.WithTimeout(ctx, collector.timeout)
 				if err := collector.service.refreshHealth(requestContext, record); err != nil {
+					metrics.HealthCollectorErrors.Inc()
 					log.Printf("health collector: persist cluster %s snapshot: %v", record.ID, err)
 				}
 				cancel()

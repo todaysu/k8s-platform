@@ -40,6 +40,7 @@ metadata:
   namespace: ftc-platform
 data:
   LISTEN_ADDR: ":8080"
+  METRICS_ADDR: ":9090"
   WEB_DIST_DIR: /app/web
   SECURE_COOKIES: "true"
   SESSION_TTL: 8h
@@ -49,6 +50,7 @@ data:
   HEALTH_COLLECTION_INTERVAL: 1m
   HEALTH_COLLECTION_TIMEOUT: 20s
   HEALTH_COLLECTION_WORKERS: "5"
+  HEALTH_INSTANCE_SOURCE: workloads
   CAPACITY_COLLECTION_INTERVAL: 5m
   CAPACITY_COLLECTION_TIMEOUT: 45s
   CAPACITY_COLLECTION_WORKERS: "3"
@@ -110,6 +112,7 @@ spec:
               valueFrom: { secretKeyRef: { name: ftc-platform, key: mysql-dsn } }
           ports:
             - { name: http, containerPort: 8080 }
+            - { name: metrics, containerPort: 9090 }
           readinessProbe:
             httpGet: { path: /api/v1/health, port: http }
             initialDelaySeconds: 3
@@ -144,6 +147,7 @@ spec:
     app.kubernetes.io/name: ftc-platform
   ports:
     - { name: http, port: 80, targetPort: http }
+    - { name: metrics, port: 9090, targetPort: metrics }
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

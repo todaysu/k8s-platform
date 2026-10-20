@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"example.com/k8s-platform/internal/metrics"
 )
 
 var eventVariableToken = regexp.MustCompile(`(?i)(?:\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9a-f]{8,}\b|\b\d+\b)`)
@@ -276,8 +279,10 @@ func (collector *EventCollector) collect(ctx context.Context, record ClusterReco
 	}
 	backoff := eventReconnectBase
 	for ctx.Err() == nil {
+		metrics.EventLists.Inc()
 		batch, err := collector.events.ListEvents(ctx, parsed)
 		if err != nil {
+			metrics.EventListErrors.Inc()
 			collector.status(ctx, record.ID, "error", "", err)
 			waitContext(ctx, jitter(backoff))
 			backoff = minDuration(backoff*2, eventReconnectMax)
@@ -293,11 +298,13 @@ func (collector *EventCollector) collect(ctx context.Context, record ClusterReco
 			continue
 		}
 		collector.status(ctx, record.ID, "watching", batch.ResourceVersion, nil)
+		metrics.EventWatchStarts.Inc()
 		watchStarted := time.Now()
 		err = collector.watchBatched(ctx, record.ID, parsed, batch.APIVersion, batch.ResourceVersion)
 		if ctx.Err() != nil {
 			return
 		}
+		metrics.EventReconnects.Inc()
 		if err == nil {
 			// A normal server-side timeout is not an error, but it must still
 			// back off. Otherwise a broken watch turns into a list hot loop.
@@ -415,6 +422,13 @@ func (collector *EventCollector) cleanup(ctx context.Context) {
 	for {
 		deleted, err := collector.repo.DeleteEventRollupsBefore(ctx, rollupCutoff, 5000)
 		if err != nil || deleted < 5000 {
+			break
+		}
+	}
+	dailyCutoff := now.Add(-31 * 24 * time.Hour)
+	for {
+		deleted, err := collector.repo.DeleteEventDailyBefore(ctx, dailyCutoff, 5000)
+		if err != nil || deleted < 5000 {
 			return
 		}
 	}
@@ -498,4 +512,88 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+// EventCategory exposes the deterministic category mapping to storage code so
+// daily rollups and request-time aggregation cannot drift.
+func EventCategory(event ClusterEvent) (string, string) {
+	return eventCategory(event)
+}
+
+func EventCountKey(clusterID, eventUID string) string {
+	return clusterID + "\x00" + eventUID
+}
+
+func EventObjectFingerprint(kind, namespace, uid, name string) string {
+	hash := sha256.Sum256([]byte(strings.Join([]string{kind, namespace, uid, name}, "\x00")))
+	return hex.EncodeToString(hash[:])[:32]
+}
+
+// BuildEventDailyRows aggregates a batch into day/object/category rows. The
+// event count tracks events first observed in that day; occurrence counts track
+// only the delta since the raw table's previous value.
+func BuildEventDailyRows(events []ClusterEvent, previousCounts map[string]int64) []EventDailyRow {
+	latest := make(map[string]ClusterEvent, len(events))
+	order := make([]string, 0, len(events))
+	for _, event := range events {
+		key := EventCountKey(event.ClusterID, event.EventUID)
+		if existing, ok := latest[key]; ok {
+			if event.OccurrenceCount >= existing.OccurrenceCount {
+				latest[key] = event
+			}
+			continue
+		}
+		latest[key] = event
+		order = append(order, key)
+	}
+	rows := make(map[string]*EventDailyRow, len(latest))
+	keys := make([]string, 0, len(latest))
+	for _, key := range order {
+		event := latest[key]
+		previous, exists := previousCounts[key]
+		delta := event.OccurrenceCount - previous
+		if !exists && delta < 1 {
+			delta = 1
+		}
+		if delta < 0 {
+			delta = 0
+		}
+		eventCount := int64(0)
+		if !exists {
+			eventCount = 1
+		}
+		if eventCount == 0 && delta == 0 {
+			continue
+		}
+		category, _ := eventCategory(event)
+		objectKey := EventObjectFingerprint(event.RegardingKind, event.RegardingNamespace, event.RegardingUID, event.RegardingName)
+		bucket := event.LastObservedAt.UTC().Truncate(24 * time.Hour)
+		rowKey := bucket.Format(time.RFC3339Nano) + "|" + event.ClusterID + "|" + category + "|" + objectKey
+		row, ok := rows[rowKey]
+		if !ok {
+			row = &EventDailyRow{
+				BucketDay: bucket, ClusterID: event.ClusterID, Category: category, ObjectKey: objectKey,
+				Kind: event.RegardingKind, Namespace: event.RegardingNamespace, Name: event.RegardingName,
+				UID: event.RegardingUID, Type: event.Type, Reason: event.Reason, Message: event.Message,
+				FirstObservedAt: event.FirstObservedAt.UTC(), LastObservedAt: event.LastObservedAt.UTC(),
+			}
+			rows[rowKey] = row
+			keys = append(keys, rowKey)
+		}
+		row.EventCount += eventCount
+		row.OccurrenceCount += delta
+		if event.FirstObservedAt.Before(row.FirstObservedAt) {
+			row.FirstObservedAt = event.FirstObservedAt.UTC()
+		}
+		if event.LastObservedAt.After(row.LastObservedAt) {
+			row.LastObservedAt = event.LastObservedAt.UTC()
+			row.Message = event.Message
+			row.Reason = event.Reason
+		}
+	}
+	result := make([]EventDailyRow, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, *rows[key])
+	}
+	return result
 }

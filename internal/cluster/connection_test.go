@@ -465,3 +465,41 @@ func (connector fakeConnector) Workload(context.Context, ParsedKubeconfig, strin
 func (connector fakeConnector) Capacity(context.Context, ParsedKubeconfig, CapacityRule) (ClusterCapacity, error) {
 	return connector.capacity, connector.err
 }
+
+func TestKubernetesConnectorUsesWorkloadInstanceSource(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v1/nodes":
+			_, _ = writer.Write([]byte(`{"items":[{"metadata":{"name":"worker-1"},"status":{"capacity":{"cpu":"8","memory":"16Gi"},"conditions":[{"type":"Ready","status":"True"}]}}]}`))
+		case "/apis/apps/v1/deployments":
+			_, _ = writer.Write([]byte(`{"items":[{"metadata":{"name":"web","namespace":"app"},"spec":{"replicas":3},"status":{"readyReplicas":2}}]}`))
+		case "/apis/apps/v1/statefulsets":
+			_, _ = writer.Write([]byte(`{"items":[{"metadata":{"name":"db","namespace":"app"},"spec":{"replicas":1},"status":{"readyReplicas":1}}]}`))
+		case "/apis/apps/v1/daemonsets":
+			_, _ = writer.Write([]byte(`{"items":[{"metadata":{"name":"agent","namespace":"app"},"status":{"desiredNumberScheduled":2,"numberReady":2}}]}`))
+		case "/api/v1/namespaces/kube-system/pods":
+			_, _ = writer.Write([]byte(`{"items":[{"metadata":{"namespace":"kube-system","name":"coredns"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"namespace":"kube-system","name":"proxy"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}}]}`))
+		case "/api/v1/services":
+			_, _ = writer.Write([]byte(`{"items":[]}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	snapshot, err := NewKubernetesConnectorWithInstanceSource(time.Second, "workloads").Health(context.Background(), ParsedKubeconfig{
+		APIServer: server.URL,
+		CAData:    ca,
+		Token:     "test-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.InstancesTotal != 6 || snapshot.InstancesReady != 5 {
+		t.Fatalf("unexpected workload instance counts: %#v", snapshot)
+	}
+	if snapshot.CoreComponentsTotal != 2 || snapshot.CoreComponentsReady != 1 {
+		t.Fatalf("unexpected core component counts: %#v", snapshot)
+	}
+}

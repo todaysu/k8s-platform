@@ -534,6 +534,24 @@ type EventGroupAggregate struct {
 	LastObservedAt  time.Time `json:"last_observed_at"`
 }
 
+type EventDailyRow struct {
+	BucketDay       time.Time `json:"bucket_day"`
+	ClusterID       string    `json:"cluster_id"`
+	Category        string    `json:"category"`
+	ObjectKey       string    `json:"object_key"`
+	Kind            string    `json:"regarding_kind"`
+	Namespace       string    `json:"regarding_namespace"`
+	Name            string    `json:"regarding_name"`
+	UID             string    `json:"regarding_uid"`
+	Type            string    `json:"type"`
+	Reason          string    `json:"reason"`
+	Message         string    `json:"message_sample"`
+	EventCount      int64     `json:"event_count"`
+	OccurrenceCount int64     `json:"occurrence_count"`
+	FirstObservedAt time.Time `json:"first_observed_at"`
+	LastObservedAt  time.Time `json:"last_observed_at"`
+}
+
 type EventObjectAggregate struct {
 	Category           string    `json:"category"`
 	ClusterID          string    `json:"cluster_id"`
@@ -554,11 +572,14 @@ type EventRepository interface {
 	QueryEvents(context.Context, string, EventQuery) (EventPage, error)
 	AggregateEvents(context.Context, string, EventQuery) ([]EventGroupAggregate, error)
 	AggregateEventObjects(context.Context, string, EventQuery) ([]EventObjectAggregate, error)
+	AggregateDailyEvents(context.Context, string, EventQuery) ([]EventGroupAggregate, error)
+	AggregateDailyEventObjects(context.Context, string, EventQuery) ([]EventObjectAggregate, error)
 	EventSummary(context.Context, string, time.Time, time.Time) (EventSummary, error)
 	EventFacets(context.Context, string, time.Time, time.Time) (EventFacets, error)
 	SetEventCollectorStatus(context.Context, EventCollectorStatus) error
 	DeleteEventsByRetention(context.Context, time.Time, time.Time, int) (int64, error)
 	DeleteEventRollupsBefore(context.Context, time.Time, int) (int64, error)
+	DeleteEventDailyBefore(context.Context, time.Time, int) (int64, error)
 	EnsureEventRollups(context.Context) error
 	EventStorageStats(context.Context) (EventStorageStats, error)
 	ListEventCollectorStatuses(context.Context) ([]EventCollectorStatus, error)

@@ -16,6 +16,7 @@ import (
 	"example.com/k8s-platform/internal/config"
 	"example.com/k8s-platform/internal/httpapi"
 	"example.com/k8s-platform/internal/leadership"
+	"example.com/k8s-platform/internal/metrics"
 	"example.com/k8s-platform/internal/store"
 )
 
@@ -41,7 +42,7 @@ func main() {
 		log.Fatal(err)
 	}
 	manager := cluster.NewOnboardingService(
-		cluster.NewKubernetesConnector(20*time.Second),
+		cluster.NewKubernetesConnectorWithInstanceSource(20*time.Second, cfg.HealthInstanceSource),
 		cipher,
 		database,
 	)
@@ -92,11 +93,11 @@ func main() {
 		}()
 		collectors.Wait()
 	})
-	apiHandler := authentication.Wrap(httpapi.NewRouterWithOptions(
+	apiHandler := metrics.Middleware(authentication.Wrap(httpapi.NewRouterWithOptions(
 		platformVersion,
 		httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled},
 		manager,
-	))
+	)))
 	var handler http.Handler = apiHandler
 	if cfg.WebDistDir != "" {
 		mux := http.NewServeMux()
@@ -115,6 +116,22 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(shutdownContext)
 	}()
+
+	if cfg.MetricsAddr != "" {
+		metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metrics.Default.Handler(), ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			<-applicationContext.Done()
+			shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = metricsServer.Shutdown(shutdownContext)
+		}()
+		go func() {
+			log.Printf("metrics listening on %s", cfg.MetricsAddr)
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("metrics server stopped: %v", err)
+			}
+		}()
+	}
 
 	log.Printf("platform listening on %s", cfg.ListenAddr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

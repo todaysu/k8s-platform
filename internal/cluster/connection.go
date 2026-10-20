@@ -785,11 +785,23 @@ type prometheusService struct {
 }
 
 type KubernetesConnector struct {
-	timeout time.Duration
+	timeout              time.Duration
+	healthInstanceSource string
 }
 
 func NewKubernetesConnector(timeout time.Duration) *KubernetesConnector {
-	return &KubernetesConnector{timeout: timeout}
+	return NewKubernetesConnectorWithInstanceSource(timeout, "pods")
+}
+
+// NewKubernetesConnectorWithInstanceSource selects how the health snapshot
+// counts "instances". "workloads" derives the counters from Deployment,
+// StatefulSet and DaemonSet status and only lists kube-system Pods, avoiding a
+// full Pod list on every health round.
+func NewKubernetesConnectorWithInstanceSource(timeout time.Duration, source string) *KubernetesConnector {
+	if source != "workloads" {
+		source = "pods"
+	}
+	return &KubernetesConnector{timeout: timeout, healthInstanceSource: source}
 }
 
 func (connector *KubernetesConnector) Version(ctx context.Context, parsed ParsedKubeconfig) (string, error) {
@@ -825,10 +837,6 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 		return HealthSnapshot{}, mapConnectionError(err)
 	}
 	latency := time.Since(startedAt).Milliseconds()
-	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
-	if err != nil {
-		return HealthSnapshot{}, mapConnectionError(err)
-	}
 
 	snapshot := HealthSnapshot{NodesTotal: len(nodes.Items), APILatencyMS: latency}
 	var workerCPUMilli int64
@@ -845,18 +853,29 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 		}
 	}
 	snapshot.WorkerCores = workerCPUMilli / 1000
-	for _, pod := range pods.Items {
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
+
+	if connector.healthInstanceSource == "workloads" {
+		if err := connector.collectWorkloadHealth(ctx, clientset, &snapshot); err != nil {
+			return HealthSnapshot{}, err
 		}
-		snapshot.InstancesTotal++
-		if podReady(pod) {
-			snapshot.InstancesReady++
+	} else {
+		pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
+		if err != nil {
+			return HealthSnapshot{}, mapConnectionError(err)
 		}
-		if pod.Namespace == "kube-system" {
-			snapshot.CoreComponentsTotal++
+		for _, pod := range pods.Items {
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			snapshot.InstancesTotal++
 			if podReady(pod) {
-				snapshot.CoreComponentsReady++
+				snapshot.InstancesReady++
+			}
+			if pod.Namespace == "kube-system" {
+				snapshot.CoreComponentsTotal++
+				if podReady(pod) {
+					snapshot.CoreComponentsReady++
+				}
 			}
 		}
 	}
@@ -865,6 +884,47 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 		connector.collectPrometheusMetrics(ctx, clientset, services.Items, totalCPUMilli, totalMemoryBytes, &snapshot)
 	}
 	return snapshot, nil
+}
+
+func (connector *KubernetesConnector) collectWorkloadHealth(ctx context.Context, clientset *kubernetes.Clientset, snapshot *HealthSnapshot) error {
+	deployments, err := clientset.AppsV1().Deployments("").List(ctx, cachedListOptions)
+	if err != nil {
+		return mapConnectionError(err)
+	}
+	statefulSets, err := clientset.AppsV1().StatefulSets("").List(ctx, cachedListOptions)
+	if err != nil {
+		return mapConnectionError(err)
+	}
+	daemonSets, err := clientset.AppsV1().DaemonSets("").List(ctx, cachedListOptions)
+	if err != nil {
+		return mapConnectionError(err)
+	}
+	for _, deployment := range deployments.Items {
+		snapshot.InstancesTotal += int(desiredReplicas(deployment.Spec.Replicas))
+		snapshot.InstancesReady += int(deployment.Status.ReadyReplicas)
+	}
+	for _, statefulSet := range statefulSets.Items {
+		snapshot.InstancesTotal += int(desiredReplicas(statefulSet.Spec.Replicas))
+		snapshot.InstancesReady += int(statefulSet.Status.ReadyReplicas)
+	}
+	for _, daemonSet := range daemonSets.Items {
+		snapshot.InstancesTotal += int(daemonSet.Status.DesiredNumberScheduled)
+		snapshot.InstancesReady += int(daemonSet.Status.NumberReady)
+	}
+	corePods, err := clientset.CoreV1().Pods("kube-system").List(ctx, cachedListOptions)
+	if err != nil {
+		return mapConnectionError(err)
+	}
+	for _, pod := range corePods.Items {
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		snapshot.CoreComponentsTotal++
+		if podReady(pod) {
+			snapshot.CoreComponentsReady++
+		}
+	}
+	return nil
 }
 
 func (connector *KubernetesConnector) Nodes(ctx context.Context, parsed ParsedKubeconfig) ([]ClusterNode, error) {

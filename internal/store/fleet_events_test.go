@@ -210,3 +210,42 @@ func TestFleetUnknownAnomaliesBeyondTwelveArePageable(t *testing.T) {
 		t.Fatalf("unknown groups truncated: %#v", result.Pagination)
 	}
 }
+
+func TestFleetDailyRollupServesLongWindows(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err = db.Create(ctx, cluster.ClusterRecord{ManagedCluster: cluster.ManagedCluster{ID: "c1", Name: "c1", APIServer: "https://c1", CreatedAt: now, LastCheckedAt: now}, Fingerprint: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	events := []cluster.ClusterEvent{
+		{ClusterID: "c1", EventUID: "e1", Type: "Warning", Reason: "FailedScheduling", Message: "no nodes", RegardingKind: "Pod", RegardingNamespace: "app", RegardingName: "web-1", RegardingUID: "u1", OccurrenceCount: 2, FirstObservedAt: now.Add(-time.Hour), LastObservedAt: now},
+		{ClusterID: "c1", EventUID: "e2", Type: "Warning", Reason: "FailedScheduling", Message: "no nodes", RegardingKind: "Pod", RegardingNamespace: "app", RegardingName: "web-2", RegardingUID: "u2", OccurrenceCount: 1, FirstObservedAt: now.Add(-time.Hour), LastObservedAt: now},
+		{ClusterID: "c1", EventUID: "e3", Type: "Normal", Reason: "Started", Message: "started", RegardingKind: "Pod", RegardingNamespace: "app", RegardingName: "web-1", RegardingUID: "u1", OccurrenceCount: 1, FirstObservedAt: now.Add(-time.Hour), LastObservedAt: now},
+	}
+	if err = db.UpsertEvents(ctx, events); err != nil {
+		t.Fatal(err)
+	}
+	svc := cluster.NewOnboardingService(nil, nil, db)
+	svc.SetEventRepository(db)
+	query := cluster.FleetEventQuery{View: "issues", Page: 1, EventQuery: cluster.EventQuery{Since: now.Add(-25 * time.Hour), Until: now.Add(time.Hour), Limit: 25}}
+	overview, err := svc.GetFleetEvents(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Total != 2 || overview.Summary.AffectedObjects != 2 || len(overview.Issues) != 1 || overview.Issues[0].AffectedObjects != 2 {
+		t.Fatalf("unexpected daily issue rollup: %#v", overview)
+	}
+	query.View = "objects"
+	objects, err := svc.GetFleetEvents(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objects.Objects) != 2 || objects.Pagination.TotalItems != 2 {
+		t.Fatalf("unexpected daily object rollup: %#v", objects.Objects)
+	}
+}

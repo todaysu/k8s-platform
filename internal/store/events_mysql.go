@@ -61,6 +61,7 @@ first_observed_at DATETIME(6) NOT NULL,last_observed_at DATETIME(6) NOT NULL,res
 KEY idx_events_cluster_time(cluster_id,last_observed_at DESC),KEY idx_events_type_time(cluster_id,type,last_observed_at DESC),
 KEY idx_events_namespace_time(cluster_id,regarding_namespace,last_observed_at DESC),KEY idx_events_object(cluster_id,regarding_uid),KEY idx_events_last_observed(last_observed_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS event_collector_checkpoints(cluster_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,resource_version VARCHAR(64) NOT NULL DEFAULT '',last_success_at DATETIME(6) NULL,last_error TEXT NOT NULL,updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS event_daily(bucket_day DATETIME(6) NOT NULL,cluster_id VARCHAR(64) NOT NULL,category VARCHAR(64) NOT NULL,object_key CHAR(32) NOT NULL,regarding_kind VARCHAR(128) NOT NULL DEFAULT '',regarding_namespace VARCHAR(253) NOT NULL DEFAULT '',regarding_name VARCHAR(253) NOT NULL DEFAULT '',regarding_uid VARCHAR(128) NOT NULL DEFAULT '',type VARCHAR(32) NOT NULL DEFAULT '',reason VARCHAR(255) NOT NULL DEFAULT '',message_sample TEXT NOT NULL,event_count BIGINT NOT NULL DEFAULT 0,occurrence_count BIGINT NOT NULL DEFAULT 0,first_observed_at DATETIME(6) NOT NULL,last_observed_at DATETIME(6) NOT NULL,PRIMARY KEY(bucket_day,cluster_id,category,object_key),KEY idx_event_daily_cluster_time(cluster_id,last_observed_at),KEY idx_event_daily_cluster_category(cluster_id,category,last_observed_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS event_issue_hourly(bucket_start DATETIME(6) NOT NULL,cluster_id VARCHAR(64) NOT NULL,fingerprint VARCHAR(32) NOT NULL,type VARCHAR(32) NOT NULL DEFAULT '',reason VARCHAR(255) NOT NULL DEFAULT '',regarding_kind VARCHAR(128) NOT NULL DEFAULT '',message_sample TEXT NOT NULL,occurrence_count BIGINT NOT NULL DEFAULT 0,last_observed_at DATETIME(6) NOT NULL,PRIMARY KEY(bucket_start,cluster_id,fingerprint),KEY idx_event_rollup_cluster_time(cluster_id,bucket_start DESC)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`ALTER TABLE cluster_events ADD INDEX idx_events_kind_time(cluster_id,regarding_kind,last_observed_at DESC)`,
 		`ALTER TABLE cluster_events ADD INDEX idx_events_last_observed(last_observed_at)`}
@@ -120,6 +121,9 @@ func (store *MySQLEvents) UpsertEvents(ctx context.Context, events []cluster.Clu
 		if _, err = tx.ExecContext(ctx, query, args...); err != nil {
 			return err
 		}
+	}
+	if err = upsertEventDailyTx(ctx, tx, cluster.BuildEventDailyRows(events, previousCounts), false); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -504,6 +508,14 @@ func (store *MySQLEvents) DeleteEventRollupsBefore(ctx context.Context, cutoff t
 	return result.RowsAffected()
 }
 
+func (store *MySQLEvents) DeleteEventDailyBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	result, err := store.db.ExecContext(ctx, "DELETE FROM event_daily WHERE bucket_day<? LIMIT ?", cutoff.UTC(), limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (store *MySQLEvents) EventStorageStats(ctx context.Context) (cluster.EventStorageStats, error) {
 	result := cluster.EventStorageStats{NormalRetentionDays: 7, WarningRetentionDays: 30, RollupRetentionDays: 365}
 	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cluster_events").Scan(&result.RawRows); err != nil {
@@ -587,6 +599,9 @@ func (store *MySQLEvents) DeleteClusterEvents(ctx context.Context, clusterID str
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM event_issue_hourly WHERE cluster_id=?", clusterID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM event_daily WHERE cluster_id=?", clusterID); err != nil {
 		return err
 	}
 	return tx.Commit()

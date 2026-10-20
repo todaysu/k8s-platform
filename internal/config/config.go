@@ -13,6 +13,7 @@ const defaultSessionTTL = 8 * time.Hour
 
 type Config struct {
 	ListenAddr                 string
+	MetricsAddr                string
 	DatabasePath               string
 	PlatformDatabaseDSN        string
 	EventDatabaseDSN           string
@@ -28,6 +29,7 @@ type Config struct {
 	HealthCollectionInterval   time.Duration
 	HealthCollectionTimeout    time.Duration
 	HealthCollectionWorkers    int
+	HealthInstanceSource       string
 	CapacityCollectionInterval time.Duration
 	CapacityCollectionTimeout  time.Duration
 	CapacityCollectionWorkers  int
@@ -65,6 +67,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	healthInstanceSource := strings.ToLower(envOrDefault("HEALTH_INSTANCE_SOURCE", "pods"))
+	if healthInstanceSource != "pods" && healthInstanceSource != "workloads" {
+		return Config{}, errors.New("HEALTH_INSTANCE_SOURCE must be pods or workloads")
+	}
 	capacityInterval, err := envDuration("CAPACITY_COLLECTION_INTERVAL", 5*time.Minute)
 	if err != nil {
 		return Config{}, err
@@ -96,6 +102,7 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		ListenAddr:                 envOrDefault("LISTEN_ADDR", ":8080"),
+		MetricsAddr:                os.Getenv("METRICS_ADDR"),
 		DatabasePath:               envOrDefault("DATABASE_PATH", "./data/platform.db"),
 		PlatformDatabaseDSN:        os.Getenv("PLATFORM_DATABASE_DSN"),
 		EventDatabaseDSN:           os.Getenv("EVENT_DATABASE_DSN"),
@@ -111,6 +118,7 @@ func Load() (Config, error) {
 		HealthCollectionInterval:   healthInterval,
 		HealthCollectionTimeout:    healthTimeout,
 		HealthCollectionWorkers:    healthWorkers,
+		HealthInstanceSource:       healthInstanceSource,
 		CapacityCollectionInterval: capacityInterval,
 		CapacityCollectionTimeout:  capacityTimeout,
 		CapacityCollectionWorkers:  capacityWorkers,

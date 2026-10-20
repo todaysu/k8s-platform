@@ -13,19 +13,28 @@ func (store *SQLite) UpsertEvents(ctx context.Context, events []cluster.ClusterE
 	if len(events) == 0 {
 		return nil
 	}
+	events = latestEventVersions(events)
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	defer func() { _ = tx.Rollback() }()
+	previousCounts := make(map[string]int64, len(events))
 	for _, event := range events {
 		var previous int64
 		err = tx.QueryRowContext(ctx, "SELECT occurrence_count FROM cluster_events WHERE cluster_id=? AND event_uid=?", event.ClusterID, event.EventUID).Scan(&previous)
 		if err != nil && err != sql.ErrNoRows {
 			return &cluster.Error{Code: cluster.CodePersistenceFailed}
 		}
+		if err == nil {
+			previousCounts[cluster.EventCountKey(event.ClusterID, event.EventUID)] = previous
+		}
+	}
+	for _, event := range events {
+		key := cluster.EventCountKey(event.ClusterID, event.EventUID)
+		previous, exists := previousCounts[key]
 		delta := event.OccurrenceCount - previous
-		if err == sql.ErrNoRows && delta < 1 {
+		if !exists && delta < 1 {
 			delta = 1
 		}
 		if delta < 0 {
@@ -54,6 +63,9 @@ VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(bucket_start,cluster_id,fingerprint) DO UP
 				return &cluster.Error{Code: cluster.CodePersistenceFailed}
 			}
 		}
+	}
+	if err = upsertEventDailyTx(ctx, tx, cluster.BuildEventDailyRows(events, previousCounts), true); err != nil {
+		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	if err := tx.Commit(); err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
@@ -326,6 +338,14 @@ func (store *SQLite) DeleteEventRollupsBefore(ctx context.Context, cutoff time.T
 	return result.RowsAffected()
 }
 
+func (store *SQLite) DeleteEventDailyBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	result, err := store.db.ExecContext(ctx, `DELETE FROM event_daily WHERE rowid IN (SELECT rowid FROM event_daily WHERE bucket_day < ? LIMIT ?)`, cutoff.UTC().Format(timeLayout), limit)
+	if err != nil {
+		return 0, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	return result.RowsAffected()
+}
+
 func (store *SQLite) EventStorageStats(ctx context.Context) (cluster.EventStorageStats, error) {
 	result := cluster.EventStorageStats{NormalRetentionDays: 7, WarningRetentionDays: 30, RollupRetentionDays: 365}
 	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cluster_events").Scan(&result.RawRows); err != nil {
@@ -414,6 +434,9 @@ func (store *SQLite) DeleteClusterEvents(ctx context.Context, clusterID string) 
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM event_issue_hourly WHERE cluster_id = ?", clusterID); err != nil {
+		return &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM event_daily WHERE cluster_id = ?", clusterID); err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	if err = tx.Commit(); err != nil {

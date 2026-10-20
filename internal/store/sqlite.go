@@ -352,6 +352,17 @@ CREATE TABLE IF NOT EXISTS event_collector_checkpoints (
   last_success_at TEXT, last_error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
   FOREIGN KEY (cluster_id) REFERENCES clusters(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS event_daily (
+  bucket_day TEXT NOT NULL, cluster_id TEXT NOT NULL, category TEXT NOT NULL, object_key TEXT NOT NULL,
+  regarding_kind TEXT NOT NULL DEFAULT '', regarding_namespace TEXT NOT NULL DEFAULT '',
+  regarding_name TEXT NOT NULL DEFAULT '', regarding_uid TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', message_sample TEXT NOT NULL DEFAULT '',
+  event_count INTEGER NOT NULL DEFAULT 0, occurrence_count INTEGER NOT NULL DEFAULT 0,
+  first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL,
+  PRIMARY KEY(bucket_day, cluster_id, category, object_key)
+);
+CREATE INDEX IF NOT EXISTS idx_event_daily_cluster_time ON event_daily(cluster_id, last_observed_at);
+CREATE INDEX IF NOT EXISTS idx_event_daily_cluster_category ON event_daily(cluster_id, category, last_observed_at);
 CREATE TABLE IF NOT EXISTS event_issue_hourly (
   bucket_start TEXT NOT NULL, cluster_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', regarding_kind TEXT NOT NULL DEFAULT '',
