@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ftc-platform
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ftc-platform-leader-election
+  namespace: ftc-platform
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ftc-platform-leader-election
+  namespace: ftc-platform
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ftc-platform-leader-election
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+data:
+  LISTEN_ADDR: ":8080"
+  WEB_DIST_DIR: /app/web
+  SECURE_COOKIES: "true"
+  SESSION_TTL: 8h
+  ENABLE_POD_EXEC: "false"
+  LEADER_ELECTION_ENABLED: "true"
+  LEADER_ELECTION_NAME: ftc-platform-collectors
+  HEALTH_COLLECTION_INTERVAL: 1m
+  HEALTH_COLLECTION_TIMEOUT: 20s
+  HEALTH_COLLECTION_WORKERS: "5"
+  CAPACITY_COLLECTION_INTERVAL: 5m
+  CAPACITY_COLLECTION_TIMEOUT: 45s
+  CAPACITY_COLLECTION_WORKERS: "3"
+  SYSTEM_NAMESPACES: kube-system,cmb-monitoring
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+type: Opaque
+stringData:
+  # 上线前必须替换。password-hash 必须是 bcrypt；encryption-key 必须是 32 字节密钥的 Base64。
+  admin-username: admin
+  password-hash: REPLACE_WITH_BCRYPT_HASH
+  encryption-key: REPLACE_WITH_BASE64_32_BYTE_KEY
+  mysql-dsn: ftc:REPLACE_WITH_PASSWORD@tcp(platform-mysql.ftc-platform.svc:3306)/ftc_platform
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ftc-platform
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ftc-platform
+    spec:
+      serviceAccountName: ftc-platform
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: platform
+          image: your-registry.example.com/ftc-platform:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: ftc-platform }
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: ADMIN_USERNAME
+              valueFrom: { secretKeyRef: { name: ftc-platform, key: admin-username } }
+            - name: ADMIN_PASSWORD_HASH
+              valueFrom: { secretKeyRef: { name: ftc-platform, key: password-hash } }
+            - name: CREDENTIAL_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: ftc-platform, key: encryption-key } }
+            - name: PLATFORM_DATABASE_DSN
+              valueFrom: { secretKeyRef: { name: ftc-platform, key: mysql-dsn } }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: data, mountPath: /app/data }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+spec:
+  selector:
+    app.kubernetes.io/name: ftc-platform
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ftc-platform
+
