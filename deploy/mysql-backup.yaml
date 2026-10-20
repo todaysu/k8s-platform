@@ -47,9 +47,9 @@ spec:
                   find /backup -type f -name '*.sql.gz' -mtime +7 -delete
               env:
                 - name: MYSQL_USER
-                  valueFrom: { secretKeyRef: { name: platform-mysql, key: username } }
+                  value: root
                 - name: MYSQL_PASSWORD
-                  valueFrom: { secretKeyRef: { name: platform-mysql, key: password } }
+                  valueFrom: { secretKeyRef: { name: platform-mysql, key: root-password } }
                 - name: MYSQL_DATABASE
                   valueFrom: { secretKeyRef: { name: platform-mysql, key: database } }
               volumeMounts:
