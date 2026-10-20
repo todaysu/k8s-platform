@@ -17,6 +17,7 @@ type PlatformStore interface {
 	cluster.CapacityClassificationRepository
 	cluster.FleetCapacityRepository
 	cluster.EventRepository
+	cluster.ResourceIndexRepository
 	SQLDB() *sql.DB
 	Close() error
 }

@@ -472,6 +472,29 @@ type GlobalResourceSearch struct {
 	Truncated      bool                   `json:"truncated"`
 }
 
+// IndexedResource is the searchable summary persisted for one object. It
+// deliberately excludes full Kubernetes objects so the index stays small.
+type IndexedResource struct {
+	ClusterID string    `json:"cluster_id"`
+	Kind      string    `json:"kind"`
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	UID       string    `json:"uid"`
+	Status    string    `json:"status"`
+	OwnerKind string    `json:"owner_kind"`
+	OwnerName string    `json:"owner_name"`
+	NodeName  string    `json:"node_name"`
+	Images    []string  `json:"images"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type ResourceIndexRepository interface {
+	ReplaceClusterResources(context.Context, string, []IndexedResource) error
+	SearchClusterResources(context.Context, string, int) ([]GlobalResourceResult, error)
+	CountClusterResources(context.Context) (int64, error)
+	DeleteClusterResources(context.Context, string) error
+}
+
 type ClusterRecord struct {
 	ManagedCluster
 	EncryptedCredentials string

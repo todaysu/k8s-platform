@@ -95,6 +95,9 @@ CREATE TABLE IF NOT EXISTS clusters (
 	if err := store.migrateCapacity(ctx); err != nil {
 		return err
 	}
+	if err := store.migrateResources(ctx); err != nil {
+		return err
+	}
 	if _, err := store.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS auth_users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -357,6 +360,32 @@ CREATE TABLE IF NOT EXISTS event_issue_hourly (
 );`)
 	if err != nil {
 		return fmt.Errorf("migrate event storage: %w", err)
+	}
+	return nil
+}
+
+func (store *SQLite) migrateResources(ctx context.Context) error {
+	_, err := store.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS cluster_resources (
+  cluster_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL,
+  uid TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  owner_kind TEXT NOT NULL DEFAULT '',
+  owner_name TEXT NOT NULL DEFAULT '',
+  node_name TEXT NOT NULL DEFAULT '',
+  images TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (cluster_id, kind, namespace, uid, name),
+  FOREIGN KEY (cluster_id) REFERENCES clusters(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_resources_name ON cluster_resources(name);
+CREATE INDEX IF NOT EXISTS idx_resources_updated ON cluster_resources(updated_at);
+`)
+	if err != nil {
+		return fmt.Errorf("migrate resource index: %w", err)
 	}
 	return nil
 }
