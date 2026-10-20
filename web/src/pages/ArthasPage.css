@@ -655,3 +655,217 @@
 @media (max-width: 1280px) {
   .ks-arthas-page.is-session .ks-arthas-side { max-height: none; }
 }
+
+/* Compact target form and unified control borders */
+.ks-arthas-setup {
+  align-items: start;
+}
+
+.ks-arthas-form {
+  align-items: start;
+}
+
+.ks-arthas-form label,
+.ks-arthas-field {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ks-arthas-field > span {
+  color: var(--pf-t--global--text--color--regular);
+}
+
+.ks-arthas-form .pf-v6-c-form-control,
+.ks-arthas-form input:not([type="checkbox"]),
+.ks-arthas-form select,
+.ks-arthas-pod-trigger {
+  background: #fff;
+  border: 1px solid #c9d3de;
+  border-radius: 8px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  height: 40px;
+  min-width: 0;
+  padding: 0 10px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+  width: 100%;
+}
+
+.ks-arthas-form .pf-v6-c-form-control:focus-within,
+.ks-arthas-form input:not([type="checkbox"]):focus,
+.ks-arthas-form select:focus,
+.ks-arthas-pod-trigger:focus-visible {
+  border-color: var(--pf-t--global--color--brand--default);
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.12);
+  outline: 0;
+}
+
+.ks-arthas-form select[size] {
+  height: 40px;
+  padding: 0 10px;
+}
+
+.ks-arthas-pod-picker {
+  min-width: 0;
+  position: relative;
+}
+
+.ks-arthas-pod-trigger {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.ks-arthas-pod-trigger:disabled {
+  background: #f1f3f6;
+  color: #8a95a1;
+  cursor: not-allowed;
+}
+
+.ks-arthas-pod-value {
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ks-arthas-pod-placeholder {
+  color: #8a95a1;
+}
+
+.ks-arthas-pod-chevron {
+  color: #5b6b7c;
+  flex: 0 0 auto;
+  margin-left: 6px;
+}
+
+.ks-arthas-pod-popover {
+  background: #fff;
+  border: 1px solid #d5dde6;
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(18, 31, 45, 0.18);
+  left: 0;
+  min-width: 320px;
+  padding: 8px;
+  position: absolute;
+  right: 0;
+  top: 46px;
+  z-index: 40;
+}
+
+.ks-arthas-pod-search {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.ks-arthas-pod-search input {
+  border: 1px solid #c9d3de;
+  border-radius: 6px;
+  flex: 1;
+  font-size: 12px;
+  height: 34px;
+  padding: 0 9px;
+}
+
+.ks-arthas-pod-search > span {
+  color: #7b8794;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ks-arthas-pod-popover ul {
+  list-style: none;
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 0;
+}
+
+.ks-arthas-pod-popover li {
+  align-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 9px;
+}
+
+.ks-arthas-pod-popover li:hover,
+.ks-arthas-pod-popover li.is-active {
+  background: #eef6ff;
+}
+
+.ks-arthas-pod-popover li[aria-selected="true"] {
+  background: #e4f0fb;
+  font-weight: 600;
+}
+
+.ks-arthas-pod-popover li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ks-arthas-pod-popover li small {
+  color: #6b7a89;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.ks-arthas-pod-empty,
+.ks-arthas-pod-more {
+  color: #7b8794;
+  font-size: 11px;
+  margin: 8px 2px 2px;
+}
+
+/* Softer card boundaries */
+.ks-arthas-card {
+  border: 1px solid #e1e6ec;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.035);
+}
+
+.ks-arthas-card > .pf-v6-c-card__body {
+  padding: 18px 20px;
+}
+
+.ks-arthas-step-title {
+  margin-bottom: 10px;
+}
+
+.ks-arthas-selection {
+  margin-top: 10px;
+}
+
+/* Empty terminal state must read from the top, not float in the middle */
+.ks-arthas-empty {
+  min-height: 360px;
+}
+
+.ks-arthas-empty > .pf-v6-c-card__body {
+  justify-content: flex-start;
+  padding-top: 22px;
+}
+
+@media (max-width: 620px) {
+  .ks-arthas-pod-popover {
+    min-width: 0;
+  }
+}
+
+/* The Pod picker must escape the card boundary. */
+.ks-arthas-card,
+.ks-arthas-card > .pf-v6-c-card__body {
+  overflow: visible;
+}

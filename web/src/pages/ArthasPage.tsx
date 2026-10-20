@@ -14,6 +14,7 @@ import { AngleLeftIcon, CheckCircleIcon } from '@patternfly/react-icons'
 import { fetchClusterPod, fetchClusterPods, fetchPlatformCapabilities, type ClusterPod } from '../api/clusters'
 import { usePermission } from '../auth/context'
 import ArthasTerminal, { type ArthasTerminalHandle } from '../components/ArthasTerminal'
+import ArthasPodPicker from './ArthasPodPicker'
 import ArthasGuide from '../tools/arthas/ArthasGuide'
 import './ArthasPage.css'
 
@@ -40,7 +41,6 @@ export default function ArthasPage({ clusters, onBack }: Props) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [namespace, setNamespace] = useState('')
-  const [podQuery, setPodQuery] = useState('')
   const [selectedPodKey, setSelectedPodKey] = useState('')
   const [containers, setContainers] = useState<string[]>([])
   const [container, setContainer] = useState('')
@@ -52,10 +52,7 @@ export default function ArthasPage({ clusters, onBack }: Props) {
   const [command, setCommand] = useState('')
 
   const selectedPod = useMemo(() => pods.find(pod => podKey(pod) === selectedPodKey) ?? null, [pods, selectedPodKey])
-  const filteredPods = useMemo(() => {
-    const query = podQuery.trim().toLowerCase()
-    return pods.filter(pod => pod.namespace === namespace && (!query || pod.name.toLowerCase().includes(query))).slice(0, 200)
-  }, [pods, podQuery, namespace])
+  const filteredPods = useMemo(() => pods.filter(pod => pod.namespace === namespace), [pods, namespace])
   const namespaces = useMemo(() => [...new Set(pods.map(pod => pod.namespace))].sort(), [pods])
 
   useEffect(() => {
@@ -67,7 +64,7 @@ export default function ArthasPage({ clusters, onBack }: Props) {
   useEffect(() => {
     if (!clusterID) return
     let active = true
-    setLoading(true); setError(''); setNamespace(''); setConfirmed(false); setPodQuery(''); setPods([]); setSelectedPodKey(''); setContainers([]); setContainer(''); setActive(false)
+    setLoading(true); setError(''); setNamespace(''); setConfirmed(false); setPods([]); setSelectedPodKey(''); setContainers([]); setContainer(''); setActive(false)
     void fetchClusterPods(clusterID).then(values => {
       if (!active) return
       setPods(values.filter(pod => pod.phase === 'Running').sort((left, right) => podKey(left).localeCompare(podKey(right))))
@@ -157,18 +154,15 @@ export default function ArthasPage({ clusters, onBack }: Props) {
                   </FormSelect>
                 </label>
                 <label>命名空间
-                  <FormSelect aria-label="选择 Arthas 命名空间" isDisabled={active || loading || !clusterID} value={namespace} onChange={(_, value) => { setNamespace(value); setSelectedPodKey(''); setContainers([]); setContainer(''); setConfirmed(false); setPodQuery('') }}>
+                  <FormSelect aria-label="选择 Arthas 命名空间" isDisabled={active || loading || !clusterID} value={namespace} onChange={(_, value) => { setNamespace(value); setSelectedPodKey(''); setContainers([]); setContainer(''); setConfirmed(false) }}>
                     <FormSelectOption label={loading ? '正在读取…' : '请选择命名空间'} value="" />
                     {namespaces.map(name => <FormSelectOption key={name} label={name} value={name} />)}
                   </FormSelect>
                 </label>
-                <label>Pod
-                  <input aria-label="搜索 Arthas Pod" value={podQuery} onChange={event => setPodQuery(event.target.value)} placeholder="输入名称搜索" disabled={active || loading || !namespace} />
-                  <select aria-label="选择 Arthas Pod" size={4} value={selectedPodKey} onChange={event => { setSelectedPodKey(event.target.value); setConfirmed(false) }} disabled={active || loading || !namespace}>
-                    <option value="">{!namespace ? '先选择命名空间' : loading ? '正在读取…' : filteredPods.length ? '请选择 Pod' : '没有匹配的运行中 Pod'}</option>
-                    {filteredPods.map(pod => <option key={podKey(pod)} value={podKey(pod)}>{pod.name} · {pod.ready_containers}/{pod.total_containers} Ready</option>)}
-                  </select>
-                </label>
+                <div className="ks-arthas-field">
+                  <span>Pod</span>
+                  <ArthasPodPicker disabled={active || !namespace} loading={loading} namespace={namespace} onChange={value => { setSelectedPodKey(value); setConfirmed(false) }} pods={filteredPods} value={selectedPodKey} />
+                </div>
                 <label>容器
                   <FormSelect aria-label="选择 Arthas 容器" isDisabled={!selectedPod || active} value={container} onChange={(_, value) => setContainer(value)}>
                     {containers.length === 0 && <FormSelectOption label="先选择 Pod" value="" />}
