@@ -27,8 +27,35 @@ func eventCategory(e ClusterEvent) (string, string) {
 	case e.RegardingKind == "Node":
 		return "node", "节点异常"
 	default:
-		return "other-" + EventFingerprint(e), "其他异常 · " + e.Reason
+		fallback := strings.ToLower(strings.TrimSpace(e.Reason))
+		if fallback == "" {
+			fallback = strings.ToLower(strings.TrimSpace(e.RegardingKind))
+		}
+		return "other-" + fallback, "其他异常 · " + fallback
 	}
+}
+
+func eventCategoryTitle(category string) string {
+	switch category {
+	case "scheduling":
+		return "调度异常"
+	case "storage":
+		return "存储挂载异常"
+	case "image-pull":
+		return "镜像拉取异常"
+	case "probe":
+		return "健康探针异常"
+	case "restart":
+		return "容器退出或重启"
+	case "eviction":
+		return "资源驱逐"
+	case "node":
+		return "节点异常"
+	}
+	if strings.HasPrefix(category, "other-") {
+		return "其他异常 · " + strings.TrimPrefix(category, "other-")
+	}
+	return category
 }
 func eventObjectKey(e ClusterEvent) string {
 	identity := e.RegardingUID
@@ -177,6 +204,103 @@ func eventPageBounds(total, page, size int) (int, int) {
 	return start, min(start+size, total)
 }
 
+func normalizeFleetEventQuery(q *FleetEventQuery) error {
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.Page > 10000 {
+		return newError(CodeSearchQueryInvalid)
+	}
+	if q.Limit < 1 || q.Limit > 100 {
+		q.Limit = 25
+	}
+	if q.View == "" {
+		q.View = "issues"
+	}
+	if q.View != "issues" && q.View != "events" && q.View != "objects" && q.View != "resources" {
+		return newError(CodeSearchQueryInvalid)
+	}
+	if q.Scope != "" && q.Scope != "business" && q.Scope != "platform" {
+		return newError(CodeSearchQueryInvalid)
+	}
+	if q.View != "events" && q.View != "resources" {
+		q.IncludeNormal = false
+	}
+	return nil
+}
+
+func fleetRecordMatches(record ClusterRecord, q FleetEventQuery) bool {
+	if q.Environment != "" && record.Environment != q.Environment {
+		return false
+	}
+	if q.TechnologyStack != "" && record.TechnologyStack != q.TechnologyStack {
+		return false
+	}
+	if q.ClusterID != "" && record.ID != q.ClusterID {
+		return false
+	}
+	return true
+}
+
+func fleetScanQuery(q FleetEventQuery, classification CapacityClassification) EventQuery {
+	scanQuery := q.EventQuery
+	scanQuery.BusinessNamespaces = classification.BusinessNamespaces
+	scanQuery.AttentionOnly = !q.IncludeNormal
+	scanQuery.ComponentOnly = false
+	return scanQuery
+}
+
+func namespaceSet(values []string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		result[value] = true
+	}
+	return result
+}
+
+func fleetScope(kind, namespace string, business map[string]bool) string {
+	if kind != "Node" && business[namespace] {
+		return "business"
+	}
+	return "platform"
+}
+
+func appendFleetFailure(result *FleetEventOverview, record ClusterRecord, err error) {
+	result.Failures = append(result.Failures, FleetEventFailure{ClusterID: record.ID, ClusterName: record.Name, Code: ErrorCode(err)})
+	result.Collectors = append(result.Collectors, EventCollectorStatus{ClusterID: record.ID, ClusterName: record.Name, State: "error", LastError: "持久化事件读取失败"})
+	result.Summary.CollectorsFailed++
+}
+
+func (service *OnboardingService) appendFleetCollector(record ClusterRecord, statuses map[string]EventCollectorStatus, result *FleetEventOverview) {
+	status, ok := statuses[record.ID]
+	if !ok {
+		status = EventCollectorStatus{ClusterID: record.ID, State: "starting"}
+	}
+	status.ClusterName = record.Name
+	result.Collectors = append(result.Collectors, status)
+	if status.State == "watching" {
+		result.Summary.CollectorsHealthy++
+	} else {
+		result.Summary.CollectorsFailed++
+	}
+}
+
+func fleetIssueGroups(buckets map[string]*eventBucket) []FleetEventIssue {
+	groups := make([]FleetEventIssue, 0, len(buckets))
+	for _, bucket := range buckets {
+		bucket.issue.ClusterIDs = sortedKeys(bucket.clusters)
+		bucket.issue.AffectedClusters = len(bucket.clusters)
+		groups = append(groups, bucket.issue)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].LastObservedAt.Equal(groups[j].LastObservedAt) {
+			return groups[i].Fingerprint < groups[j].Fingerprint
+		}
+		return groups[i].LastObservedAt.After(groups[j].LastObservedAt)
+	})
+	return groups
+}
+
 func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEventQuery) (FleetEventOverview, error) {
 	if service.eventRepository == nil {
 		return FleetEventOverview{}, newError(CodePersistenceFailed)
@@ -189,95 +313,281 @@ func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEve
 	if err != nil {
 		return FleetEventOverview{}, err
 	}
-	if q.Page < 1 {
-		q.Page = 1
+	if err := normalizeFleetEventQuery(&q); err != nil {
+		return FleetEventOverview{}, err
 	}
-	if q.Page > 10000 {
-		return FleetEventOverview{}, newError(CodeSearchQueryInvalid)
+	result := FleetEventOverview{
+		Items:              []FleetEvent{},
+		Issues:             []FleetEventIssue{},
+		Objects:            []FleetEventObject{},
+		Collectors:         []EventCollectorStatus{},
+		Failures:           []FleetEventFailure{},
+		Since:              q.Since,
+		Until:              q.Until,
+		BusinessConfigured: len(classification.BusinessNamespaces) > 0,
 	}
-	if q.Limit < 1 || q.Limit > 100 {
-		q.Limit = 25
+	statuses := map[string]EventCollectorStatus{}
+	if values, statusErr := service.eventRepository.ListEventCollectorStatuses(ctx); statusErr == nil {
+		for _, value := range values {
+			statuses[value.ClusterID] = value
+		}
 	}
-	if q.View == "" {
-		q.View = "issues"
+	switch q.View {
+	case "events":
+		return service.getFleetEventRows(ctx, q, records, classification, statuses, result)
+	case "objects", "resources":
+		return service.getFleetEventObjects(ctx, q, records, classification, statuses, result)
+	default:
+		return service.getFleetEventIssues(ctx, q, records, classification, statuses, result)
 	}
-	if q.View != "issues" && q.View != "events" && q.View != "objects" && q.View != "resources" {
-		return FleetEventOverview{}, newError(CodeSearchQueryInvalid)
-	}
-	if q.Scope != "" && q.Scope != "business" && q.Scope != "platform" {
-		return FleetEventOverview{}, newError(CodeSearchQueryInvalid)
-	}
-	if q.View != "events" && q.View != "resources" {
-		q.IncludeNormal = false
-	}
-	result := FleetEventOverview{Items: []FleetEvent{}, Issues: []FleetEventIssue{}, Objects: []FleetEventObject{}, Collectors: []EventCollectorStatus{}, Failures: []FleetEventFailure{}, Since: q.Since, Until: q.Until, BusinessConfigured: len(classification.BusinessNamespaces) > 0}
-	all := newFleetAccumulator(q)
-	business := map[string]bool{}
-	for _, n := range classification.BusinessNamespaces {
-		business[n] = true
-	}
+}
+
+// getFleetEventIssues answers the fleet issue view with grouped SQL. It never
+// materializes raw events or calls a target cluster from the request path.
+func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, result FleetEventOverview) (FleetEventOverview, error) {
+	buckets := map[string]*eventBucket{}
+	types, namespaces, kinds := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	var total, affectedObjects int64
+	affectedClusters := 0
 	for _, record := range records {
-		if q.Environment != "" && record.Environment != q.Environment || q.TechnologyStack != "" && record.TechnologyStack != q.TechnologyStack || q.ClusterID != "" && record.ID != q.ClusterID {
+		if !fleetRecordMatches(record, q) {
 			continue
 		}
 		result.Summary.TotalClusters++
+		scanQuery := fleetScanQuery(q, classification)
+		groups, err := service.eventRepository.AggregateEvents(ctx, record.ID, scanQuery)
+		if err != nil {
+			appendFleetFailure(&result, record, err)
+			continue
+		}
+		localEvents := int64(0)
+		for _, group := range groups {
+			if q.Issue != "" && group.Category != q.Issue {
+				continue
+			}
+			if group.EventCount == 0 {
+				continue
+			}
+			localEvents += group.EventCount
+			total += group.EventCount
+			affectedObjects += group.AffectedObjects
+			types[group.Type] = true
+			kinds[group.RegardingKind] = true
+			for _, namespace := range group.Namespaces {
+				namespaces[namespace] = true
+			}
+			bucket := buckets[group.Category]
+			if bucket == nil {
+				bucket = &eventBucket{
+					issue: FleetEventIssue{
+						Title:           eventCategoryTitle(group.Category),
+						Fingerprint:     group.Category,
+						Severity:        "warning",
+						Type:            group.Type,
+						Reason:          group.Reason,
+						RegardingKind:   group.RegardingKind,
+						Message:         group.Message,
+						FirstObservedAt: group.FirstObservedAt,
+						LastObservedAt:  group.LastObservedAt,
+					},
+					clusters: map[string]bool{},
+					objects:  map[string]bool{},
+				}
+				buckets[group.Category] = bucket
+			}
+			bucket.issue.EventCount += int(group.EventCount)
+			bucket.issue.OccurrenceCount += group.OccurrenceCount
+			bucket.issue.AffectedObjects += int(group.AffectedObjects)
+			if group.FirstObservedAt.Before(bucket.issue.FirstObservedAt) {
+				bucket.issue.FirstObservedAt = group.FirstObservedAt
+			}
+			if group.LastObservedAt.After(bucket.issue.LastObservedAt) {
+				bucket.issue.LastObservedAt = group.LastObservedAt
+			}
+			if len(group.Message) > len(bucket.issue.Message) {
+				bucket.issue.Message = group.Message
+			}
+			bucket.clusters[record.ID] = true
+		}
+		if localEvents > 0 {
+			affectedClusters++
+		}
+		service.appendFleetCollector(record, statuses, &result)
+	}
+	if ctx.Err() != nil {
+		return FleetEventOverview{}, ctx.Err()
+	}
+	groups := fleetIssueGroups(buckets)
+	start, end := eventPageBounds(len(groups), q.Page, q.Limit)
+	result.Issues = groups[start:end]
+	result.Total = total
+	result.Summary.EventRecords = total
+	result.Summary.ProblemGroups = len(groups)
+	result.Summary.WarningGroups = len(groups)
+	result.Summary.AffectedObjects = int(affectedObjects)
+	result.Summary.AffectedClusters = affectedClusters
+	result.Facets = EventFacets{Types: sortedKeys(types), Namespaces: sortedKeys(namespaces), Kinds: sortedKeys(kinds)}
+	result.Pagination = EventPagination{Page: q.Page, PageSize: q.Limit, TotalItems: len(groups), TotalPages: max(1, (len(groups)+q.Limit-1)/q.Limit)}
+	storage, err := service.eventStorageStats(ctx)
+	if err != nil {
+		return FleetEventOverview{}, err
+	}
+	result.Storage = storage
+	return result, nil
+}
+
+// getFleetEventObjects returns one row per object (and category) grouped by
+// SQL. Owner grouping is only attempted when the caller narrowed the query to
+// one cluster; fleet-wide requests never fan out to every API server.
+func (service *OnboardingService) getFleetEventObjects(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, result FleetEventOverview) (FleetEventOverview, error) {
+	business := namespaceSet(classification.BusinessNamespaces)
+	objects := map[string]FleetEventObject{}
+	categories := map[string]bool{}
+	types, namespaces, kinds := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	var total int64
+	affectedClusters := 0
+	for _, record := range records {
+		if !fleetRecordMatches(record, q) {
+			continue
+		}
+		result.Summary.TotalClusters++
+		scanQuery := fleetScanQuery(q, classification)
+		rows, err := service.eventRepository.AggregateEventObjects(ctx, record.ID, scanQuery)
+		if err != nil {
+			appendFleetFailure(&result, record, err)
+			continue
+		}
+		localObjects := map[string]FleetEventObject{}
+		localEvents := int64(0)
+		for _, row := range rows {
+			if q.Issue != "" && row.Category != q.Issue {
+				continue
+			}
+			if row.EventCount == 0 {
+				continue
+			}
+			localEvents += row.EventCount
+			total += row.EventCount
+			categories[row.Category] = true
+			namespaces[row.RegardingNamespace] = true
+			for _, eventType := range row.Types {
+				types[eventType] = true
+			}
+			kind := row.RegardingKind
+			kinds[kind] = true
+			key := eventObjectKey(ClusterEvent{ClusterID: record.ID, RegardingKind: kind, RegardingNamespace: row.RegardingNamespace, RegardingUID: row.RegardingUID, RegardingName: row.RegardingName})
+			object, exists := localObjects[key]
+			if !exists {
+				object = FleetEventObject{
+					ClusterID:   record.ID,
+					ClusterName: record.Name,
+					Namespace:   row.RegardingNamespace,
+					Kind:        kind,
+					Name:        row.RegardingName,
+					UID:         row.RegardingUID,
+					Scope:       fleetScope(kind, row.RegardingNamespace, business),
+				}
+			}
+			object.EventCount += int(row.EventCount)
+			object.OccurrenceCount += row.OccurrenceCount
+			if row.LastObservedAt.After(object.LastObservedAt) {
+				object.LastObservedAt = row.LastObservedAt
+				object.Message = row.Message
+			}
+			localObjects[key] = object
+		}
+		if localEvents > 0 {
+			affectedClusters++
+		}
+		if q.ClusterID != "" && len(localObjects) > 0 {
+			localObjects = service.eventWorkloadGroups(ctx, record, localObjects)
+		}
+		for _, object := range localObjects {
+			key := eventObjectKey(ClusterEvent{ClusterID: object.ClusterID, RegardingKind: object.Kind, RegardingNamespace: object.Namespace, RegardingUID: object.UID, RegardingName: object.Name})
+			objects[key] = object
+		}
+		service.appendFleetCollector(record, statuses, &result)
+	}
+	if ctx.Err() != nil {
+		return FleetEventOverview{}, ctx.Err()
+	}
+	values := make([]FleetEventObject, 0, len(objects))
+	for _, object := range objects {
+		values = append(values, object)
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].LastObservedAt.Equal(values[j].LastObservedAt) {
+			return fmt.Sprint(values[i].ClusterID, values[i].Namespace, values[i].Kind, values[i].UID, values[i].Name) < fmt.Sprint(values[j].ClusterID, values[j].Namespace, values[j].Kind, values[j].UID, values[j].Name)
+		}
+		return values[i].LastObservedAt.After(values[j].LastObservedAt)
+	})
+	start, end := eventPageBounds(len(values), q.Page, q.Limit)
+	result.Objects = values[start:end]
+	result.Total = total
+	result.Summary.EventRecords = total
+	result.Summary.ProblemGroups = len(categories)
+	result.Summary.WarningGroups = len(categories)
+	result.Summary.AffectedObjects = len(objects)
+	result.Summary.AffectedClusters = affectedClusters
+	result.Facets = EventFacets{Types: sortedKeys(types), Namespaces: sortedKeys(namespaces), Kinds: sortedKeys(kinds)}
+	result.Pagination = EventPagination{Page: q.Page, PageSize: q.Limit, TotalItems: len(values), TotalPages: max(1, (len(values)+q.Limit-1)/q.Limit)}
+	storage, err := service.eventStorageStats(ctx)
+	if err != nil {
+		return FleetEventOverview{}, err
+	}
+	result.Storage = storage
+	return result, nil
+}
+
+// getFleetEventRows keeps the raw-event path for evidence queries. The caller
+// normally scopes it to one cluster and a short time window.
+func (service *OnboardingService) getFleetEventRows(ctx context.Context, q FleetEventQuery, records []ClusterRecord, classification CapacityClassification, statuses map[string]EventCollectorStatus, result FleetEventOverview) (FleetEventOverview, error) {
+	business := namespaceSet(classification.BusinessNamespaces)
+	all := newFleetAccumulator(q)
+	clusterSet := map[string]bool{}
+	for _, record := range records {
+		if !fleetRecordMatches(record, q) {
+			continue
+		}
+		result.Summary.TotalClusters++
+		scanQuery := fleetScanQuery(q, classification)
 		local := newFleetAccumulator(q)
-		scanQuery := q.EventQuery
-		scanQuery.BusinessNamespaces = classification.BusinessNamespaces
-		scanQuery.AttentionOnly = !q.IncludeNormal
-		scanQuery.ComponentOnly = false
-		visit := func(e ClusterEvent) error {
+		visit := func(event ClusterEvent) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			scope := "platform"
-			if e.RegardingKind != "Node" && business[e.RegardingNamespace] {
-				scope = "business"
-			}
-			// Defensive filtering also makes alternative repositories respect the same contract.
+			scope := fleetScope(event.RegardingKind, event.RegardingNamespace, business)
 			if q.Scope != "" && q.Scope != scope {
 				return nil
 			}
-			local.add(FleetEvent{ClusterEvent: e, ClusterName: record.Name, Environment: record.Environment, TechnologyStack: record.TechnologyStack, Scope: scope})
+			local.add(FleetEvent{ClusterEvent: event, ClusterName: record.Name, Environment: record.Environment, TechnologyStack: record.TechnologyStack, Scope: scope})
 			return nil
 		}
+		var err error
 		if scanner, ok := service.eventRepository.(EventScanner); ok {
 			err = scanner.ScanEvents(ctx, record.ID, scanQuery, visit)
 		} else {
 			err = service.scanEventPages(ctx, record.ID, scanQuery, visit)
 		}
 		if err != nil {
-			result.Failures = append(result.Failures, FleetEventFailure{ClusterID: record.ID, ClusterName: record.Name, Code: ErrorCode(err)})
-			result.Collectors = append(result.Collectors, EventCollectorStatus{ClusterID: record.ID, ClusterName: record.Name, State: "error", LastError: "持久化事件读取失败"})
-			result.Summary.CollectorsFailed++
+			appendFleetFailure(&result, record, err)
 			continue
 		}
-		if q.View == "resources" || q.View == "objects" {
-			local.objects = service.eventWorkloadGroups(ctx, record, local.objects)
+		if local.total > 0 {
+			clusterSet[record.ID] = true
 		}
 		all.merge(local)
-		summary, summaryErr := service.eventRepository.EventSummary(ctx, record.ID, q.Since, q.Until)
-		status := EventCollectorStatus{ClusterID: record.ID, ClusterName: record.Name, State: summary.CollectorState, LastSuccessAt: summary.LastSuccessAt, LastError: summary.LastError}
-		if summaryErr != nil {
-			status.State = "error"
-			status.LastError = "采集状态读取失败"
-		}
-		result.Collectors = append(result.Collectors, status)
-		if status.State == "watching" {
-			result.Summary.CollectorsHealthy++
-		} else {
-			result.Summary.CollectorsFailed++
-		}
+		service.appendFleetCollector(record, statuses, &result)
 	}
 	if ctx.Err() != nil {
 		return FleetEventOverview{}, ctx.Err()
 	}
 	groups := []FleetEventIssue{}
-	for _, b := range all.groups {
-		b.issue.ClusterIDs = sortedKeys(b.clusters)
-		b.issue.AffectedClusters = len(b.clusters)
-		b.issue.AffectedObjects = len(b.objects)
-		groups = append(groups, b.issue)
+	for _, bucket := range all.groups {
+		bucket.issue.ClusterIDs = sortedKeys(bucket.clusters)
+		bucket.issue.AffectedClusters = len(bucket.clusters)
+		bucket.issue.AffectedObjects = len(bucket.objects)
+		groups = append(groups, bucket.issue)
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].LastObservedAt.Equal(groups[j].LastObservedAt) {
@@ -285,11 +595,9 @@ func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEve
 		}
 		return groups[i].LastObservedAt.After(groups[j].LastObservedAt)
 	})
-	objects := []FleetEventObject{}
-	clusterSet := map[string]bool{}
-	for _, o := range all.objects {
-		objects = append(objects, o)
-		clusterSet[o.ClusterID] = true
+	objects := make([]FleetEventObject, 0, len(all.objects))
+	for _, object := range all.objects {
+		objects = append(objects, object)
 	}
 	sort.Slice(objects, func(i, j int) bool {
 		if objects[i].LastObservedAt.Equal(objects[j].LastObservedAt) {
@@ -297,36 +605,26 @@ func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEve
 		}
 		return objects[i].LastObservedAt.After(objects[j].LastObservedAt)
 	})
+	rows := []FleetEvent(all.top)
+	sort.Slice(rows, func(i, j int) bool { return eventNewer(rows[i], rows[j]) })
+	start, end := eventPageBounds(len(rows), q.Page, q.Limit)
+	result.Items = rows[start:end]
 	result.Total = int64(all.total)
 	result.Summary.EventRecords = int64(all.total)
 	result.Summary.ProblemGroups = len(groups)
 	result.Summary.WarningGroups = len(groups)
 	result.Summary.AffectedObjects = len(objects)
 	result.Summary.AffectedClusters = len(clusterSet)
-	total := len(groups)
-	switch q.View {
-	case "objects", "resources":
-		total = len(objects)
-		start, end := eventPageBounds(total, q.Page, q.Limit)
-		result.Objects = objects[start:end]
-	case "events":
-		total = all.total
-		rows := []FleetEvent(all.top)
-		sort.Slice(rows, func(i, j int) bool { return eventNewer(rows[i], rows[j]) })
-		start, end := eventPageBounds(len(rows), q.Page, q.Limit)
-		result.Items = rows[start:end]
-	default:
-		start, end := eventPageBounds(total, q.Page, q.Limit)
-		result.Issues = groups[start:end]
-	}
-	result.Pagination = EventPagination{Page: q.Page, PageSize: q.Limit, TotalItems: total, TotalPages: max(1, (total+q.Limit-1)/q.Limit)}
 	result.Facets = EventFacets{Types: sortedKeys(all.types), Namespaces: sortedKeys(all.namespaces), Kinds: sortedKeys(all.kinds)}
-	result.Storage, err = service.eventStorageStats(ctx)
+	result.Pagination = EventPagination{Page: q.Page, PageSize: q.Limit, TotalItems: all.total, TotalPages: max(1, (all.total+q.Limit-1)/q.Limit)}
+	storage, err := service.eventStorageStats(ctx)
 	if err != nil {
 		return FleetEventOverview{}, err
 	}
+	result.Storage = storage
 	return result, nil
 }
+
 func (service *OnboardingService) scanEventPages(ctx context.Context, id string, q EventQuery, visit func(ClusterEvent) error) error {
 	q.Limit = 200
 	for {

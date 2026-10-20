@@ -496,9 +496,41 @@ type ClusterClassificationRepository interface {
 	UpdateClusterClassification(context.Context, string, string, string) error
 }
 
+type EventGroupAggregate struct {
+	Category        string    `json:"category"`
+	ClusterID       string    `json:"cluster_id"`
+	Type            string    `json:"type"`
+	Reason          string    `json:"reason"`
+	RegardingKind   string    `json:"regarding_kind"`
+	Message         string    `json:"message"`
+	EventCount      int64     `json:"event_count"`
+	OccurrenceCount int64     `json:"occurrence_count"`
+	AffectedObjects int64     `json:"affected_objects"`
+	Namespaces      []string  `json:"namespaces"`
+	FirstObservedAt time.Time `json:"first_observed_at"`
+	LastObservedAt  time.Time `json:"last_observed_at"`
+}
+
+type EventObjectAggregate struct {
+	Category           string    `json:"category"`
+	ClusterID          string    `json:"cluster_id"`
+	RegardingKind      string    `json:"regarding_kind"`
+	RegardingNamespace string    `json:"regarding_namespace"`
+	RegardingName      string    `json:"regarding_name"`
+	RegardingUID       string    `json:"regarding_uid"`
+	Message            string    `json:"message"`
+	EventCount         int64     `json:"event_count"`
+	OccurrenceCount    int64     `json:"occurrence_count"`
+	Types              []string  `json:"types"`
+	FirstObservedAt    time.Time `json:"first_observed_at"`
+	LastObservedAt     time.Time `json:"last_observed_at"`
+}
+
 type EventRepository interface {
 	UpsertEvents(context.Context, []ClusterEvent) error
 	QueryEvents(context.Context, string, EventQuery) (EventPage, error)
+	AggregateEvents(context.Context, string, EventQuery) ([]EventGroupAggregate, error)
+	AggregateEventObjects(context.Context, string, EventQuery) ([]EventObjectAggregate, error)
 	EventSummary(context.Context, string, time.Time, time.Time) (EventSummary, error)
 	EventFacets(context.Context, string, time.Time, time.Time) (EventFacets, error)
 	SetEventCollectorStatus(context.Context, EventCollectorStatus) error
@@ -506,6 +538,7 @@ type EventRepository interface {
 	DeleteEventRollupsBefore(context.Context, time.Time, int) (int64, error)
 	EnsureEventRollups(context.Context) error
 	EventStorageStats(context.Context) (EventStorageStats, error)
+	ListEventCollectorStatuses(context.Context) ([]EventCollectorStatus, error)
 	DeleteClusterEvents(context.Context, string) error
 }
 

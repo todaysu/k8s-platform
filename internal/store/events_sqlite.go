@@ -95,6 +95,69 @@ func eventWhere(clusterID string, query cluster.EventQuery, includeCursor bool) 
 	return strings.Join(conditions, " AND "), args
 }
 
+const eventCategorySQLite = `CASE
+ WHEN LOWER(reason)='failedscheduling' THEN 'scheduling'
+ WHEN LOWER(reason) LIKE '%mount%' OR LOWER(reason) LIKE '%attachvolume%' THEN 'storage'
+ WHEN LOWER(message) LIKE '%imagepull%' OR LOWER(message) LIKE '%pull image%' OR LOWER(message) LIKE '%pulling image%' OR LOWER(reason)='errimagepull' OR LOWER(reason)='imagepullbackoff' THEN 'image-pull'
+ WHEN LOWER(reason)='unhealthy' THEN 'probe'
+ WHEN LOWER(reason)='backoff' OR LOWER(message) LIKE '%crashloop%' OR LOWER(message) LIKE '%restarting failed container%' THEN 'restart'
+ WHEN LOWER(reason)='evicted' THEN 'eviction'
+ WHEN regarding_kind='Node' THEN 'node'
+ ELSE 'other-' || LOWER(TRIM(CASE WHEN TRIM(reason)='' THEN regarding_kind ELSE reason END))
+END`
+
+func (store *SQLite) AggregateEvents(ctx context.Context, id string, q cluster.EventQuery) ([]cluster.EventGroupAggregate, error) {
+	where, args := eventWhere(id, q, false)
+	rows, err := store.db.QueryContext(ctx, `SELECT `+eventCategorySQLite+` AS category,MIN(type),MIN(reason),MIN(regarding_kind),COUNT(*),COALESCE(SUM(occurrence_count),0),COUNT(DISTINCT CASE WHEN regarding_uid<>'' THEN regarding_uid ELSE regarding_kind||'/'||regarding_namespace||'/'||regarding_name END),COALESCE(GROUP_CONCAT(DISTINCT regarding_namespace),''),MIN(first_observed_at),MAX(last_observed_at),MAX(message) FROM cluster_events WHERE `+where+` GROUP BY category`, args...)
+	if err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	defer rows.Close()
+	result := []cluster.EventGroupAggregate{}
+	for rows.Next() {
+		var value cluster.EventGroupAggregate
+		var first, last, namespaces string
+		value.ClusterID = id
+		if err = rows.Scan(&value.Category, &value.Type, &value.Reason, &value.RegardingKind, &value.EventCount, &value.OccurrenceCount, &value.AffectedObjects, &namespaces, &first, &last, &value.Message); err != nil {
+			return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+		}
+		value.Namespaces = splitAggregateValues(namespaces)
+		value.FirstObservedAt, _ = time.Parse(timeLayout, first)
+		value.LastObservedAt, _ = time.Parse(timeLayout, last)
+		result = append(result, value)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	return result, nil
+}
+
+func (store *SQLite) AggregateEventObjects(ctx context.Context, id string, q cluster.EventQuery) ([]cluster.EventObjectAggregate, error) {
+	where, args := eventWhere(id, q, false)
+	rows, err := store.db.QueryContext(ctx, `SELECT `+eventCategorySQLite+` AS category,regarding_kind,regarding_namespace,regarding_uid,regarding_name,COUNT(*),COALESCE(SUM(occurrence_count),0),COALESCE(GROUP_CONCAT(DISTINCT type),''),MIN(first_observed_at),MAX(last_observed_at),MAX(message) FROM cluster_events WHERE `+where+` GROUP BY category,regarding_kind,regarding_namespace,regarding_uid,regarding_name`, args...)
+	if err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	defer rows.Close()
+	result := []cluster.EventObjectAggregate{}
+	for rows.Next() {
+		var value cluster.EventObjectAggregate
+		var first, last, types string
+		value.ClusterID = id
+		if err = rows.Scan(&value.Category, &value.RegardingKind, &value.RegardingNamespace, &value.RegardingUID, &value.RegardingName, &value.EventCount, &value.OccurrenceCount, &types, &first, &last, &value.Message); err != nil {
+			return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+		}
+		value.Types = splitAggregateValues(types)
+		value.FirstObservedAt, _ = time.Parse(timeLayout, first)
+		value.LastObservedAt, _ = time.Parse(timeLayout, last)
+		result = append(result, value)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	return result, nil
+}
+
 func (store *SQLite) QueryEvents(ctx context.Context, clusterID string, query cluster.EventQuery) (cluster.EventPage, error) {
 	where, args := eventWhere(clusterID, query, true)
 	limit := query.Limit
@@ -206,6 +269,33 @@ func (store *SQLite) SetEventCollectorStatus(ctx context.Context, status cluster
 	}
 	return nil
 }
+func (store *SQLite) ListEventCollectorStatuses(ctx context.Context) ([]cluster.EventCollectorStatus, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT cluster_id,state,resource_version,last_success_at,last_error,updated_at FROM event_collector_checkpoints`)
+	if err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	defer rows.Close()
+	result := []cluster.EventCollectorStatus{}
+	for rows.Next() {
+		var value cluster.EventCollectorStatus
+		var lastSuccess sql.NullString
+		var updated string
+		if err = rows.Scan(&value.ClusterID, &value.State, &value.ResourceVersion, &lastSuccess, &value.LastError, &updated); err != nil {
+			return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+		}
+		if lastSuccess.Valid {
+			parsed, _ := time.Parse(timeLayout, lastSuccess.String)
+			value.LastSuccessAt = &parsed
+		}
+		value.UpdatedAt, _ = time.Parse(timeLayout, updated)
+		result = append(result, value)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	return result, nil
+}
+
 func (store *SQLite) DeleteEventsByRetention(ctx context.Context, normalCutoff, warningCutoff time.Time, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 5000

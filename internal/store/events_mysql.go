@@ -297,6 +297,75 @@ func mysqlEventWhere(clusterID string, q cluster.EventQuery, cursor bool) (strin
 	args = append(args, extraArgs...)
 	return strings.Join(conditions, " AND "), args
 }
+
+func splitAggregateValues(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+const eventCategoryMySQL = `CASE
+ WHEN LOWER(reason)='failedscheduling' THEN 'scheduling'
+ WHEN LOWER(reason) LIKE '%mount%' OR LOWER(reason) LIKE '%attachvolume%' THEN 'storage'
+ WHEN LOWER(message) LIKE '%imagepull%' OR LOWER(message) LIKE '%pull image%' OR LOWER(message) LIKE '%pulling image%' OR LOWER(reason)='errimagepull' OR LOWER(reason)='imagepullbackoff' THEN 'image-pull'
+ WHEN LOWER(reason)='unhealthy' THEN 'probe'
+ WHEN LOWER(reason)='backoff' OR LOWER(message) LIKE '%crashloop%' OR LOWER(message) LIKE '%restarting failed container%' THEN 'restart'
+ WHEN LOWER(reason)='evicted' THEN 'eviction'
+ WHEN regarding_kind='Node' THEN 'node'
+ ELSE CONCAT('other-', LOWER(TRIM(CASE WHEN TRIM(reason)='' THEN regarding_kind ELSE reason END)))
+END`
+
+func (store *MySQLEvents) AggregateEvents(ctx context.Context, id string, q cluster.EventQuery) ([]cluster.EventGroupAggregate, error) {
+	where, args := mysqlEventWhere(id, q, false)
+	rows, err := store.db.QueryContext(ctx, `SELECT `+eventCategoryMySQL+` AS category,MIN(type),MIN(reason),MIN(regarding_kind),COUNT(*),COALESCE(SUM(occurrence_count),0),COUNT(DISTINCT IF(regarding_uid<>'',regarding_uid,CONCAT(regarding_kind,'/',regarding_namespace,'/',regarding_name))),COALESCE(GROUP_CONCAT(DISTINCT regarding_namespace),''),MIN(first_observed_at),MAX(last_observed_at),MAX(message) FROM cluster_events WHERE `+where+` GROUP BY category`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []cluster.EventGroupAggregate{}
+	for rows.Next() {
+		var value cluster.EventGroupAggregate
+		var namespaces string
+		value.ClusterID = id
+		if err = rows.Scan(&value.Category, &value.Type, &value.Reason, &value.RegardingKind, &value.EventCount, &value.OccurrenceCount, &value.AffectedObjects, &namespaces, &value.FirstObservedAt, &value.LastObservedAt, &value.Message); err != nil {
+			return nil, err
+		}
+		value.Namespaces = splitAggregateValues(namespaces)
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (store *MySQLEvents) AggregateEventObjects(ctx context.Context, id string, q cluster.EventQuery) ([]cluster.EventObjectAggregate, error) {
+	where, args := mysqlEventWhere(id, q, false)
+	rows, err := store.db.QueryContext(ctx, `SELECT `+eventCategoryMySQL+` AS category,regarding_kind,regarding_namespace,regarding_uid,regarding_name,COUNT(*),COALESCE(SUM(occurrence_count),0),COALESCE(GROUP_CONCAT(DISTINCT type),''),MIN(first_observed_at),MAX(last_observed_at),MAX(message) FROM cluster_events WHERE `+where+` GROUP BY category,regarding_kind,regarding_namespace,regarding_uid,regarding_name`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []cluster.EventObjectAggregate{}
+	for rows.Next() {
+		var value cluster.EventObjectAggregate
+		var types string
+		value.ClusterID = id
+		if err = rows.Scan(&value.Category, &value.RegardingKind, &value.RegardingNamespace, &value.RegardingUID, &value.RegardingName, &value.EventCount, &value.OccurrenceCount, &types, &value.FirstObservedAt, &value.LastObservedAt, &value.Message); err != nil {
+			return nil, err
+		}
+		value.Types = splitAggregateValues(types)
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
 func (store *MySQLEvents) QueryEvents(ctx context.Context, id string, q cluster.EventQuery) (cluster.EventPage, error) {
 	where, args := mysqlEventWhere(id, q, true)
 	limit := q.Limit
@@ -383,6 +452,27 @@ func (store *MySQLEvents) SetEventCollectorStatus(ctx context.Context, s cluster
 	_, err := store.db.ExecContext(ctx, `INSERT INTO event_collector_checkpoints(cluster_id,state,resource_version,last_success_at,last_error,updated_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE state=VALUES(state),resource_version=VALUES(resource_version),last_success_at=COALESCE(VALUES(last_success_at),last_success_at),last_error=VALUES(last_error),updated_at=VALUES(updated_at)`, s.ClusterID, s.State, s.ResourceVersion, s.LastSuccessAt, s.LastError, s.UpdatedAt.UTC())
 	return err
 }
+func (store *MySQLEvents) ListEventCollectorStatuses(ctx context.Context) ([]cluster.EventCollectorStatus, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT cluster_id,state,resource_version,last_success_at,last_error,updated_at FROM event_collector_checkpoints`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []cluster.EventCollectorStatus{}
+	for rows.Next() {
+		var value cluster.EventCollectorStatus
+		var lastSuccess sql.NullTime
+		if err = rows.Scan(&value.ClusterID, &value.State, &value.ResourceVersion, &lastSuccess, &value.LastError, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if lastSuccess.Valid {
+			value.LastSuccessAt = &lastSuccess.Time
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
 func (store *MySQLEvents) DeleteEventsByRetention(ctx context.Context, normalCutoff, warningCutoff time.Time, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 5000

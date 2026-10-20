@@ -143,6 +143,20 @@ func (db failingEventScanner) ScanEvents(ctx context.Context, id string, q clust
 	}
 	return db.SQLite.ScanEvents(ctx, id, q, visit)
 }
+
+func (db failingEventScanner) AggregateEvents(ctx context.Context, id string, q cluster.EventQuery) ([]cluster.EventGroupAggregate, error) {
+	if id == "broken" {
+		return nil, fmt.Errorf("storage read failed")
+	}
+	return db.SQLite.AggregateEvents(ctx, id, q)
+}
+
+func (db failingEventScanner) AggregateEventObjects(ctx context.Context, id string, q cluster.EventQuery) ([]cluster.EventObjectAggregate, error) {
+	if id == "broken" {
+		return nil, fmt.Errorf("storage read failed")
+	}
+	return db.SQLite.AggregateEventObjects(ctx, id, q)
+}
 func TestFleetInvestigationReportsMissingClusterData(t *testing.T) {
 	ctx := context.Background()
 	db, err := OpenSQLite(":memory:")
