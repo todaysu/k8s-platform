@@ -58,16 +58,12 @@ make dev-backend
 
 `make dev-backend` 仅在本地开发时默认开启 Pod Exec。如需关闭，使用 `ENABLE_POD_EXEC=false make dev-backend`。直接运行 `go run ./cmd/platform` 时 Pod Exec 仍默认关闭。
 
-不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到本地 SQLite，便于开发验证。部署到 Kubernetes 时使用统一 MySQL：
+本地开发不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到 SQLite。部署到 Kubernetes 时，首次打开平台会进入数据库初始化页，可选择：
 
-```yaml
-env:
-  - name: PLATFORM_DATABASE_DSN
-    valueFrom:
-      secretKeyRef: { name: ftc-platform, key: mysql-dsn }
-```
+- 随平台部署在集群内的 MySQL（`deploy/mysql.yaml`）；
+- 集群外 MySQL，填写地址、端口、数据库名、账号和密码。
 
-配置 MySQL 后，平台启动时自动创建集群、健康、容量、事件、账号和会话所需的全部表及索引；多个平台 Pod 通过数据库迁移锁和 Kubernetes Lease 安全启动。部署示例见 [`deploy/platform.yaml`](deploy/platform.yaml) 与 [`deploy/mysql.yaml`](deploy/mysql.yaml)。
+初始化完成后平台把连接配置写入 `ftc-platform-runtime` Secret 并自动重启，启动时自动创建集群、健康、容量、事件、账号和会话所需的全部表及索引；多个平台 Pod 通过数据库迁移锁和 Kubernetes Lease 安全启动。也可以预先提供 `PLATFORM_DATABASE_DSN` 跳过初始化页。部署示例见 [`deploy/platform.yaml`](deploy/platform.yaml) 与 [`deploy/mysql.yaml`](deploy/mysql.yaml)，详细步骤见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
 
 后端启动后，可访问健康检查接口：
 

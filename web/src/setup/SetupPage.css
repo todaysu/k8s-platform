@@ -1,0 +1,55 @@
+.ks-setup-page {
+  min-height: 100vh;
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.ks-setup-shell {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40px 16px;
+}
+
+.ks-setup-brand {
+  color: var(--pf-t--global--text--color--regular);
+}
+
+.ks-setup-card {
+  max-width: 860px;
+  width: 100%;
+}
+
+.ks-setup-lead {
+  color: var(--pf-t--global--text--color--subtle);
+  margin: 12px 0 24px;
+}
+
+.ks-setup-grid {
+  display: grid;
+  gap: 0 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ks-setup-hint {
+  color: var(--pf-t--global--text--color--subtle);
+  display: block;
+  font-size: 12px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.ks-setup-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+@media (max-width: 640px) {
+  .ks-setup-grid {
+    grid-template-columns: 1fr;
+  }
+}

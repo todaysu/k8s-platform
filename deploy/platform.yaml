@@ -18,6 +18,12 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -41,6 +47,10 @@ metadata:
 data:
   LISTEN_ADDR: ":8080"
   METRICS_ADDR: ":9090"
+  SETUP_MODE: "true"
+  SETUP_DEFAULT_DB_HOST: platform-mysql.ftc-platform.svc
+  SETUP_DEFAULT_DB_NAME: ftc_platform
+  SETUP_RUNTIME_SECRET: ftc-platform-runtime
   WEB_DIST_DIR: /app/web
   SECURE_COOKIES: "true"
   SESSION_TTL: 8h
@@ -66,11 +76,9 @@ metadata:
   namespace: ftc-platform
 type: Opaque
 stringData:
-  # 上线前必须替换。password-hash 必须是 bcrypt；encryption-key 必须是 32 字节密钥的 Base64。
-  admin-username: admin
-  password-hash: REPLACE_WITH_BCRYPT_HASH
+  # 上线前必须替换。encryption-key 必须是 32 字节密钥的 Base64；setup-token 用于首次初始化。
   encryption-key: REPLACE_WITH_BASE64_32_BYTE_KEY
-  mysql-dsn: ftc:REPLACE_WITH_PASSWORD@tcp(platform-mysql.ftc-platform.svc:3306)/ftc_platform
+  setup-token: REPLACE_WITH_SETUP_TOKEN
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -102,14 +110,16 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: PLATFORM_DATABASE_DSN
+              valueFrom: { secretKeyRef: { name: ftc-platform-runtime, key: dsn, optional: true } }
             - name: ADMIN_USERNAME
-              valueFrom: { secretKeyRef: { name: ftc-platform, key: admin-username } }
+              valueFrom: { secretKeyRef: { name: ftc-platform-runtime, key: admin-username, optional: true } }
             - name: ADMIN_PASSWORD_HASH
-              valueFrom: { secretKeyRef: { name: ftc-platform, key: password-hash } }
+              valueFrom: { secretKeyRef: { name: ftc-platform-runtime, key: admin-password-hash, optional: true } }
             - name: CREDENTIAL_ENCRYPTION_KEY
               valueFrom: { secretKeyRef: { name: ftc-platform, key: encryption-key } }
-            - name: PLATFORM_DATABASE_DSN
-              valueFrom: { secretKeyRef: { name: ftc-platform, key: mysql-dsn } }
+            - name: SETUP_TOKEN
+              valueFrom: { secretKeyRef: { name: ftc-platform, key: setup-token } }
           ports:
             - { name: http, containerPort: 8080 }
             - { name: metrics, containerPort: 9090 }

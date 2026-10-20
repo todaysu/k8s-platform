@@ -3,10 +3,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 const defaultSessionTTL = 8 * time.Hour
@@ -16,6 +19,17 @@ type Config struct {
 	MetricsAddr                string
 	DatabasePath               string
 	PlatformDatabaseDSN        string
+	DatabaseHost               string
+	DatabasePort               string
+	DatabaseUser               string
+	DatabasePassword           string
+	DatabaseName               string
+	DatabaseTLS                string
+	SetupMode                  bool
+	SetupToken                 string
+	SetupRuntimeSecret         string
+	SetupDefaultDBHost         string
+	SetupDefaultDBName         string
 	EventDatabaseDSN           string
 	BootstrapTokenPath         string
 	WebDistDir                 string
@@ -99,12 +113,31 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	setupMode, err := envBool("SETUP_MODE", false)
+	if err != nil {
+		return Config{}, err
+	}
 
+	databasePort, err := envPositiveInt("PLATFORM_DB_PORT", 3306)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		ListenAddr:                 envOrDefault("LISTEN_ADDR", ":8080"),
 		MetricsAddr:                os.Getenv("METRICS_ADDR"),
 		DatabasePath:               envOrDefault("DATABASE_PATH", "./data/platform.db"),
 		PlatformDatabaseDSN:        os.Getenv("PLATFORM_DATABASE_DSN"),
+		DatabaseHost:               strings.TrimSpace(os.Getenv("PLATFORM_DB_HOST")),
+		DatabasePort:               strconv.Itoa(databasePort),
+		DatabaseUser:               os.Getenv("PLATFORM_DB_USER"),
+		DatabasePassword:           os.Getenv("PLATFORM_DB_PASSWORD"),
+		DatabaseName:               os.Getenv("PLATFORM_DB_NAME"),
+		DatabaseTLS:                os.Getenv("PLATFORM_DB_TLS"),
+		SetupMode:                  setupMode,
+		SetupToken:                 os.Getenv("SETUP_TOKEN"),
+		SetupRuntimeSecret:         envOrDefault("SETUP_RUNTIME_SECRET", "ftc-platform-runtime"),
+		SetupDefaultDBHost:         envOrDefault("SETUP_DEFAULT_DB_HOST", "platform-mysql.ftc-platform.svc"),
+		SetupDefaultDBName:         envOrDefault("SETUP_DEFAULT_DB_NAME", "ftc_platform"),
 		EventDatabaseDSN:           os.Getenv("EVENT_DATABASE_DSN"),
 		BootstrapTokenPath:         envOrDefault("BOOTSTRAP_TOKEN_PATH", "./data/bootstrap-token"),
 		WebDistDir:                 os.Getenv("WEB_DIST_DIR"),
@@ -130,7 +163,30 @@ func Load() (Config, error) {
 		LeaderElectionName:         envOrDefault("LEADER_ELECTION_NAME", "ftc-platform-collectors"),
 	}
 
-	if cfg.AdminPasswordHash == "" {
+	if cfg.PlatformDatabaseDSN == "" && cfg.DatabaseHost != "" {
+		if cfg.DatabaseUser == "" || cfg.DatabaseName == "" {
+			return Config{}, errors.New("PLATFORM_DB_USER and PLATFORM_DB_NAME are required when PLATFORM_DB_HOST is set")
+		}
+		mysqlConfig := mysql.NewConfig()
+		mysqlConfig.User = cfg.DatabaseUser
+		mysqlConfig.Passwd = cfg.DatabasePassword
+		mysqlConfig.Net = "tcp"
+		mysqlConfig.Addr = net.JoinHostPort(cfg.DatabaseHost, cfg.DatabasePort)
+		mysqlConfig.DBName = cfg.DatabaseName
+		mysqlConfig.ParseTime = true
+		mysqlConfig.Loc = time.UTC
+		mysqlConfig.Params = map[string]string{"charset": "utf8mb4"}
+		if cfg.DatabaseTLS != "" {
+			mysqlConfig.TLSConfig = cfg.DatabaseTLS
+		}
+		cfg.PlatformDatabaseDSN = mysqlConfig.FormatDSN()
+	}
+
+	setupWithoutDatabase := cfg.SetupMode && cfg.PlatformDatabaseDSN == ""
+	if setupWithoutDatabase && cfg.SetupToken == "" {
+		return Config{}, errors.New("SETUP_TOKEN is required when SETUP_MODE is enabled without a database")
+	}
+	if cfg.AdminPasswordHash == "" && !setupWithoutDatabase {
 		return Config{}, errors.New("ADMIN_PASSWORD_HASH is required")
 	}
 	if cfg.CredentialEncryptionKey == "" {

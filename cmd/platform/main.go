@@ -17,6 +17,7 @@ import (
 	"example.com/k8s-platform/internal/httpapi"
 	"example.com/k8s-platform/internal/leadership"
 	"example.com/k8s-platform/internal/metrics"
+	"example.com/k8s-platform/internal/setup"
 	"example.com/k8s-platform/internal/store"
 )
 
@@ -26,6 +27,10 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if cfg.SetupMode && cfg.PlatformDatabaseDSN == "" {
+		runSetupServer(cfg)
+		return
 	}
 	var database store.PlatformStore
 	if cfg.PlatformDatabaseDSN != "" {
@@ -134,6 +139,44 @@ func main() {
 	}
 
 	log.Printf("platform listening on %s", cfg.ListenAddr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+}
+
+func runSetupServer(cfg config.Config) {
+	setupServer, err := setup.New(setup.Config{
+		Token:         cfg.SetupToken,
+		Namespace:     cfg.LeaderElectionNamespace,
+		RuntimeSecret: cfg.SetupRuntimeSecret,
+		DefaultDBHost: cfg.SetupDefaultDBHost,
+		DefaultDBName: cfg.SetupDefaultDBName,
+		SecureCookies: cfg.SecureCookies,
+		SessionTTL:    cfg.SessionTTL,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/health", setupServer)
+	mux.Handle("/api/v1/setup/", setupServer)
+	if cfg.WebDistDir != "" {
+		mux.Handle("/", httpapi.NewSPAHandler(cfg.WebDistDir))
+	} else {
+		mux.HandleFunc("/", func(writer http.ResponseWriter, _ *http.Request) {
+			http.Error(writer, "setup API only: WEB_DIST_DIR is not set", http.StatusNotFound)
+		})
+	}
+	applicationContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-applicationContext.Done()
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+	}()
+	log.Printf("setup server listening on %s", cfg.ListenAddr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
