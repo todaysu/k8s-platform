@@ -252,7 +252,7 @@ describe('cluster management UI', () => {
     const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/api/v1/capacity')) return { json: async () => ({ data: fleetCapacity, error: null }), ok: true }
-      if (url.endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: clusterCapacity, error: null }), ok: true }
+      if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: clusterCapacity, error: null }), ok: true }
       if (url.endsWith('/clusters/cluster-a')) return { json: async () => ({ data: realClusters[0], error: null }), ok: true }
       return { json: async () => ({ data: realClusters, error: null }), ok: true }
     })
@@ -521,7 +521,7 @@ describe('cluster management UI', () => {
         baselineLocked = true
         return { json: async () => ({ data: { id: 1, cluster_id: 'cluster-a' }, error: null }), ok: true, status: 201 }
       }
-      if (url.endsWith('/clusters/cluster-a/capacity')) {
+      if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) {
         const baseline = baselineLocked ? { captured_at: '2026-10-17T10:00:00Z', cluster_id: 'cluster-a', cpu_allocatable_milli: 16000, id: 1, memory_allocatable_bytes: 68719476736, platform_cpu_limits_milli: 4000, platform_cpu_requests_milli: 2000, platform_memory_limits_bytes: 8589934592, platform_memory_requests_bytes: 4294967296, system_namespaces: ['kube-system', 'cmb-monitoring'], worker_nodes: 2 } : null
         return { json: async () => ({ data: { ...clusterCapacity, baseline, comparison: { ...clusterCapacity.comparison, status: baselineLocked ? 'stable' : 'not_set' } }, error: null }), ok: true }
       }
@@ -551,7 +551,7 @@ describe('cluster management UI', () => {
     window.history.replaceState(null, '', '/clusters/cluster-a/capacity')
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: clusterCapacity, error: null }), ok: true }
+      if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: clusterCapacity, error: null }), ok: true }
       if (url.endsWith('/clusters/cluster-a')) return { json: async () => ({ data: realClusters[0], error: null }), ok: true }
       return { json: async () => ({ data: realClusters, error: null }), ok: true }
     }))
@@ -573,7 +573,7 @@ describe('cluster management UI', () => {
     const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/clusters/cluster-a/capacity/baseline-decisions') && init?.method === 'POST') return { json: async () => ({ data: { id: 2 }, error: null }), ok: true }
-      if (url.endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: pendingCapacity, error: null }), ok: true }
+      if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: pendingCapacity, error: null }), ok: true }
       if (url.endsWith('/clusters/cluster-a')) return { json: async () => ({ data: realClusters[0], error: null }), ok: true }
       return { json: async () => ({ data: realClusters, error: null }), ok: true }
     })

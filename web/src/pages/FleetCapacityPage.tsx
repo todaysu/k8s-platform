@@ -202,7 +202,7 @@ export default function FleetCapacityPage({ onOpenCluster }: Props) {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 0)
-    const interval = window.setInterval(() => void load(), 60_000)
+    const interval = window.setInterval(() => { if (!document.hidden) void load() }, 60_000)
     return () => { window.clearTimeout(timeout); window.clearInterval(interval) }
   }, [load])
 

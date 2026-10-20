@@ -436,8 +436,8 @@ export async function fetchPlatformCapabilities(): Promise<PlatformCapabilities>
   return payload.data
 }
 
-export async function fetchClusterCapacity(id: string): Promise<ClusterCapacity> {
-  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/capacity`)
+export async function fetchClusterCapacity(id: string, refresh = false): Promise<ClusterCapacity> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/capacity${refresh ? '?refresh=1' : ''}`)
   const payload = await response.json() as ApiResponse<ClusterCapacity>
   if (!response.ok || payload.error || !payload.data) throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '读取集群容量失败。')
   return payload.data
@@ -554,8 +554,8 @@ export async function fetchClusters(): Promise<ManagedCluster[]> {
   return payload.data
 }
 
-export async function fetchCluster(id: string): Promise<ManagedCluster> {
-  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}`)
+export async function fetchCluster(id: string, refresh = false): Promise<ManagedCluster> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`)
 
   let payload: ApiResponse<ManagedCluster>
   try {

@@ -541,7 +541,7 @@ function ClusterManagementPage() {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => void loadClusters(), 0)
-    const intervalId = window.setInterval(() => void loadClusters(), 30_000)
+    const intervalId = window.setInterval(() => { if (!document.hidden) void loadClusters() }, 30_000)
     return () => {
       window.clearTimeout(timeoutId)
       window.clearInterval(intervalId)
@@ -551,7 +551,7 @@ function ClusterManagementPage() {
   useEffect(() => {
     if (activeSection !== 'overview' && activeSection !== 'inspections') return undefined
     const timeoutId = window.setTimeout(() => void loadCapacity(), 0)
-    const intervalId = window.setInterval(() => void loadCapacity(), 60_000)
+    const intervalId = window.setInterval(() => { if (!document.hidden) void loadCapacity() }, 60_000)
     return () => { window.clearTimeout(timeoutId); window.clearInterval(intervalId) }
   }, [activeSection, loadCapacity])
 

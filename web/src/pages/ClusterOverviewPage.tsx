@@ -137,11 +137,11 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
   const [nodesError, setNodesError] = useState('')
   const [nodesQuery, setNodesQuery] = useState('')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     setIsLoading(true)
     setError('')
     try {
-      setCluster(await fetchCluster(clusterId))
+      setCluster(await fetchCluster(clusterId, refresh))
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '读取集群详情失败，请稍后重试。')
     } finally {
@@ -163,7 +163,7 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 0)
-    const interval = window.setInterval(() => void load(), 30_000)
+    const interval = window.setInterval(() => { if (!document.hidden) void load() }, 60_000)
     return () => {
       window.clearTimeout(timeout)
       window.clearInterval(interval)
@@ -179,7 +179,7 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
   useEffect(() => {
     if (activeTab !== 'nodes') return
     const timeout = window.setTimeout(() => void loadNodes(), 0)
-    const interval = window.setInterval(() => void loadNodes(), 30_000)
+    const interval = window.setInterval(() => { if (!document.hidden) void loadNodes() }, 60_000)
     return () => {
       window.clearTimeout(timeout)
       window.clearInterval(interval)
@@ -310,13 +310,13 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
               <Label color="purple">{cluster.technology_stack || '未标记'}</Label>
               <Label variant="outline">{cluster.environment}</Label>
             </div>
-            <p>最近检查：{formatTime(cluster.last_checked_at)} · 每 30 秒自动刷新</p>
+            <p>最近检查：{formatTime(cluster.last_checked_at)} · 每 60 秒自动刷新</p>
           </div>
           <div className="ks-cluster-detail-actions">
             <Button
               icon={<SyncAltIcon />}
               isLoading={activeTab === 'nodes' ? isNodesLoading : isLoading}
-              onClick={() => void (activeTab === 'nodes' ? loadNodes() : load())}
+              onClick={() => void (activeTab === 'nodes' ? loadNodes() : load(true))}
               variant="secondary"
             >
               刷新状态
@@ -417,7 +417,7 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
                 placeholder="按名称、角色、区域或版本搜索"
                 value={nodesQuery}
               />
-              <span>每 30 秒自动刷新</span>
+              <span>每 60 秒自动刷新</span>
             </div>
             {nodesError && (
               <Alert

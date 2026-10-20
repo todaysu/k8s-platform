@@ -113,7 +113,7 @@ export default function FleetEventsPage({ clusters }: Props) {
  }, [filters, view, page, until, normal, rawContext, contextMinutes])
  useEffect(() => {
   if (drawerOpen || expandedGroups > 0 || page !== 1 || rawContext) return
-  const timer = window.setInterval(() => setUntil(new Date().toISOString()), 30_000)
+  const timer = window.setInterval(() => { if (!document.hidden) setUntil(new Date().toISOString()) }, 30_000)
   return () => window.clearInterval(timer)
  }, [drawerOpen, expandedGroups, page, rawContext])
  useEffect(() => {

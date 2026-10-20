@@ -333,7 +333,7 @@ export default function ClusterWorkloadsPage({ clusterId }: Props) {
   useEffect(() => {
     const load = () => podDetailRoute ? loadPodDetail(podDetailRoute) : detailRoute ? loadDetail(detailRoute) : loadList()
     const timeout = window.setTimeout(() => void load(), 0)
-    const interval = window.setInterval(() => void load(), 30_000)
+    const interval = window.setInterval(() => { if (!document.hidden) void load() }, 60_000)
     return () => {
       window.clearTimeout(timeout)
       window.clearInterval(interval)

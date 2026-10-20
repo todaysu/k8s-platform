@@ -136,10 +136,10 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
   const [keepReason, setKeepReason] = useState('')
   const [reasonError, setReasonError] = useState('')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     setError('')
     try {
-      setCapacity(await fetchClusterCapacity(clusterId))
+      setCapacity(await fetchClusterCapacity(clusterId, refresh))
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '读取集群容量失败。')
     } finally {
@@ -149,7 +149,7 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 0)
-    const interval = window.setInterval(() => void load(), 30_000)
+    const interval = window.setInterval(() => { if (!document.hidden) void load() }, 60_000)
     return () => { window.clearTimeout(timeout); window.clearInterval(interval) }
   }, [load])
 
@@ -159,7 +159,7 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
     try {
       await lockClusterCapacityBaseline(clusterId)
       setIsBaselineOpen(false)
-      await load()
+      await load(true)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '建立容量基线失败。')
     } finally {
@@ -173,14 +173,14 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
     try {
       await keepCapacityBaseline(clusterId, keepReason.trim())
       setIsDecisionOpen(false); setKeepReason('')
-      await load()
+      await load(true)
     } catch (requestError) {
       setReasonError(requestError instanceof Error ? requestError.message : '保存基线决策失败。')
     } finally { setIsKeeping(false) }
   }
 
   if (isLoading && !capacity) return <div className="ks-capacity-loading"><Spinner aria-label="正在计算集群容量" /><span>正在读取节点容量与工作负载资源声明…</span></div>
-  if (!capacity) return <Alert actionLinks={<Button isInline onClick={() => void load()} variant="link">重新读取</Button>} isInline title="容量数据读取失败" variant="danger">{error}</Alert>
+  if (!capacity) return <Alert actionLinks={<Button isInline onClick={() => void load(true)} variant="link">重新读取</Button>} isInline title="容量数据读取失败" variant="danger">{error}</Alert>
 
   const meta = baselineMeta[capacity.comparison.status]
   return (
