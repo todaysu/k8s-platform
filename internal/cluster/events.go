@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,8 +16,45 @@ import (
 
 var eventVariableToken = regexp.MustCompile(`(?i)(?:\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9a-f]{8,}\b|\b\d+\b)`)
 
+const (
+	eventInitialJitter    = 15 * time.Second
+	eventReconnectBase    = time.Second
+	eventReconnectMax     = 30 * time.Second
+	eventStableWatch      = 30 * time.Second
+	eventExpiredReconnect = 500 * time.Millisecond
+	eventStatusInterval   = 10 * time.Second
+)
+
 func (service *OnboardingService) SetEventRepository(repository EventRepository) {
 	service.eventRepository = repository
+}
+
+const eventStorageStatsTTL = 5 * time.Minute
+
+// eventStorageStats caches table-wide counts. COUNT(*) on the raw and rollup
+// tables is expensive and the UI only needs a refreshed value every few
+// minutes, not on every fleet page request.
+func (service *OnboardingService) eventStorageStats(ctx context.Context) (EventStorageStats, error) {
+	if service.eventRepository == nil {
+		return EventStorageStats{}, newError(CodePersistenceFailed)
+	}
+	service.storageStatsMu.Lock()
+	if !service.storageStatsAt.IsZero() && service.now().Sub(service.storageStatsAt) < eventStorageStatsTTL {
+		value := service.storageStats
+		service.storageStatsMu.Unlock()
+		return value, nil
+	}
+	service.storageStatsMu.Unlock()
+
+	value, err := service.eventRepository.EventStorageStats(ctx)
+	if err != nil {
+		return EventStorageStats{}, err
+	}
+	service.storageStatsMu.Lock()
+	service.storageStats = value
+	service.storageStatsAt = service.now()
+	service.storageStatsMu.Unlock()
+	return value, nil
 }
 
 func (service *OnboardingService) GetEvents(ctx context.Context, id string, query EventQuery) (EventPage, error) {
@@ -154,16 +192,23 @@ func DecodeEventCursor(value string) (*time.Time, string, error) {
 // EventCollector follows the Kubernetes API's list-then-watch pattern. It runs
 // centrally, so managed clusters do not need an additional agent.
 type EventCollector struct {
-	service *OnboardingService
-	repo    EventRepository
-	events  EventConnector
-	mu      sync.Mutex
-	workers map[string]context.CancelFunc
+	service        *OnboardingService
+	repo           EventRepository
+	events         EventConnector
+	mu             sync.Mutex
+	workers        map[string]context.CancelFunc
+	statusThrottle *statusThrottle
 }
 
 func NewEventCollector(service *OnboardingService, repo EventRepository) *EventCollector {
 	events, _ := service.connector.(EventConnector)
-	return &EventCollector{service: service, repo: repo, events: events, workers: map[string]context.CancelFunc{}}
+	return &EventCollector{
+		service:        service,
+		repo:           repo,
+		events:         events,
+		workers:        map[string]context.CancelFunc{},
+		statusThrottle: newStatusThrottle(eventStatusInterval),
+	}
 }
 
 func (collector *EventCollector) Run(ctx context.Context) {
@@ -204,6 +249,7 @@ func (collector *EventCollector) reconcile(ctx context.Context) {
 		if _, ok := wanted[id]; !ok {
 			cancel()
 			delete(collector.workers, id)
+			collector.statusThrottle.forget(id)
 		}
 	}
 	for id, record := range wanted {
@@ -217,18 +263,24 @@ func (collector *EventCollector) reconcile(ctx context.Context) {
 }
 
 func (collector *EventCollector) collect(ctx context.Context, record ClusterRecord) {
+	// Spread the first full list of every worker so a leader change does not
+	// synchronize 60 clusters on the same second.
+	waitContext(ctx, randomDuration(eventInitialJitter))
+	if ctx.Err() != nil {
+		return
+	}
 	parsed, err := collector.service.parsedCredentials(record)
 	if err != nil {
 		collector.status(ctx, record.ID, "error", "", err)
 		return
 	}
-	backoff := time.Second
+	backoff := eventReconnectBase
 	for ctx.Err() == nil {
 		batch, err := collector.events.ListEvents(ctx, parsed)
 		if err != nil {
 			collector.status(ctx, record.ID, "error", "", err)
-			waitContext(ctx, backoff)
-			backoff = minDuration(backoff*2, 30*time.Second)
+			waitContext(ctx, jitter(backoff))
+			backoff = minDuration(backoff*2, eventReconnectMax)
 			continue
 		}
 		for index := range batch.Items {
@@ -236,20 +288,43 @@ func (collector *EventCollector) collect(ctx context.Context, record ClusterReco
 		}
 		if err := collector.repo.UpsertEvents(ctx, batch.Items); err != nil {
 			collector.status(ctx, record.ID, "error", batch.ResourceVersion, err)
-			waitContext(ctx, backoff)
+			waitContext(ctx, jitter(backoff))
+			backoff = minDuration(backoff*2, eventReconnectMax)
 			continue
 		}
 		collector.status(ctx, record.ID, "watching", batch.ResourceVersion, nil)
-		backoff = time.Second
+		watchStarted := time.Now()
 		err = collector.watchBatched(ctx, record.ID, parsed, batch.APIVersion, batch.ResourceVersion)
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil && !errors.Is(err, ErrEventWatchExpired) {
-			collector.status(ctx, record.ID, "retrying", batch.ResourceVersion, err)
-			waitContext(ctx, backoff)
-			backoff = minDuration(backoff*2, 30*time.Second)
+		if err == nil {
+			// A normal server-side timeout is not an error, but it must still
+			// back off. Otherwise a broken watch turns into a list hot loop.
+			err = ErrEventWatchClosed
 		}
+		// A watch that lived long enough was healthy; reset the reconnect
+		// backoff. A watch that dies immediately must not reset it, otherwise
+		// a persistent watch failure causes a full list every second.
+		stable := time.Since(watchStarted) >= eventStableWatch
+		if stable {
+			backoff = eventReconnectBase
+		}
+		if errors.Is(err, ErrEventWatchExpired) {
+			backoff = eventReconnectBase
+			waitContext(ctx, jitter(eventExpiredReconnect))
+			continue
+		}
+		if errors.Is(err, ErrEventWatchClosed) && stable {
+			// The server-side TimeoutSeconds elapsed. This is the normal
+			// reconnect path; do not flap the collector state.
+			waitContext(ctx, jitter(backoff))
+			backoff = minDuration(backoff*2, eventReconnectMax)
+			continue
+		}
+		collector.status(ctx, record.ID, "retrying", batch.ResourceVersion, err)
+		waitContext(ctx, jitter(backoff))
+		backoff = minDuration(backoff*2, eventReconnectMax)
 	}
 }
 
@@ -310,11 +385,18 @@ func (collector *EventCollector) watchBatched(ctx context.Context, clusterID str
 
 func (collector *EventCollector) status(ctx context.Context, id, state, rv string, cause error) {
 	now := time.Now().UTC()
+	lastError := ""
+	if cause != nil {
+		lastError = cause.Error()
+	}
+	if !collector.statusThrottle.allow(id, state, lastError, now) {
+		return
+	}
 	status := EventCollectorStatus{ClusterID: id, State: state, ResourceVersion: rv, UpdatedAt: now}
 	if cause == nil {
 		status.LastSuccessAt = &now
 	} else {
-		status.LastError = cause.Error()
+		status.LastError = lastError
 	}
 	_ = collector.repo.SetEventCollectorStatus(ctx, status)
 }
@@ -347,12 +429,69 @@ func (collector *EventCollector) stopAll() {
 	collector.workers = map[string]context.CancelFunc{}
 }
 func waitContext(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
+}
+
+// randomDuration returns a value in [0, max). It is used to spread one-time
+// work such as the first event list after a leader change.
+func randomDuration(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(max)))
+}
+
+// jitter applies +/-20% to a reconnect delay so workers do not retry in
+// lockstep after a shared upstream failure.
+func jitter(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+	return time.Duration(float64(delay) * (0.8 + rand.Float64()*0.4))
+}
+
+type eventStatusSnapshot struct {
+	state     string
+	lastError string
+	at        time.Time
+}
+
+// statusThrottle limits checkpoint writes caused by per-second event flushes.
+// State or error changes are always written; unchanged states are written at
+// most once per interval.
+type statusThrottle struct {
+	mu       sync.Mutex
+	interval time.Duration
+	last     map[string]eventStatusSnapshot
+}
+
+func newStatusThrottle(interval time.Duration) *statusThrottle {
+	return &statusThrottle{interval: interval, last: map[string]eventStatusSnapshot{}}
+}
+
+func (throttle *statusThrottle) allow(id, state, lastError string, now time.Time) bool {
+	throttle.mu.Lock()
+	defer throttle.mu.Unlock()
+	previous, ok := throttle.last[id]
+	if ok && previous.state == state && previous.lastError == lastError && now.Sub(previous.at) < throttle.interval {
+		return false
+	}
+	throttle.last[id] = eventStatusSnapshot{state: state, lastError: lastError, at: now}
+	return true
+}
+
+func (throttle *statusThrottle) forget(id string) {
+	throttle.mu.Lock()
+	delete(throttle.last, id)
+	throttle.mu.Unlock()
 }
 func minDuration(a, b time.Duration) time.Duration {
 	if a < b {

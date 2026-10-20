@@ -41,7 +41,7 @@ func main() {
 		log.Fatal(err)
 	}
 	manager := cluster.NewOnboardingService(
-		cluster.NewKubernetesConnector(5*time.Second),
+		cluster.NewKubernetesConnector(20*time.Second),
 		cipher,
 		database,
 	)

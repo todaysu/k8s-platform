@@ -26,6 +26,9 @@ type OnboardingService struct {
 	systemNamespaces   []string
 	resourceCacheMu    sync.Mutex
 	resourceCache      map[string]cachedResources
+	storageStatsMu     sync.Mutex
+	storageStatsAt     time.Time
+	storageStats       EventStorageStats
 	now                func() time.Time
 }
 
@@ -494,6 +497,9 @@ func (service *OnboardingService) Delete(ctx context.Context, id string) error {
 		if err := service.eventRepository.DeleteClusterEvents(ctx, id); err != nil {
 			return err
 		}
+		service.storageStatsMu.Lock()
+		service.storageStatsAt = time.Time{}
+		service.storageStatsMu.Unlock()
 	}
 	return service.repository.Delete(ctx, id)
 }

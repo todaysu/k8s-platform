@@ -364,7 +364,14 @@ func (connector *KubernetesConnector) ExecPod(ctx context.Context, parsed Parsed
 
 const maxPodLogBytes int64 = 1024 * 1024
 
-var ErrEventWatchExpired = errors.New("kubernetes event watch resource version expired")
+var (
+	// ErrEventWatchExpired tells the collector to re-list immediately.
+	ErrEventWatchExpired = errors.New("kubernetes event watch resource version expired")
+	// ErrEventWatchClosed is returned when the server closes a healthy watch
+	// stream (for example after TimeoutSeconds). The collector must back off
+	// and re-list instead of restarting the watch in a tight loop.
+	ErrEventWatchClosed = errors.New("kubernetes event watch closed")
+)
 
 func (connector *KubernetesConnector) ListEvents(ctx context.Context, parsed ParsedKubeconfig) (EventBatch, error) {
 	clientset, err := connector.clientset(parsed)
@@ -394,9 +401,18 @@ func (connector *KubernetesConnector) ListEvents(ctx context.Context, parsed Par
 }
 
 func (connector *KubernetesConnector) WatchEvents(ctx context.Context, parsed ParsedKubeconfig, apiVersion string, resourceVersion string, receive func(ClusterEvent) error) error {
-	clientset, err := connector.clientset(parsed)
+	// A watch is a long-lived response body. rest.Config.Timeout is applied as
+	// http.Client.Timeout, which covers the whole response including the body,
+	// so it would cut every watch after the general request timeout. Watches
+	// are bounded by TimeoutSeconds and the caller's context instead.
+	config := connector.watchConfig(parsed)
+	httpClient, err := connector.httpClient(config)
 	if err != nil {
 		return err
+	}
+	clientset, err := kubernetes.NewForConfigAndClient(config, httpClient)
+	if err != nil {
+		return mapConnectionError(err)
 	}
 	timeout := int64(300)
 	options := metav1.ListOptions{AllowWatchBookmarks: true, ResourceVersion: resourceVersion, TimeoutSeconds: &timeout}
@@ -437,11 +453,19 @@ func (connector *KubernetesConnector) WatchEvents(ctx context.Context, parsed Pa
 			return err
 		}
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrEventWatchClosed
 }
 
 func (connector *KubernetesConnector) clientset(parsed ParsedKubeconfig) (*kubernetes.Clientset, error) {
+	return connector.clientsetWithTimeout(parsed, connector.timeout)
+}
+
+func (connector *KubernetesConnector) clientsetWithTimeout(parsed ParsedKubeconfig, timeout time.Duration) (*kubernetes.Clientset, error) {
 	config := connector.restConfig(parsed)
+	config.Timeout = timeout
 	httpClient, err := connector.httpClient(config)
 	if err != nil {
 		return nil, err
@@ -451,6 +475,12 @@ func (connector *KubernetesConnector) clientset(parsed ParsedKubeconfig) (*kuber
 		return nil, mapConnectionError(err)
 	}
 	return clientset, nil
+}
+
+func (connector *KubernetesConnector) watchConfig(parsed ParsedKubeconfig) *rest.Config {
+	config := connector.restConfig(parsed)
+	config.Timeout = 0
+	return config
 }
 
 func normalizedEventV1(event *eventsv1.Event) ClusterEvent {

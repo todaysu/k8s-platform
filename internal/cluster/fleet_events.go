@@ -321,7 +321,7 @@ func (service *OnboardingService) GetFleetEvents(ctx context.Context, q FleetEve
 	}
 	result.Pagination = EventPagination{Page: q.Page, PageSize: q.Limit, TotalItems: total, TotalPages: max(1, (total+q.Limit-1)/q.Limit)}
 	result.Facets = EventFacets{Types: sortedKeys(all.types), Namespaces: sortedKeys(all.namespaces), Kinds: sortedKeys(all.kinds)}
-	result.Storage, err = service.eventRepository.EventStorageStats(ctx)
+	result.Storage, err = service.eventStorageStats(ctx)
 	if err != nil {
 		return FleetEventOverview{}, err
 	}
