@@ -1,0 +1,118 @@
+.ks-pod-terminal-card {
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ks-pod-terminal-header {
+  align-items: center;
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  display: flex;
+  gap: var(--pf-t--global--spacer--md);
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+}
+
+.ks-pod-terminal-header > div {
+  min-width: 0;
+}
+
+.ks-pod-terminal-header span {
+  color: var(--pf-t--global--text--color--subtle);
+  display: block;
+  margin-top: .3rem;
+}
+
+.ks-pod-terminal-card .pf-v6-c-card__body {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ks-pod-terminal-toolbar {
+  align-items: center;
+  display: grid;
+  gap: var(--pf-t--global--spacer--sm);
+  grid-template-columns: minmax(12rem, 18rem) minmax(10rem, 14rem) auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.ks-pod-terminal-field,
+.ks-pod-terminal-field .pf-v6-c-form-control {
+  min-width: 0;
+  width: 100%;
+}
+
+.ks-pod-terminal-action {
+  min-width: 7rem;
+  white-space: nowrap;
+}
+
+.ks-pod-terminal-target {
+  color: var(--pf-t--global--text--color--subtle);
+  min-width: 0;
+  overflow: hidden;
+  text-align: end;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ks-pod-terminal {
+  background: #151515;
+  border: 1px solid #3c3f42;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px #000;
+  box-sizing: border-box;
+  contain: layout paint;
+  height: 32rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: .75rem;
+  width: 100%;
+}
+
+.ks-pod-terminal .xterm {
+  height: 100%;
+  max-width: 100%;
+}
+
+.ks-pod-terminal .xterm-screen {
+  max-width: 100%;
+}
+
+@media (max-width: 64rem) {
+  .ks-pod-terminal-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .ks-pod-terminal-target {
+    grid-column: 1 / -1;
+    text-align: start;
+  }
+}
+
+@media (max-width: 48rem) {
+  .ks-pod-terminal-header {
+    align-items: flex-start;
+  }
+
+  .ks-pod-terminal-toolbar {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .ks-pod-terminal-action,
+  .ks-pod-terminal-target {
+    grid-column: 1;
+    width: 100%;
+  }
+
+  .ks-pod-terminal-target {
+    white-space: normal;
+  }
+
+  .ks-pod-terminal {
+    height: 26rem;
+  }
+}

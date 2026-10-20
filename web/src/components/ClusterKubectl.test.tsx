@@ -1,0 +1,8 @@
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expect, it, vi } from 'vitest'
+import ClusterKubectl from './ClusterKubectl'
+import { AuthContext } from '../auth/context'
+vi.mock('./KubectlTTY',()=>({default:({fullscreen,onToggleFullscreen}:{fullscreen:boolean;onToggleFullscreen:()=>void})=> <><button onClick={onToggleFullscreen}>{fullscreen?'退出全屏':'全屏'}</button><div aria-label="kubectl TTY 交互式终端">会话输出</div></>}))
+it('keeps the same terminal mounted when toggling fullscreen',async()=>{const user=userEvent.setup();render(<ClusterKubectl clusterId="a" clusterName="test01"/>);const terminal=screen.getByLabelText('kubectl TTY 交互式终端');await user.click(screen.getByRole('button',{name:'全屏'}));expect(screen.getByRole('dialog')).toBeInTheDocument();expect(screen.getByLabelText('kubectl TTY 交互式终端')).toBe(terminal);await user.click(screen.getByRole('button',{name:'退出全屏'}));expect(screen.getByLabelText('kubectl TTY 交互式终端')).toBe(terminal)})
+it('denies viewers',()=>{render(<AuthContext.Provider value={{user:{id:1,username:'reader',role:'viewer',disabled:false},manage(){},password(){},logout(){}}}><ClusterKubectl clusterId="a" clusterName="test01"/></AuthContext.Provider>);expect(screen.getByText('集群管理终端仅管理员可用')).toBeInTheDocument();expect(screen.queryByLabelText('kubectl TTY 交互式终端')).not.toBeInTheDocument()})

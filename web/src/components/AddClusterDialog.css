@@ -1,0 +1,53 @@
+.ks-file-drop {
+  align-items: center;
+  background: var(--pf-t--global--background--color--secondary--default);
+  border: 1px dashed var(--pf-t--global--border--color--default);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pf-t--global--spacer--sm);
+  justify-content: center;
+  min-height: 190px;
+  padding: var(--pf-t--global--spacer--xl);
+  text-align: center;
+}
+
+.ks-file-drop__icon {
+  color: var(--pf-t--global--icon--color--brand--default);
+  height: 2rem;
+  width: 2rem;
+}
+
+.ks-file-drop span {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.ks-file-drop .ks-file-drop__selection {
+  color: var(--pf-t--global--text--color--regular);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.ks-validation-preview {
+  display: grid;
+  gap: var(--pf-t--global--spacer--sm);
+  margin-block: var(--pf-t--global--spacer--md) 0;
+}
+
+.ks-validation-preview div {
+  display: grid;
+  gap: var(--pf-t--global--spacer--xs);
+  grid-template-columns: 8rem minmax(0, 1fr);
+}
+
+.ks-validation-preview dt {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.ks-validation-preview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ks-validation-preview__note {
+  margin-block: var(--pf-t--global--spacer--md) 0;
+}

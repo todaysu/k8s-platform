@@ -1,611 +1,964 @@
+import OperationsToolsPage from './OperationsToolsPage'
+import FleetMonitoringPage from './FleetMonitoringPage'
+import PlatformAccessPage from './PlatformAccessPage'
+import { usePermission } from '../auth/context'
+import { AccountMenu } from '../auth/Auth'
 import {
-  AddRounded,
-  AppsRounded,
-  CheckCircleRounded,
-  ChevronRightRounded,
-  CloudOffRounded,
-  DashboardRounded,
-  ErrorOutlineRounded,
-  HubRounded,
-  LanRounded,
-  MoreHorizRounded,
-  SearchRounded,
-  SettingsRounded,
-  StorageRounded,
-  SyncRounded,
-  WarningAmberRounded,
-} from '@mui/icons-material'
-import {
-  Avatar,
-  Box,
+  Alert,
+  AlertActionCloseButton,
+  AlertActionLink,
+  AlertGroup,
   Button,
-  Chip,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
   Divider,
-  Drawer,
-  FormControl,
-  IconButton,
-  InputAdornment,
-  MenuItem,
-  Paper,
-  Select,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
-  Tooltip,
-  Typography,
-} from '@mui/material'
-import { useMemo, useState } from 'react'
-
-import AddClusterDialog from '../components/AddClusterDialog'
+  FormSelect,
+  FormSelectOption,
+  Grid,
+  GridItem,
+  Label,
+  Masthead,
+  MastheadBrand,
+  MastheadContent,
+  MastheadLogo,
+  MastheadMain,
+  MastheadToggle,
+  Nav,
+  NavGroup,
+  NavItem,
+  NavList,
+  Page,
+  PageSection,
+  PageSidebar,
+  PageSidebarBody,
+  PageToggleButton,
+  Pagination,
+  SearchInput,
+  Title,
+  Toolbar,
+  ToolbarContent,
+  ToolbarGroup,
+  ToolbarItem,
+} from '@patternfly/react-core'
 import {
-  clusters,
-  type Cluster,
-  type ClusterEnvironment,
-  type ClusterStatus,
-} from '../fixtures/mockClusters'
+  AngleDoubleLeftIcon,
+  AngleDoubleRightIcon,
+  AngleRightIcon,
+  BellIcon,
+  BarsIcon,
+  ChartBarIcon,
+  CheckCircleIcon,
+  CubesIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  PlusIcon,
+  SearchIcon,
+  ServerIcon,
+  SyncAltIcon,
+  TachometerAltIcon,
+} from '@patternfly/react-icons'
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-const sidebarWidth = 236
+import { fetchClusters, fetchFleetCapacity, type FleetCapacity, type GlobalResourceResult, type ManagedCluster } from '../api/clusters'
+import AddClusterDialog from '../components/AddClusterDialog'
+import GlobalResourceSearch from '../components/GlobalResourceSearch'
+import { PlatformBrand, PLATFORM_FULL_NAME } from '../components/PlatformBrand'
+import { buildInspectionFindings, type InspectionFinding } from '../inspections/findings'
+import ClusterOverviewPage from './ClusterOverviewPage'
+import FleetCapacityPage from './FleetCapacityPage'
+import FleetEventsPage from './FleetEventsPage'
+import FleetInspectionsPage from './FleetInspectionsPage'
+import './ClusterManagementPage.css'
 
-const statusMeta: Record<
-  ClusterStatus,
-  { color: string; icon: typeof CheckCircleRounded; label: string; tint: string }
-> = {
-  healthy: {
-    color: '#21835b',
-    icon: CheckCircleRounded,
-    label: '运行正常',
-    tint: '#eaf6f0',
-  },
-  unreachable: {
-    color: '#c8473a',
-    icon: CloudOffRounded,
-    label: '连接失败',
-    tint: '#fbecea',
-  },
-  warning: {
-    color: '#bd7314',
-    icon: WarningAmberRounded,
-    label: '需要关注',
-    tint: '#fff4df',
-  },
+type ClusterStatus = 'healthy' | 'warning' | 'unreachable'
+
+type Cluster = {
+  apiLatencyMs: number | null
+  apiServer: string
+  cpuUtilization: number | null
+  coreComponents: { ready: number; total: number } | null
+  environment: string
+  clusterType: string
+  id: string
+  instances: { ready: number; total: number } | null
+  kubernetesVersion: string
+  lastChecked: string
+  memoryUtilization: number | null
+  metricsAvailable: boolean
+  name: string
+  nodes: { ready: number; total: number } | null
+  status: ClusterStatus
+  technologyStack: string
+  warningCount: number | null
+  workerCores: number | null
+  workerNodes: number | null
 }
+
+function toDisplayCluster(cluster: ManagedCluster): Cluster {
+  return {
+    apiLatencyMs: cluster.api_latency_ms,
+    apiServer: cluster.api_server,
+    cpuUtilization: cluster.cpu_utilization,
+    coreComponents: cluster.core_components_ready === null || cluster.core_components_total === null
+      ? null
+      : { ready: cluster.core_components_ready, total: cluster.core_components_total },
+    environment: cluster.environment,
+    clusterType: cluster.cluster_type || (cluster.technology_stack === 'OCP' ? 'OCP' : ['TCS', 'CMBK8S'].includes(cluster.technology_stack) ? 'G01' : '未标记'),
+    id: cluster.id,
+    instances: cluster.instances_ready === null || cluster.instances_total === null
+      ? null
+      : { ready: cluster.instances_ready, total: cluster.instances_total },
+    kubernetesVersion: cluster.kubernetes_version,
+    lastChecked: new Date(cluster.last_checked_at).toLocaleString('zh-CN', { hour12: false }),
+    memoryUtilization: cluster.memory_utilization,
+    metricsAvailable: cluster.metrics_available,
+    name: cluster.name,
+    nodes: cluster.nodes_ready === null || cluster.nodes_total === null
+      ? null
+      : { ready: cluster.nodes_ready, total: cluster.nodes_total },
+    status: cluster.connection_status !== 'connected'
+      ? 'unreachable'
+      : (
+          (cluster.nodes_ready !== null && cluster.nodes_total !== null && cluster.nodes_ready < cluster.nodes_total)
+          || (cluster.instances_ready !== null && cluster.instances_total !== null && cluster.instances_ready < cluster.instances_total)
+          || (cluster.core_components_ready !== null && cluster.core_components_total !== null && cluster.core_components_ready < cluster.core_components_total)
+        ) ? 'warning' : 'healthy',
+    technologyStack: cluster.technology_stack || '未标记',
+    warningCount: cluster.nodes_ready === null || cluster.nodes_total === null
+      || cluster.instances_ready === null || cluster.instances_total === null
+      || cluster.core_components_ready === null || cluster.core_components_total === null
+      ? null
+      : (cluster.nodes_total - cluster.nodes_ready)
+        + (cluster.instances_total - cluster.instances_ready)
+        + (cluster.core_components_total - cluster.core_components_ready),
+    workerCores: cluster.worker_cores,
+    workerNodes: cluster.worker_nodes,
+  }
+}
+
+const statusPriority: Record<ClusterStatus, number> = {
+  unreachable: 0,
+  warning: 1,
+  healthy: 2,
+}
+
+const statusMeta: Record<ClusterStatus, {
+  icon: typeof CheckCircleIcon
+  label: string
+  status: 'success' | 'warning' | 'danger'
+}> = {
+  healthy: { icon: CheckCircleIcon, label: '健康', status: 'success' },
+  warning: { icon: ExclamationTriangleIcon, label: '需要关注', status: 'warning' },
+  unreachable: { icon: ExclamationCircleIcon, label: '连接失败', status: 'danger' },
+}
+
+type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'inspections' | 'access' | 'tools' | 'monitoring'
 
 const navItems = [
-  { icon: DashboardRounded, label: '健康概览' },
-  { active: true, icon: StorageRounded, label: '集群管理' },
-  { icon: AppsRounded, label: '业务全景', soon: true },
-  { icon: WarningAmberRounded, label: '事件中心', soon: true },
-  { icon: HubRounded, label: '巡检分析', soon: true },
+  { icon: TachometerAltIcon, id: 'overview' as const, label: '概览' },
+  { icon: ServerIcon, id: 'clusters' as const, label: '集群' },
+  { icon: ChartBarIcon, id: 'monitoring' as const, label: '监控' },
+  { icon: ChartBarIcon, id: 'capacity' as const, label: '容量' },
+  { icon: BellIcon, id: 'events' as const, label: '跨集群事件' },
+  { icon: SearchIcon, id: 'inspections' as const, label: '巡检分析' },
+  { icon: CubesIcon, id: 'tools' as const, label: '运维工具' },
 ]
 
-function StatusBadge({ status }: { status: ClusterStatus }) {
+const statusFilters = [
+  { label: '全部状态', value: 'ALL' },
+  { label: '健康', value: 'healthy' },
+  { label: '需关注', value: 'warning' },
+  { label: '连接失败', value: 'unreachable' },
+] as const
+
+function StatusLabel({ status }: { status: ClusterStatus }) {
   const meta = statusMeta[status]
-  const StatusIcon = meta.icon
+  return <Label isCompact status={meta.status}>{meta.label}</Label>
+}
+
+type MetricCardProps = {
+  active: boolean
+  detail: string
+  label: string
+  onClick: () => void
+  status: 'brand' | 'success' | 'warning' | 'danger'
+  value: string
+}
+
+function MetricCard({ active, detail, label, onClick, status, value }: MetricCardProps) {
   return (
-    <Chip
-      icon={<StatusIcon sx={{ color: `${meta.color} !important` }} />}
-      label={meta.label}
-      size="small"
-      sx={{ bgcolor: meta.tint, color: meta.color, fontWeight: 700 }}
-    />
+    <Card
+      className={`ks-metric-card ks-metric-card--${status}`}
+      component="button"
+      isClickable
+      isClicked={active}
+      onClick={onClick}
+    >
+      <CardBody>
+        <span className="ks-metric-card__label"><i aria-hidden="true" />{label}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </CardBody>
+    </Card>
   )
 }
 
-function SummaryCard({
-  accent,
-  label,
-  value,
+function AppMasthead({ onOpenSearch, refreshedAt }: { onOpenSearch: () => void; refreshedAt: string }) {
+  return (
+    <Masthead className="ks-masthead" display={{ default: 'inline' }}>
+      <MastheadMain>
+        <MastheadToggle>
+          <PageToggleButton aria-label="展开或收起导航" isHamburgerButton>
+            <BarsIcon />
+          </PageToggleButton>
+        </MastheadToggle>
+        <MastheadBrand>
+          <MastheadLogo className="ks-brand" href="#" aria-label={`${PLATFORM_FULL_NAME}首页`}>
+            <PlatformBrand />
+          </MastheadLogo>
+        </MastheadBrand>
+      </MastheadMain>
+      <MastheadContent>
+        <Toolbar className="ks-masthead-toolbar" isFullHeight>
+          <ToolbarContent>
+            <ToolbarItem className="ks-global-search-trigger ks-masthead-text-item">
+              <Button icon={<SearchIcon />} onClick={onOpenSearch} variant="plain">跨集群搜索应用与资源</Button>
+            </ToolbarItem>
+            <ToolbarItem align={{ default: 'alignEnd' }} className="ks-masthead-text-item ks-refresh-time">
+              最近刷新 {refreshedAt}
+            </ToolbarItem>
+
+          </ToolbarContent>
+        </Toolbar>
+      </MastheadContent>
+    </Masthead>
+  )
+}
+
+function AppSidebar({
+  activeSection,
+  isCollapsed,
+  onNavigate,
+  onToggle,
 }: {
-  accent: string
-  label: string
-  value: string
+  activeSection: NavigationSection
+  isCollapsed: boolean
+  onNavigate: (section: NavigationSection) => void
+  onToggle: () => void
 }) {
   return (
-    <Paper
-      elevation={0}
-      sx={{
-        border: '1px solid #dfe6e4',
-        borderRadius: 2.5,
-        minWidth: 0,
-        overflow: 'hidden',
-        p: 2.25,
-        position: 'relative',
-      }}
-    >
-      <Box
-        sx={{ bgcolor: accent, bottom: 0, left: 0, position: 'absolute', top: 0, width: 4 }}
+    <PageSidebar className={isCollapsed ? 'ks-sidebar is-collapsed' : 'ks-sidebar'}>
+      <PageSidebarBody isFilled className="ks-sidebar-navigation">
+        <Nav aria-label="全局导航">
+          <NavGroup title="多集群运维">
+            <NavList>
+              {navItems.map((item) => {
+                const Icon = item.icon
+                return (
+                  <NavItem
+                    icon={<Icon />}
+                    isActive={'id' in item && item.id === activeSection}
+                    itemId={item.label}
+                    key={item.label}
+                    onClick={'id' in item ? () => onNavigate(item.id!) : undefined}
+                    preventDefault
+                    to="#"
+                  >
+                    {[<span key="label" className="ks-nav-label">{item.label}</span>]}
+                  </NavItem>
+                )
+              })}
+            </NavList>
+          </NavGroup>
+        </Nav>
+      </PageSidebarBody>
+      <Button
+        aria-label={isCollapsed ? '展开侧边栏' : '收起侧边栏'}
+        className="ks-sidebar-collapse"
+        icon={isCollapsed ? <AngleDoubleRightIcon /> : <AngleDoubleLeftIcon />}
+        onClick={onToggle}
+        variant="plain"
       />
-      <Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700 }}>
-        {label}
-      </Typography>
-      <Typography
-        sx={{ fontFamily: '"SFMono-Regular", Consolas, monospace', mt: 0.6 }}
-        variant="h4"
-      >
-        {value}
-      </Typography>
-    </Paper>
+      <PageSidebarBody isFilled={false} className="ks-sidebar-footer"><div className="ks-sidebar-account"><AccountMenu /></div></PageSidebarBody>
+    </PageSidebar>
   )
 }
 
-function AppSidebar() {
-  return (
-    <Box
-      component="aside"
-      sx={{
-        bgcolor: '#102f34',
-        bottom: 0,
-        color: '#d9e8e8',
-        display: { md: 'flex', xs: 'none' },
-        flexDirection: 'column',
-        left: 0,
-        position: 'fixed',
-        top: 0,
-        width: sidebarWidth,
-        zIndex: 5,
-      }}
-    >
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', px: 2.5, py: 3 }}>
-        <Avatar
-          variant="rounded"
-          sx={{ bgcolor: '#54d1c2', color: '#0b3438', height: 38, width: 38 }}
-        >
-          <LanRounded />
-        </Avatar>
-        <Box>
-          <Typography color="white" sx={{ fontWeight: 800, letterSpacing: '-.02em' }}>
-            KubeScope
-          </Typography>
-          <Typography color="#8fb0b2" sx={{ fontSize: 10, letterSpacing: '.14em' }}>
-            CONTROL PLANE
-          </Typography>
-        </Box>
-      </Stack>
+function FleetHealthCard({ clusters, onViewAll }: { clusters: Cluster[]; onViewAll: () => void }) {
+  const healthy = clusters.filter((cluster) => cluster.status === 'healthy').length
+  const warning = clusters.filter((cluster) => cluster.status === 'warning').length
+  const unreachable = clusters.filter((cluster) => cluster.status === 'unreachable').length
+  const total = clusters.length
+  const percentage = (value: number) => total === 0 ? 0 : (value / total) * 100
+  const workerNodes = clusters.reduce((sum, cluster) => sum + (cluster.workerNodes ?? 0), 0)
+  const workerCores = clusters.reduce((sum, cluster) => sum + (cluster.workerCores ?? 0), 0)
+  const latencies = clusters
+    .flatMap((cluster) => cluster.apiLatencyMs === null ? [] : [cluster.apiLatencyMs])
+    .sort((left, right) => left - right)
+  const p95Latency = latencies.length === 0 ? null : latencies[Math.ceil(latencies.length * 0.95) - 1]
 
-      <Typography color="#73979a" sx={{ fontSize: 10, fontWeight: 800, px: 2.5, py: 1 }}>
-        运维工作台
-      </Typography>
-      <Stack spacing={0.5} sx={{ px: 1.5 }}>
-        {navItems.map((item) => {
-          const NavIcon = item.icon
+  return (
+    <Card className="ks-overview-card" isFullHeight>
+      <CardHeader actions={{ actions: <Button isInline onClick={onViewAll} variant="link">查看全部集群</Button>, hasNoOffset: false }}>
+        <CardTitle><Title headingLevel="h2" size="lg">Fleet 健康分布</Title></CardTitle>
+      </CardHeader>
+      <CardBody>
+        <div className="ks-fleet-total"><strong>{total}</strong><span>套集群</span></div>
+        <div aria-label={`${healthy} 个健康、${warning} 个需要关注、${unreachable} 个连接失败`} className="ks-health-bar">
+          <span className="ks-health-bar__healthy" style={{ width: `${percentage(healthy)}%` }} />
+          <span className="ks-health-bar__warning" style={{ width: `${percentage(warning)}%` }} />
+          <span className="ks-health-bar__danger" style={{ width: `${percentage(unreachable)}%` }} />
+        </div>
+        <div className="ks-health-legend">
+          <span><i className="is-healthy" />健康 {healthy}</span>
+          <span><i className="is-warning" />需要关注 {warning}</span>
+          <span><i className="is-danger" />连接失败 {unreachable}</span>
+        </div>
+        <Divider />
+        <div className="ks-fleet-stats">
+          <span><strong>{clusters.some((cluster) => cluster.workerNodes !== null) ? workerNodes : '—'}</strong><small>Worker 节点</small></span>
+          <span><strong>{clusters.some((cluster) => cluster.workerCores !== null) ? workerCores : '—'}</strong><small>Worker 核数</small></span>
+          <span><strong>{p95Latency === null ? '—' : `${p95Latency} ms`}</strong><small>API P95</small></span>
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+function ResourceHealthCard({ clusters, onViewResources }: { clusters: Cluster[]; onViewResources: () => void }) {
+  const versions = [...new Set(clusters.map((cluster) => cluster.kubernetesVersion))]
+  const aggregate = (selector: (cluster: Cluster) => { ready: number; total: number } | null) => {
+    const values = clusters.flatMap((cluster) => {
+      const value = selector(cluster)
+      return value === null ? [] : [value]
+    })
+    if (values.length === 0) return null
+    return values.reduce((total, value) => ({
+      ready: total.ready + value.ready,
+      total: total.total + value.total,
+    }), { ready: 0, total: 0 })
+  }
+  const rows = [
+    { label: '节点 Ready', value: aggregate((cluster) => cluster.nodes) },
+    { label: '实例 Ready', value: aggregate((cluster) => cluster.instances) },
+    { label: '核心组件正常', value: aggregate((cluster) => cluster.coreComponents) },
+  ]
+  return (
+    <Card className="ks-overview-card" isFullHeight>
+      <CardHeader actions={{ actions: <Button isInline onClick={onViewResources} variant="link">查看资源</Button>, hasNoOffset: false }}>
+        <CardTitle><Title headingLevel="h2" size="lg">资源健康</Title></CardTitle>
+      </CardHeader>
+      <CardBody>
+        <div className="ks-resource-health">
+          {rows.map((row) => {
+            const percent = row.value === null || row.value.total === 0 ? 0 : row.value.ready / row.value.total * 100
+            return (
+            <div className="ks-resource-row" key={row.label}>
+              <div>
+                <span>{row.label}</span>
+                <strong>{row.value === null ? '采集不可用' : `${row.value.ready} / ${row.value.total}`}</strong>
+              </div>
+              <div aria-label={`${row.label} ${percent.toFixed(1)}%`} className="ks-progress-track">
+                <span className={percent < 100 ? 'is-warning' : ''} style={{ width: `${percent}%` }} />
+              </div>
+            </div>
+            )
+          })}
+        </div>
+        <Divider />
+        <div className="ks-version-summary">
+          <span className="ks-version-summary__title">Kubernetes 版本</span>
+          {versions.length === 0 && <span>暂无数据</span>}
+          {versions.map((version) => (
+            <Label isCompact key={version} variant="outline">
+              {version} · {clusters.filter((cluster) => cluster.kubernetesVersion === version).length}
+            </Label>
+          ))}
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+function AttentionCard({ findings, onSelect, onViewAll }: {
+  findings: InspectionFinding[]
+  onSelect: (finding: InspectionFinding) => void
+  onViewAll: () => void
+}) {
+  const actionable = findings.filter((finding) => finding.severity !== 'info')
+  const visible = actionable.slice(0, 3)
+
+  return (
+    <Card className="ks-overview-card" isFullHeight>
+      <CardHeader actions={{ actions: <Button isInline onClick={onViewAll} variant="link">查看全部问题 {actionable.length}</Button>, hasNoOffset: false }}>
+        <CardTitle><Title headingLevel="h2" size="lg">需要关注</Title></CardTitle>
+      </CardHeader>
+      <CardBody className="ks-attention-list">
+        {visible.map((finding) => {
+          const Icon = finding.severity === 'critical' ? ExclamationCircleIcon : ExclamationTriangleIcon
           return (
-            <Button
-              color="inherit"
-              key={item.label}
-              startIcon={<NavIcon fontSize="small" />}
-              sx={{
-                bgcolor: item.active ? 'rgba(84,209,194,.14)' : 'transparent',
-                border: item.active
-                  ? '1px solid rgba(84,209,194,.22)'
-                  : '1px solid transparent',
-                color: item.active ? '#75e0d3' : '#b7cccd',
-                justifyContent: 'flex-start',
-                px: 1.5,
-                py: 1.1,
-                textTransform: 'none',
-              }}
-            >
-              <Box component="span" sx={{ flexGrow: 1, textAlign: 'left' }}>
-                {item.label}
-              </Box>
-              {item.soon && (
-                <Typography color="#6f9294" sx={{ fontSize: 9 }}>
-                  后续
-                </Typography>
-              )}
-            </Button>
+            <div className="ks-attention-item" key={finding.id}>
+              <Icon className={`ks-status-icon is-${finding.severity === 'critical' ? 'unreachable' : 'warning'}`} />
+              <span>
+                <strong>{finding.title}</strong>
+                <small>{finding.clusterName} · {finding.evidence[0]}</small>
+              </span>
+              <Button isInline onClick={() => onSelect(finding)} variant="link">查看</Button>
+            </div>
           )
         })}
-      </Stack>
-
-      <Box sx={{ flexGrow: 1 }} />
-      <Divider sx={{ borderColor: 'rgba(255,255,255,.09)' }} />
-      <Button
-        color="inherit"
-        startIcon={<SettingsRounded />}
-        sx={{ justifyContent: 'flex-start', m: 1.5, px: 1.5, textTransform: 'none' }}
-      >
-        系统设置
-      </Button>
-      <Stack direction="row" spacing={1.2} sx={{ alignItems: 'center', px: 2.5, pb: 2.5 }}>
-        <Avatar sx={{ bgcolor: '#f1b55c', color: '#3c2a0e', height: 32, width: 32 }}>
-          管
-        </Avatar>
-        <Box>
-          <Typography color="white" sx={{ fontSize: 13, fontWeight: 700 }}>
-            平台管理员
-          </Typography>
-          <Typography color="#7fa0a2" sx={{ fontSize: 10 }}>
-            单管理员模式
-          </Typography>
-        </Box>
-      </Stack>
-    </Box>
+        {visible.length === 0 && <p className="ks-card-subtitle">当前没有需要运维人员处理的问题。</p>}
+      </CardBody>
+    </Card>
   )
 }
 
-function ClusterDetailDrawer({ cluster, onClose }: { cluster: Cluster | null; onClose: () => void }) {
-  if (!cluster) return null
-  const meta = statusMeta[cluster.status]
+const capacityPercent = (value: number, total: number) => total > 0 ? value / total * 100 : 0
 
-  return (
-    <Drawer anchor="right" onClose={onClose} open={Boolean(cluster)}>
-      <Box sx={{ p: 3.5, width: { sm: 420, xs: '90vw' } }}>
-        <Stack direction="row" sx={{ alignItems: 'flex-start', justifyContent: 'space-between' }}>
-          <Box>
-            <Typography
-              color="text.secondary"
-              sx={{ fontSize: 11, fontWeight: 800, letterSpacing: '.12em' }}
-            >
-              CLUSTER PROFILE
-            </Typography>
-            <Typography sx={{ mt: 0.7 }} variant="h5">
-              {cluster.name}
-            </Typography>
-          </Box>
-          <IconButton aria-label="关闭详情" onClick={onClose}>
-            <ChevronRightRounded />
-          </IconButton>
-        </Stack>
+function CapacityOverviewCard({ capacity, error, isLoading, onRefresh, onViewCapacity }: {
+  capacity: FleetCapacity | null
+  error: string
+  isLoading: boolean
+  onRefresh: () => void
+  onViewCapacity: () => void
+}) {
+  if (isLoading && !capacity) return <Card className="ks-capacity-overview"><CardBody className="ks-capacity-overview__loading"><span className="ks-capacity-overview__pulse" /><span>正在汇总资源池容量…</span></CardBody></Card>
+  if (!capacity) return <Alert actionLinks={<AlertActionLink onClick={onRefresh}>重新读取</AlertActionLink>} isInline title="容量摘要暂时不可用" variant="warning">{error || '没有可用的集群容量数据。'}</Alert>
 
-        <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-          <StatusBadge status={cluster.status} />
-          <Chip label={cluster.environment} size="small" variant="outlined" />
-        </Stack>
+  const poolMap = new Map<string, { attention: boolean; clusterType: string; cpuRemaining: number; cpuTotal: number; environment: string; memoryRemaining: number; memoryTotal: number }>()
+  for (const item of capacity.items) {
+    const value = item.capacity
+    const cpuReserve = value.cpu_allocatable_milli * value.safety_reserve_percent / 100
+    const memoryReserve = value.memory_allocatable_bytes * value.safety_reserve_percent / 100
+    const clusterType = item.cluster_type || (item.technology_stack === 'OCP' ? 'OCP' : ['TCS', 'CMBK8S'].includes(item.technology_stack) ? 'G01' : '未标记')
+    const key = `${item.environment}\u0000${clusterType}`
+    const current = poolMap.get(key) ?? { attention: false, clusterType, cpuRemaining: 0, cpuTotal: 0, environment: item.environment, memoryRemaining: 0, memoryTotal: 0 }
+    current.cpuTotal += value.cpu_allocatable_milli
+    current.cpuRemaining += Math.max(0, value.cpu_allocatable_milli - value.platform.cpu_requests_milli - value.business.cpu_requests_milli - value.pending.cpu_requests_milli - cpuReserve)
+    current.memoryTotal += value.memory_allocatable_bytes
+    current.memoryRemaining += Math.max(0, value.memory_allocatable_bytes - value.platform.memory_requests_bytes - value.business.memory_requests_bytes - value.pending.memory_requests_bytes - memoryReserve)
+    current.attention ||= (value.new_platform_namespaces ?? []).length > 0
+      || (value.business.pods_without_cpu_requests ?? 0) > 0 || (value.business.pods_without_memory_requests ?? 0) > 0
+      || value.comparison.status === 'drift' || value.comparison.status === 'rebaseline'
+    poolMap.set(key, current)
+  }
+  const pools = [...poolMap.values()].map((pool) => ({ ...pool, cpuHeadroom: capacityPercent(pool.cpuRemaining, pool.cpuTotal), memoryHeadroom: capacityPercent(pool.memoryRemaining, pool.memoryTotal) }))
+  const lowestCPU = pools.reduce((lowest, pool) => !lowest || pool.cpuHeadroom < lowest.cpuHeadroom ? pool : lowest, null as (typeof pools)[number] | null)
+  const lowestMemory = pools.reduce((lowest, pool) => !lowest || pool.memoryHeadroom < lowest.memoryHeadroom ? pool : lowest, null as (typeof pools)[number] | null)
+  const attentionPools = pools.filter((pool) => Math.min(pool.cpuHeadroom, pool.memoryHeadroom) <= 20 || pool.attention).length
+  const risk = attentionPools > 0 || capacity.failures.length > 0
+  const poolLabel = (pool: (typeof pools)[number] | null) => pool ? `${pool.environment} / ${pool.clusterType}` : '暂无数据'
 
-        <Paper sx={{ bgcolor: '#f6f9f8', mt: 3, p: 2.5 }} variant="outlined">
-          <Typography color="text.secondary" sx={{ fontSize: 12 }}>
-            API SERVER
-          </Typography>
-          <Typography sx={{ fontFamily: 'monospace', fontSize: 13, mt: 0.5 }}>
-            {cluster.apiServer}
-          </Typography>
-        </Paper>
+  return <Card className={`ks-capacity-overview${risk ? ' is-attention' : ''}`}>
+    <CardHeader actions={{ actions: <Button isInline onClick={onViewCapacity} variant="link">查看容量详情</Button>, hasNoOffset: false }}><CardTitle><Title headingLevel="h2" size="lg">资源池容量</Title></CardTitle></CardHeader>
+    <CardBody>
+      <div className="ks-capacity-overview__metrics">
+        <div><span>容量资源池</span><strong>{pools.length}</strong></div>
+        <div><span>最低 CPU 余量</span><strong>{lowestCPU ? `${lowestCPU.cpuHeadroom.toFixed(1)}%` : '—'}</strong><small>{poolLabel(lowestCPU)}</small></div>
+        <div><span>最低内存余量</span><strong>{lowestMemory ? `${lowestMemory.memoryHeadroom.toFixed(1)}%` : '—'}</strong><small>{poolLabel(lowestMemory)}</small></div>
+        <div className={attentionPools > 0 ? 'is-warning' : ''}><span>需关注资源池</span><strong>{attentionPools}</strong></div>
+      </div>
+      {(capacity.failures.length > 0 || error) && <div className="ks-capacity-overview__notice"><ExclamationTriangleIcon /><span>{capacity.failures.length > 0 ? `${capacity.failures.length} 套集群未纳入本次汇总` : '自动刷新失败，当前显示上一次成功数据'}</span></div>}
+    </CardBody>
+  </Card>
+}
 
-        <Stack divider={<Divider flexItem />} sx={{ mt: 2 }}>
-          {[
-            ['Kubernetes 版本', cluster.kubernetesVersion],
-            ['节点状态', `${cluster.nodes.ready} / ${cluster.nodes.total} Ready`],
-            ['实例状态', `${cluster.instances.ready} / ${cluster.instances.total} Ready`],
-            ['Warning 事件', `${cluster.warningCount} 条`],
-            ['最后检查', cluster.lastChecked],
-          ].map(([label, value]) => (
-            <Stack
-              direction="row"
-              key={label}
-              sx={{ justifyContent: 'space-between', py: 1.8 }}
-            >
-              <Typography color="text.secondary" variant="body2">
-                {label}
-              </Typography>
-              <Typography sx={{ fontWeight: 700 }} variant="body2">
-                {value}
-              </Typography>
-            </Stack>
-          ))}
-        </Stack>
+function clusterIDFromPath() {
+  const match = window.location.pathname.match(/^\/clusters\/([^/]+)\/(?:overview|capacity|nodes|events|terminal|pods\/.*|workloads(?:\/.*)?)\/?$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
 
-        {cluster.status !== 'healthy' && (
-          <Box sx={{ bgcolor: meta.tint, borderRadius: 2, color: meta.color, mt: 2, p: 2 }}>
-            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-              <ErrorOutlineRounded fontSize="small" />
-              <Typography sx={{ fontWeight: 800 }} variant="body2">
-                {cluster.status === 'unreachable'
-                  ? 'API Server 连接超时，请检查网络或凭据。'
-                  : '发现节点或实例异常，建议进入资源视图排查。'}
-              </Typography>
-            </Stack>
-          </Box>
-        )}
-
-        <Button endIcon={<ChevronRightRounded />} fullWidth sx={{ mt: 3 }} variant="contained">
-          进入集群详情
-        </Button>
-      </Box>
-    </Drawer>
-  )
+function navigationSectionFromLocation(): NavigationSection {
+ if (window.location.pathname === '/tools' || window.location.pathname.startsWith('/tools/')) return 'tools'
+ if (window.location.pathname === '/monitoring') return 'monitoring'
+  if (window.location.pathname === '/settings/access') return 'access'
+  if (window.location.pathname === '/capacity') return 'capacity'
+  if (window.location.pathname === '/events') return 'events'
+  if (window.location.pathname === '/inspections') return 'inspections'
+  return window.location.pathname.startsWith('/clusters') ? 'clusters' : 'overview'
 }
 
 function ClusterManagementPage() {
+ const canConfigure = usePermission('configure')
+
+  const loadingRef = useRef(false)
+  const [activeClusterID, setActiveClusterID] = useState<string | null>(() => clusterIDFromPath())
+  const [activeSection, setActiveSection] = useState<NavigationSection>(() => navigationSectionFromLocation())
+  const [clusters, setClusters] = useState<Cluster[]>([])
+  const [fleetCapacity, setFleetCapacity] = useState<FleetCapacity | null>(null)
+  const [capacityError, setCapacityError] = useState('')
+  const [capacityLoading, setCapacityLoading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [environment, setEnvironment] = useState<'ALL' | ClusterEnvironment>('ALL')
+  const [environment, setEnvironment] = useState('ALL')
+  const [clusterType, setClusterType] = useState('ALL')
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [page, setPage] = useState(1)
+  const [perPage, setPerPage] = useState(20)
   const [query, setQuery] = useState('')
-  const [selectedCluster, setSelectedCluster] = useState<Cluster | null>(null)
+  const [refreshedAt, setRefreshedAt] = useState('—')
   const [status, setStatus] = useState<'ALL' | ClusterStatus>('ALL')
+  const [technologyStack, setTechnologyStack] = useState('ALL')
+  const [successNotice, setSuccessNotice] = useState<{ message: string; title: string } | null>(null)
+
+  const loadClusters = useCallback(async () => {
+    if (loadingRef.current) return
+    loadingRef.current = true
+    setIsLoading(true)
+    setLoadError('')
+    try {
+      const managedClusters = await fetchClusters()
+      setClusters(managedClusters.map(toDisplayCluster))
+      setRefreshedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    } catch (requestError) {
+      setLoadError(requestError instanceof Error ? requestError.message : '读取集群列表失败，请稍后重试。')
+    } finally {
+      loadingRef.current = false
+      setIsLoading(false)
+    }
+  }, [])
+
+  const loadCapacity = useCallback(async () => {
+    setCapacityLoading(true); setCapacityError('')
+    try {
+      const result = await fetchFleetCapacity()
+      if (!Array.isArray(result.items) || !Array.isArray(result.failures)) throw new Error('平台返回了无法识别的容量摘要。')
+      setFleetCapacity(result)
+    }
+    catch (requestError) { setCapacityError(requestError instanceof Error ? requestError.message : '读取容量摘要失败。') }
+    finally { setCapacityLoading(false) }
+  }, [])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => void loadClusters(), 0)
+    const intervalId = window.setInterval(() => void loadClusters(), 30_000)
+    return () => {
+      window.clearTimeout(timeoutId)
+      window.clearInterval(intervalId)
+    }
+  }, [loadClusters])
+
+  useEffect(() => {
+    if (activeSection !== 'overview' && activeSection !== 'inspections') return undefined
+    const timeoutId = window.setTimeout(() => void loadCapacity(), 0)
+    const intervalId = window.setInterval(() => void loadCapacity(), 60_000)
+    return () => { window.clearTimeout(timeoutId); window.clearInterval(intervalId) }
+  }, [activeSection, loadCapacity])
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveClusterID(clusterIDFromPath())
+      setActiveSection(navigationSectionFromLocation())
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  useEffect(() => {
+    if (!successNotice) return
+
+    const timeoutId = window.setTimeout(() => setSuccessNotice(null), 4000)
+    return () => window.clearTimeout(timeoutId)
+  }, [successNotice])
 
   const visibleClusters = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    return clusters.filter((cluster) => {
-      const matchesQuery =
-        !normalizedQuery ||
-        cluster.name.toLowerCase().includes(normalizedQuery) ||
-        cluster.apiServer.toLowerCase().includes(normalizedQuery)
-      const matchesEnvironment = environment === 'ALL' || cluster.environment === environment
-      const matchesStatus = status === 'ALL' || cluster.status === status
-      return matchesQuery && matchesEnvironment && matchesStatus
-    })
-  }, [environment, query, status])
+    return clusters
+      .filter((cluster) => {
+        const matchesQuery = !normalizedQuery
+          || cluster.name.toLowerCase().includes(normalizedQuery)
+          || cluster.apiServer.toLowerCase().includes(normalizedQuery)
+        const matchesEnvironment = environment === 'ALL' || cluster.environment === environment
+        const matchesClusterType = clusterType === 'ALL' || cluster.clusterType === clusterType
+        const matchesStatus = status === 'ALL' || cluster.status === status
+        const matchesTechnologyStack = technologyStack === 'ALL' || cluster.technologyStack === technologyStack
+        return matchesQuery && matchesEnvironment && matchesClusterType && matchesStatus && matchesTechnologyStack
+      })
+      .sort((a, b) => statusPriority[a.status] - statusPriority[b.status])
+  }, [clusterType, clusters, environment, query, status, technologyStack])
+
+  const healthyCount = clusters.filter((cluster) => cluster.status === 'healthy').length
+  const unreachableCount = clusters.filter((cluster) => cluster.status === 'unreachable').length
+  const inspectionFindings = useMemo(() => buildInspectionFindings(clusters, fleetCapacity), [clusters, fleetCapacity])
+  const actionableFindingCount = inspectionFindings.filter((finding) => finding.severity !== 'info').length
+  const environments = ['ALL', ...new Set(clusters.map((cluster) => cluster.environment))]
+  const clusterTypes = ['ALL', ...new Set(clusters.map((cluster) => cluster.clusterType))]
+  const technologyStacks = ['ALL', ...new Set(clusters.map((cluster) => cluster.technologyStack))]
+  const environmentSummary = [...new Set(clusters.map((cluster) => cluster.environment))]
+    .map((item) => `${item} ${clusters.filter((cluster) => cluster.environment === item).length}`)
+    .join(' · ') || '暂无集群'
+  const maxPage = Math.max(1, Math.ceil(visibleClusters.length / perPage))
+  const currentPage = Math.min(page, maxPage)
+  const pagedClusters = visibleClusters.slice((currentPage - 1) * perPage, currentPage * perPage)
+
+  const clearFilters = () => {
+    setEnvironment('ALL')
+    setClusterType('ALL')
+    setQuery('')
+    setStatus('ALL')
+    setTechnologyStack('ALL')
+    setPage(1)
+  }
+
+  const showClusterList = (nextStatus: 'ALL' | ClusterStatus = 'ALL') => {
+    setStatus(nextStatus)
+    setPage(1)
+    if (window.location.pathname !== '/clusters') {
+      window.history.pushState({ section: 'clusters' }, '', '/clusters')
+    }
+    setActiveClusterID(null)
+    setActiveSection('clusters')
+  }
+
+  const openCluster = (clusterID: string) => {
+    window.history.pushState({ clusterID }, '', `/clusters/${encodeURIComponent(clusterID)}/overview`)
+    setActiveClusterID(clusterID)
+    setActiveSection('clusters')
+  }
+
+  const openClusterCapacity = (clusterID: string) => {
+    window.history.pushState({ clusterID }, '', `/clusters/${encodeURIComponent(clusterID)}/capacity`)
+    setActiveClusterID(clusterID)
+    setActiveSection('clusters')
+  }
+
+  const openFleet = () => {
+    window.history.pushState({ section: 'clusters' }, '', '/clusters')
+    setActiveClusterID(null)
+    setActiveSection('clusters')
+  }
+
+  const openGlobalSearchResult = (result: GlobalResourceResult) => {
+    const suffix = result.kind === 'Pod'
+      ? ['pods', result.namespace, result.name]
+      : ['workloads', result.kind, result.namespace, result.name]
+    const path = [result.cluster_id, ...suffix].map((segment) => encodeURIComponent(segment)).join('/')
+    window.history.pushState({ globalSearch: result.name }, '', `/clusters/${path}`)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+    setGlobalSearchOpen(false)
+    setActiveClusterID(result.cluster_id)
+    setActiveSection('clusters')
+  }
+
+  const navigateFromSidebar = (section: NavigationSection) => {
+ if (section === 'tools' || section === 'monitoring') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
+    if (section === 'access') { window.history.pushState({ section }, '', '/settings/access'); setActiveClusterID(null); setActiveSection('access'); return }
+    if (section === 'clusters') {
+      showClusterList('ALL')
+      return
+    }
+    if (section === 'capacity') {
+      if (window.location.pathname !== '/capacity') window.history.pushState({ section: 'capacity' }, '', '/capacity')
+      setActiveClusterID(null)
+      setActiveSection('capacity')
+      return
+    }
+    if (section === 'events') {
+      if (window.location.pathname !== '/events') window.history.pushState({ section: 'events' }, '', '/events')
+      setActiveClusterID(null)
+      setActiveSection('events')
+      return
+    }
+    if (section === 'inspections') {
+      if (window.location.pathname !== '/inspections') window.history.pushState({ section: 'inspections' }, '', '/inspections')
+      setActiveClusterID(null)
+      setActiveSection('inspections')
+      return
+    }
+    if (window.location.pathname !== '/') {
+      window.history.pushState({ section: 'overview' }, '', '/')
+    }
+    setActiveClusterID(null)
+    setActiveSection('overview')
+  }
+
+  const masthead = <AppMasthead onOpenSearch={() => setGlobalSearchOpen(true)} refreshedAt={refreshedAt} />
+  const sidebar = (
+    <AppSidebar
+      activeSection={activeSection}
+      isCollapsed={isSidebarCollapsed}
+      onNavigate={navigateFromSidebar}
+      onToggle={() => setIsSidebarCollapsed((current) => !current)}
+    />
+  )
 
   return (
-    <Box sx={{ minHeight: '100vh' }}>
-      <AppSidebar />
-      <Box
-        component="main"
-        sx={{
-          backgroundImage:
-            'linear-gradient(rgba(10,102,113,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(10,102,113,.035) 1px, transparent 1px)',
-          backgroundSize: '28px 28px',
-          ml: { md: `${sidebarWidth}px`, xs: 0 },
-          minHeight: '100vh',
-        }}
-      >
-        <Box sx={{ mx: 'auto', maxWidth: 1500, px: { lg: 5, sm: 3, xs: 2 }, py: 4 }}>
-          <Stack
-            direction={{ sm: 'row', xs: 'column' }}
-            spacing={2}
-            sx={{
-              alignItems: { sm: 'flex-end', xs: 'flex-start' },
-              justifyContent: 'space-between',
-            }}
-          >
-            <Box>
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.8 }}>
-                <Typography
-                  color="primary.main"
-                  sx={{ fontSize: 11, fontWeight: 800, letterSpacing: '.14em' }}
-                >
-                  FLEET / CLUSTERS
-                </Typography>
-                <Chip label="UI 原型数据" size="small" sx={{ fontSize: 10, height: 20 }} />
-              </Stack>
-              <Typography component="h1" variant="h4">
-                集群管理
-              </Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.8 }}>
-                统一维护 DEV 与 PRD 集群连接，快速识别异常和凭据状态。
-              </Typography>
-            </Box>
-            <Stack direction="row" spacing={1.2}>
-              <Button color="inherit" startIcon={<SyncRounded />} variant="outlined">
-                刷新状态
-              </Button>
-              <Button
-                onClick={() => setDialogOpen(true)}
-                startIcon={<AddRounded />}
-                variant="contained"
-              >
-                添加集群
-              </Button>
-            </Stack>
-          </Stack>
+    <Page
+      className={`ks-page${isSidebarCollapsed ? ' ks-page--sidebar-collapsed' : ''}`}
+      defaultManagedSidebarIsOpen
+      isManagedSidebar
+      masthead={masthead}
+      sidebar={sidebar}
+    >
+      <GlobalResourceSearch onClose={() => setGlobalSearchOpen(false)} onOpenResult={openGlobalSearchResult} open={globalSearchOpen} />
+      {activeClusterID ? (
+        <ClusterOverviewPage
+          key={activeClusterID}
+          clusterId={activeClusterID}
+          onBack={openFleet}
+          onRemoved={(name) => {
+            setClusters((current) => current.filter((cluster) => cluster.id !== activeClusterID))
+            setSuccessNotice({ message: `${name} 已从平台解除纳管。`, title: '集群已移除' })
+            window.history.replaceState({ section: 'clusters' }, '', '/clusters')
+            setActiveClusterID(null)
+            setActiveSection('clusters')
+          }}
+        />
+      ) : (
+        <>
+            <PageSection className="ks-title-section" variant="secondary">
+              <div className="ks-title-row">
+                <div>
+                  <Title headingLevel="h1" size="2xl">
+                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? '运维工具' : activeSection === 'monitoring' ? '监控' : '集群'}
+                  </Title>
 
-          <Box
-            sx={{
-              display: 'grid',
-              gap: 1.5,
-              gridTemplateColumns: {
-                lg: 'repeat(4, 1fr)',
-                sm: 'repeat(2, 1fr)',
-                xs: '1fr',
-              },
-              mt: 3.5,
-            }}
-          >
-            <SummaryCard accent="#0a6671" label="已纳管集群" value="60" />
-            <SummaryCard accent="#21835b" label="连接正常" value="54" />
-            <SummaryCard accent="#d48318" label="需要关注" value="4" />
-            <SummaryCard accent="#c8473a" label="连接失败" value="2" />
-          </Box>
-
-          <Paper
-            elevation={0}
-            sx={{ border: '1px solid #dfe6e4', borderRadius: 2.5, mt: 2, overflow: 'hidden' }}
-          >
-            <Stack
-              direction={{ lg: 'row', xs: 'column' }}
-              spacing={1.2}
-              sx={{ alignItems: { lg: 'center', xs: 'stretch' }, p: 2 }}
-            >
-              <TextField
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索集群名称或 API Server"
-                size="small"
-                slotProps={{
-                  htmlInput: {
-                    'aria-label': '搜索集群',
-                  },
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchRounded fontSize="small" />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-                sx={{ flexBasis: 340 }}
-                value={query}
-              />
-              <FormControl size="small" sx={{ minWidth: 132 }}>
-                <Select
-                  aria-label="环境筛选"
-                  onChange={(event) => setEnvironment(event.target.value as typeof environment)}
-                  value={environment}
-                >
-                  <MenuItem value="ALL">全部环境</MenuItem>
-                  <MenuItem value="PRD">PRD</MenuItem>
-                  <MenuItem value="DEV">DEV</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ minWidth: 142 }}>
-                <Select
-                  aria-label="状态筛选"
-                  onChange={(event) => setStatus(event.target.value as typeof status)}
-                  value={status}
-                >
-                  <MenuItem value="ALL">全部状态</MenuItem>
-                  <MenuItem value="healthy">运行正常</MenuItem>
-                  <MenuItem value="warning">需要关注</MenuItem>
-                  <MenuItem value="unreachable">连接失败</MenuItem>
-                </Select>
-              </FormControl>
-              <Box sx={{ flexGrow: 1 }} />
-              <Typography color="text.secondary" variant="body2">
-                共 60 套集群 · 当前展示 {visibleClusters.length} 条原型数据
-              </Typography>
-            </Stack>
-            <Divider />
-
-            <TableContainer>
-              <Table aria-label="集群列表" sx={{ minWidth: 1080 }}>
-                <TableHead>
-                  <TableRow>
-                    {['集群', '环境', '连接状态', 'Kubernetes', '节点', '实例', '异常', '最后检查', ''].map(
-                      (header) => (
-                        <TableCell
-                          key={header || 'actions'}
-                          sx={{
-                            bgcolor: '#f7f9f8',
-                            color: '#687a7d',
-                            fontSize: 11,
-                            fontWeight: 800,
-                            letterSpacing: '.04em',
-                            py: 1.4,
-                          }}
-                        >
-                          {header}
-                        </TableCell>
-                      ),
+                </div>
+                {(activeSection === 'overview' || activeSection === 'clusters' || activeSection === 'inspections') && (
+                  <div className="ks-title-actions">
+                    <Button icon={<SyncAltIcon />} isLoading={isLoading || (activeSection === 'inspections' && capacityLoading)} onClick={() => { void loadClusters(); if (activeSection === 'inspections') void loadCapacity() }} variant="secondary">{activeSection === 'inspections' ? '重新巡检' : '刷新状态'}</Button>
+                    {activeSection === 'clusters' && canConfigure && (
+                      <Button icon={<PlusIcon />} onClick={() => setDialogOpen(true)} variant="primary">添加集群</Button>
                     )}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {visibleClusters.map((cluster) => (
-                    <TableRow
-                      hover
-                      key={cluster.id}
-                      onClick={() => setSelectedCluster(cluster)}
-                      sx={{ cursor: 'pointer', '&:last-child td': { borderBottom: 0 } }}
-                    >
-                      <TableCell>
-                        <Typography sx={{ fontWeight: 800 }} variant="body2">
-                          {cluster.name}
-                        </Typography>
-                        <Typography
-                          color="text.secondary"
-                          sx={{ fontFamily: 'monospace', fontSize: 11 }}
-                        >
-                          {cluster.apiServer}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={cluster.environment}
-                          size="small"
-                          sx={{
-                            bgcolor: cluster.environment === 'PRD' ? '#202e38' : '#e8eff0',
-                            color: cluster.environment === 'PRD' ? '#fff' : '#365559',
-                            fontWeight: 800,
-                          }}
+                  </div>
+                )}
+              </div>
+            </PageSection>
+
+            <PageSection className="ks-content-section">
+              {activeSection !== 'access' && activeSection !== 'tools' && loadError && <Alert isInline title="集群列表读取失败" variant="danger">{loadError}</Alert>}
+              {activeSection !== 'access' && activeSection !== 'tools' && unreachableCount > 0 && (
+                <Alert
+                  actionLinks={<AlertActionLink onClick={() => showClusterList('unreachable')}>查看异常集群</AlertActionLink>}
+                  isInline
+                  title={`${unreachableCount} 个集群连接失败`}
+                  variant="danger"
+                >
+                  请进入集群详情检查 API Server 连通性与凭据状态。
+                </Alert>
+              )}
+
+              {activeSection === 'overview' ? <div className="ks-overview-layout">
+              <Grid className="ks-metric-grid" hasGutter>
+                <GridItem lg={3} md={6} span={12}>
+                  <MetricCard active={status === 'ALL'} detail={environmentSummary} label="已纳管集群" onClick={() => showClusterList('ALL')} status="brand" value={String(clusters.length)} />
+                </GridItem>
+                <GridItem lg={3} md={6} span={12}>
+                  <MetricCard active={status === 'healthy'} detail="节点、实例与核心组件正常" label="健康集群" onClick={() => showClusterList('healthy')} status="success" value={String(healthyCount)} />
+                </GridItem>
+                <GridItem lg={3} md={6} span={12}>
+                  <MetricCard active={false} detail="由健康、容量和配置规则统一生成" label="需要关注" onClick={() => navigateFromSidebar('inspections')} status="warning" value={String(actionableFindingCount)} />
+                </GridItem>
+                <GridItem lg={3} md={6} span={12}>
+                  <MetricCard active={status === 'unreachable'} detail="API Server 或采集权限异常" label="连接失败" onClick={() => showClusterList('unreachable')} status="danger" value={String(unreachableCount)} />
+                </GridItem>
+              </Grid>
+
+              <Grid className="ks-overview-grid" hasGutter>
+                <GridItem lg={4} span={12}><FleetHealthCard clusters={clusters} onViewAll={() => showClusterList('ALL')} /></GridItem>
+                <GridItem lg={4} span={12}><ResourceHealthCard clusters={clusters} onViewResources={() => showClusterList('ALL')} /></GridItem>
+                <GridItem lg={4} span={12}>
+                  <AttentionCard
+                    findings={inspectionFindings}
+                    onSelect={(finding) => finding.destination === 'capacity' ? openClusterCapacity(finding.clusterId) : openCluster(finding.clusterId)}
+                    onViewAll={() => navigateFromSidebar('inspections')}
+                  />
+                </GridItem>
+              </Grid>
+              <div className="ks-capacity-overview-wrap"><CapacityOverviewCard capacity={fleetCapacity} error={capacityError} isLoading={capacityLoading} onRefresh={() => void loadCapacity()} onViewCapacity={() => navigateFromSidebar('capacity')} /></div>
+              </div> : activeSection === 'capacity' ? (
+                <FleetCapacityPage onOpenCluster={openClusterCapacity} />
+              ) : activeSection === 'tools' ? (
+ <OperationsToolsPage clusters={clusters}/>
+ ) : activeSection === 'monitoring' ? (
+ <FleetMonitoringPage clusters={clusters} onOpenCluster={openCluster} onRefresh={()=>void loadClusters()}/>
+ ) : activeSection === 'access' ? (
+                <PlatformAccessPage />
+              ) : activeSection === 'events' ? (
+                <FleetEventsPage clusters={clusters} />
+              ) : activeSection === 'inspections' ? (
+                <FleetInspectionsPage findings={inspectionFindings} onOpenCapacity={openClusterCapacity} onOpenCluster={openCluster} />
+              ) : (
+              <Card className="ks-cluster-card" id="managed-clusters">
+                <CardHeader>
+                  <CardTitle>
+                    <Title headingLevel="h2" size="lg">已纳管集群</Title>
+                    <span className="ks-card-subtitle">{clusters.length} 套集群</span>
+                  </CardTitle>
+                </CardHeader>
+                <Toolbar className="ks-cluster-toolbar" id="cluster-toolbar">
+                  <ToolbarContent rowWrap={{ default: 'wrap' }}>
+                    <ToolbarGroup className="ks-filter-group">
+                      <ToolbarItem className="ks-filter-control ks-filter-control--search">
+                        <span className="ks-filter-label">搜索</span>
+                        <SearchInput
+                          aria-label="搜索集群"
+                          onChange={(_, value) => { setQuery(value); setPage(1) }}
+                          onClear={() => { setQuery(''); setPage(1) }}
+                          placeholder="按名称或 API 地址搜索"
+                          value={query}
                         />
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={cluster.status} />
-                      </TableCell>
-                      <TableCell>
-                        <Typography sx={{ fontFamily: 'monospace', fontSize: 12 }}>
-                          {cluster.kubernetesVersion}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography sx={{ fontWeight: 750 }} variant="body2">
-                          {cluster.nodes.ready}
-                          <Box component="span" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                            {' '}/ {cluster.nodes.total}
-                          </Box>
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography sx={{ fontWeight: 750 }} variant="body2">
-                          {cluster.instances.ready}
-                          <Box component="span" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                            {' '}/ {cluster.instances.total}
-                          </Box>
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography
-                          color={cluster.warningCount > 0 ? 'warning.main' : 'text.secondary'}
-                          sx={{ fontWeight: 800 }}
-                          variant="body2"
+                      </ToolbarItem>
+                      <ToolbarItem className="ks-filter-control">
+                        <span className="ks-filter-label">环境</span>
+                        <FormSelect
+                          aria-label="环境筛选"
+                          onChange={(_, value) => { setEnvironment(value); setPage(1) }}
+                          value={environment}
                         >
-                          {cluster.warningCount}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography color="text.secondary" variant="body2">
-                          {cluster.lastChecked}
-                        </Typography>
-                      </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title="更多操作">
-                          <IconButton
-                            aria-label={`${cluster.name} 更多操作`}
-                            onClick={(event) => event.stopPropagation()}
-                            size="small"
-                          >
-                            <MoreHorizRounded />
-                          </IconButton>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {visibleClusters.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={9} sx={{ py: 8, textAlign: 'center' }}>
-                        <SearchRounded color="disabled" sx={{ fontSize: 36 }} />
-                        <Typography sx={{ fontWeight: 700, mt: 1 }}>
-                          没有匹配的集群
-                        </Typography>
-                        <Typography color="text.secondary" variant="body2">
-                          尝试修改搜索词或筛选条件。
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
+                          {environments.map((item) => (
+                            <FormSelectOption key={item} label={item === 'ALL' ? '全部环境' : item} value={item} />
+                          ))}
+                        </FormSelect>
+                      </ToolbarItem>
+                      <ToolbarItem className="ks-filter-control">
+                        <span className="ks-filter-label">集群类型</span>
+                        <FormSelect
+                          aria-label="集群类型筛选"
+                          onChange={(_, value) => { setClusterType(value); setPage(1) }}
+                          value={clusterType}
+                        >
+                          {clusterTypes.map((item) => (
+                            <FormSelectOption key={item} label={item === 'ALL' ? '全部类型' : item} value={item} />
+                          ))}
+                        </FormSelect>
+                      </ToolbarItem>
+                      <ToolbarItem className="ks-filter-control">
+                        <span className="ks-filter-label">状态</span>
+                        <FormSelect
+                          aria-label="状态筛选"
+                          onChange={(_, value) => { setStatus(value as 'ALL' | ClusterStatus); setPage(1) }}
+                          value={status}
+                        >
+                          {statusFilters.map((item) => (
+                            <FormSelectOption key={item.value} label={item.label} value={item.value} />
+                          ))}
+                        </FormSelect>
+                      </ToolbarItem>
+                      <ToolbarItem className="ks-filter-control ks-filter-control--technology">
+                        <span className="ks-filter-label">技术栈</span>
+                        <FormSelect
+                          aria-label="技术栈筛选"
+                          onChange={(_, value) => { setTechnologyStack(value); setPage(1) }}
+                          value={technologyStack}
+                        >
+                          {technologyStacks.map((item) => (
+                            <FormSelectOption key={item} label={item === 'ALL' ? '全部技术栈' : item} value={item} />
+                          ))}
+                        </FormSelect>
+                      </ToolbarItem>
+                    </ToolbarGroup>
+                    <ToolbarItem align={{ default: 'alignEnd' }} className="ks-filter-meta">
+                      <span className="ks-result-count">显示 {visibleClusters.length} / {clusters.length} 套</span>
+                      {(query || environment !== 'ALL' || clusterType !== 'ALL' || status !== 'ALL' || technologyStack !== 'ALL') && (
+                        <Button isInline onClick={clearFilters} variant="link">清除筛选</Button>
+                      )}
+                      <span className="ks-auto-refresh"><SyncAltIcon /> 每 30 秒刷新</span>
+                    </ToolbarItem>
+                  </ToolbarContent>
+                </Toolbar>
 
-          <Stack
-            direction={{ sm: 'row', xs: 'column' }}
-            spacing={1}
-            sx={{ alignItems: { sm: 'center', xs: 'flex-start' }, mt: 2, px: 0.5 }}
+                <div className="ks-table-scroll">
+                  <Table aria-label="集群列表" gridBreakPoint="grid-lg" variant="compact">
+                    <Thead>
+                      <Tr>
+                        <Th width={20}>集群</Th>
+                        <Th>状态</Th>
+                        <Th>节点</Th>
+                        <Th>实例</Th>
+                        <Th>CPU</Th>
+                        <Th>内存</Th>
+                        <Th>API 延迟</Th>
+                        <Th>异常</Th>
+                        <Th>最后检查</Th>
+                        <Th screenReaderText="操作" />
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {pagedClusters.map((cluster) => (
+                        <Tr isClickable key={cluster.id} onRowClick={() => openCluster(cluster.id)}>
+                          <Td dataLabel="集群">
+                            <Button className="ks-cluster-link" isInline onClick={(event) => { event.stopPropagation(); openCluster(cluster.id) }} variant="link">
+                              {cluster.name}
+                            </Button>
+                            <span className="ks-cluster-meta">{cluster.environment} · {cluster.clusterType} · {cluster.technologyStack} · {cluster.kubernetesVersion}</span>
+                          </Td>
+                          <Td dataLabel="状态"><StatusLabel status={cluster.status} /></Td>
+                          <Td dataLabel="节点">{cluster.nodes ? `${cluster.nodes.ready} / ${cluster.nodes.total}` : '—'}</Td>
+                          <Td dataLabel="实例">{cluster.instances ? `${cluster.instances.ready} / ${cluster.instances.total}` : '—'}</Td>
+                          <Td dataLabel="CPU">{cluster.cpuUtilization === null ? '—' : `${cluster.cpuUtilization.toFixed(1)}%`}</Td>
+                          <Td dataLabel="内存">{cluster.memoryUtilization === null ? '—' : `${cluster.memoryUtilization.toFixed(1)}%`}</Td>
+                          <Td dataLabel="API 延迟">{cluster.apiLatencyMs === null ? '—' : `${cluster.apiLatencyMs} ms`}</Td>
+                          <Td dataLabel="异常">
+                            <span className={`ks-event-count is-${cluster.status}`}>
+                              {cluster.status === 'unreachable' ? '连接中断' : cluster.warningCount === null ? '—' : `${cluster.warningCount} 条`}
+                            </span>
+                          </Td>
+                          <Td dataLabel="最后检查">{cluster.lastChecked}</Td>
+                          <Td isActionCell>
+                            <Button aria-label={`查看 ${cluster.name}`} icon={<AngleRightIcon />} onClick={(event) => { event.stopPropagation(); openCluster(cluster.id) }} variant="plain" />
+                          </Td>
+                        </Tr>
+                      ))}
+                    </Tbody>
+                  </Table>
+                </div>
+
+                {visibleClusters.length === 0 && (
+                  <div className="ks-empty-state">
+                    <SearchIcon />
+                    <Title headingLevel="h3" size="lg">{clusters.length === 0 ? '还没有纳管集群' : '没有匹配的集群'}</Title>
+                    <p>{clusters.length === 0 ? '点击“添加集群”，上传 Kubeconfig 开始纳管。' : '调整搜索关键词或清除当前筛选条件。'}</p>
+                    {clusters.length > 0 && <Button onClick={clearFilters} variant="link">清除筛选</Button>}
+                  </div>
+                )}
+
+                <Pagination
+                  isCompact
+                  itemCount={visibleClusters.length}
+                  onPerPageSelect={(_, nextPerPage) => { setPerPage(nextPerPage); setPage(1) }}
+                  onSetPage={(_, nextPage) => setPage(nextPage)}
+                  page={currentPage}
+                  perPage={perPage}
+                  titles={{ items: '集群', ofWord: '共', paginationAriaLabel: '集群分页' }}
+                  variant="bottom"
+                />
+              </Card>
+              )}
+            </PageSection>
+        </>
+      )}
+      {successNotice && (
+        <AlertGroup isLiveRegion isToast>
+          <Alert
+            actionClose={<AlertActionCloseButton onClose={() => setSuccessNotice(null)} />}
+            title={successNotice.title}
+            variant="success"
           >
-            <Stack direction="row" spacing={0.7} sx={{ alignItems: 'center' }}>
-              <Box sx={{ bgcolor: '#21835b', borderRadius: '50%', height: 7, width: 7 }} />
-              <Typography color="text.secondary" variant="caption">
-                最近刷新：14:12:08
-              </Typography>
-            </Stack>
-            <Typography color="text.disabled" variant="caption">
-              ·
-            </Typography>
-            <Typography color="text.secondary" variant="caption">
-              页面为 UI 原型，尚未连接真实集群数据
-            </Typography>
-          </Stack>
-        </Box>
-      </Box>
-
-      <AddClusterDialog onClose={() => setDialogOpen(false)} open={dialogOpen} />
-      <ClusterDetailDrawer cluster={selectedCluster} onClose={() => setSelectedCluster(null)} />
-    </Box>
+            {successNotice.message}
+          </Alert>
+        </AlertGroup>
+      )}
+      <AddClusterDialog
+        environmentOptions={[...new Set(clusters.map((cluster) => cluster.environment))]}
+        onClose={() => setDialogOpen(false)}
+        onSuccess={(cluster) => {
+          setSuccessNotice({ message: `${cluster.name} 已成功纳管。`, title: '集群纳管成功' })
+          void loadClusters()
+        }}
+        open={activeSection === 'clusters' && dialogOpen}
+      />
+    </Page>
   )
 }
 

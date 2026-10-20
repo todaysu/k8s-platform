@@ -1,0 +1,17 @@
+.ks-login { min-height:100vh; display:grid; place-items:center; background:#edf1f5; padding:2rem; color:#18232e; }
+.ks-login>section { width:min(100%,28rem); border:1px solid #d7dee6; border-top:4px solid #b3132b; border-radius:12px; padding:2.5rem; background:white; box-shadow:0 12px 32px #18232e0d; }
+.ks-login-brand { margin-bottom:1.5rem; }
+.ks-login h1 { font-size:1.6rem; font-weight:600; margin-bottom:1rem; }
+.ks-login p,.ks-auth-panel p { margin-bottom:1rem; line-height:1.6; }
+.ks-login form,.ks-auth-form { display:grid; gap:1rem; }
+.ks-login label,.ks-auth-panel label { display:grid; gap:.4rem; }
+.ks-login input,.ks-auth-panel input,.ks-auth-panel select { padding:.6rem; border:1px solid #a9b4c0; border-radius:4px; background:white; color:#18232e; }
+.ks-login button,.ks-auth-panel button { padding:.5rem 1rem; border:1px solid #2863a4; color:#174f86; background:white; border-radius:4px; cursor:pointer; }
+.ks-login button[type=submit] { background:#2863a4; color:white; }
+.ks-login [role=alert],.ks-auth-panel [role=alert] { color:#a51a1a; }
+.ks-auth-overlay { position:fixed; inset:0; z-index:500; display:grid; place-items:center; padding:2rem; background:#0007; }
+.ks-auth-panel { background:white; color:#18232e; padding:1.5rem; border-radius:10px; width:min(100%,60rem); max-height:90vh; overflow:auto; }
+.ks-auth-panel header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }
+.ks-auth-panel h2 { font-size:1.5rem; }.ks-auth-panel h3 { margin:1.5rem 0 1rem; font-size:1.2rem; }
+.ks-auth-users table { width:100%; border-collapse:collapse; }.ks-auth-users td,.ks-auth-users th { text-align:left; padding:.75rem; border-bottom:1px solid #d7dee6; }.ks-auth-users td button { margin:.2rem; }
+.ks-account-menu { position:relative; }.ks-account-menu summary { cursor:pointer; padding:.5rem; }.ks-account-menu>div { position:absolute; right:0; top:100%; min-width:10rem; background:#fff; border:1px solid #ccc; box-shadow:0 4px 12px #0003; z-index:300; }.ks-account-menu button { display:block; width:100%; text-align:left; padding:.75rem 1rem; color:#18232e; background:#fff; border:0; cursor:pointer; }.ks-account-menu button:hover { background:#edf1f5; }

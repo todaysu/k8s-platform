@@ -1,128 +1,269 @@
-import { ContentPasteRounded, UploadFileRounded } from '@mui/icons-material'
 import {
   Alert,
-  Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Stack,
+  Form,
+  FormGroup,
+  FormSelect,
+  FormSelectOption,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
   Tab,
   Tabs,
-  TextField,
-  Typography,
-} from '@mui/material'
+  TabTitleIcon,
+  TabTitleText,
+  TextArea,
+  TextInput,
+} from '@patternfly/react-core'
+import { ClipboardIcon, UploadIcon } from '@patternfly/react-icons'
 import { useState } from 'react'
+import type { ChangeEvent } from 'react'
+
+import {
+  onboardCluster,
+} from '../api/clusters'
+import type { ManagedCluster } from '../api/clusters'
+
+import './AddClusterDialog.css'
 
 type Props = {
+  environmentOptions: string[]
   onClose: () => void
+  onSuccess: (cluster: ManagedCluster) => void
   open: boolean
 }
 
 type InputMode = 'upload' | 'paste'
-
-function AddClusterDialog({ onClose, open }: Props) {
+function AddClusterDialog({ environmentOptions, onClose, onSuccess, open }: Props) {
   const [mode, setMode] = useState<InputMode>('upload')
   const [name, setName] = useState('')
+  const [environment, setEnvironment] = useState('')
+  const [clusterType, setClusterType] = useState('')
+  const [technologyStack, setTechnologyStack] = useState('')
+  const [kubeconfig, setKubeconfig] = useState('')
+  const [fileName, setFileName] = useState('')
+  const [isOnboarding, setIsOnboarding] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleClose = () => {
+    setMode('upload')
+    setName('')
+    setEnvironment('')
+    setClusterType('')
+    setTechnologyStack('')
+    setKubeconfig('')
+    setFileName('')
+    setError('')
+    setIsOnboarding(false)
+    onClose()
+  }
+
+  const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setError('')
+    if (file.size > 1024 * 1024) {
+      setKubeconfig('')
+      setFileName('')
+      setError('Kubeconfig 不能超过 1 MiB。')
+      return
+    }
+
+    try {
+      setKubeconfig(await file.text())
+      setFileName(file.name)
+    } catch {
+      setKubeconfig('')
+      setFileName('')
+      setError('无法读取该文件，请重新选择。')
+    }
+  }
+
+  const handleOnboard = async () => {
+    setIsOnboarding(true)
+    setError('')
+    try {
+      const managedCluster = await onboardCluster(name.trim(), environment.trim(), clusterType, technologyStack, kubeconfig)
+      handleClose()
+      onSuccess(managedCluster)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '纳管集群失败，请稍后重试。')
+      setIsOnboarding(false)
+    }
+  }
 
   return (
-    <Dialog
-      fullWidth
-      maxWidth="sm"
-      onClose={onClose}
-      open={open}
-      slotProps={{ paper: { sx: { borderRadius: 3, overflow: 'hidden' } } }}
+    <Modal
+      aria-labelledby="add-cluster-title"
+      isOpen={open}
+      onClose={handleClose}
+      variant="medium"
     >
-      <DialogTitle component="h2" sx={{ pb: 1, pt: 3 }}>
-        纳管新集群
-      </DialogTitle>
-      <DialogContent>
-        <Typography color="text.secondary" sx={{ mb: 3 }} variant="body2">
-          填写集群名称并提供 Kubeconfig。平台会自动使用其中的 current-context。
-        </Typography>
+      <ModalHeader
+        description="填写集群名称并提供 Kubeconfig。平台会自动使用其中的 current-context。"
+        labelId="add-cluster-title"
+        title="纳管新集群"
+      />
+      <ModalBody>
+        <Form>
+          <FormGroup fieldId="cluster-name" isRequired label="集群名称">
+            <TextInput
+              aria-label="集群名称"
+              id="cluster-name"
+              isRequired
+              onChange={(_, value) => setName(value)}
+              placeholder="例如：cluster-shanghai-01"
+              value={name}
+            />
+          </FormGroup>
 
-        <Stack spacing={2.5}>
-          <TextField
-            autoFocus
-            fullWidth
-            label="集群名称"
-            onChange={(event) => setName(event.target.value)}
-            placeholder="例如：prd-shanghai-01"
-            value={name}
-          />
+          <FormGroup fieldId="cluster-environment" isRequired label="所属环境">
+            <TextInput
+              aria-label="所属环境"
+              id="cluster-environment"
+              isRequired
+              list="cluster-environment-options"
+              maxLength={32}
+              onChange={(_, value) => {
+                setEnvironment(value)
+                setError('')
+              }}
+              placeholder="输入或选择环境，例如：生产环境"
+              value={environment}
+            />
+            <datalist id="cluster-environment-options">
+              {environmentOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
+          </FormGroup>
 
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs
-              aria-label="Kubeconfig 录入方式"
-              onChange={(_, value: InputMode) => setMode(value)}
-              value={mode}
+          <FormGroup fieldId="cluster-type" isRequired label="集群类型">
+            <FormSelect
+              aria-label="集群类型"
+              id="cluster-type"
+              isRequired
+              onChange={(_, value) => {
+                setClusterType(value)
+                setTechnologyStack(value === 'OCP' ? 'OCP' : '')
+                setError('')
+              }}
+              value={clusterType}
             >
-              <Tab
-                icon={<UploadFileRounded fontSize="small" />}
-                iconPosition="start"
-                label="上传文件"
-                value="upload"
-              />
-              <Tab
-                icon={<ContentPasteRounded fontSize="small" />}
-                iconPosition="start"
-                label="粘贴内容"
-                value="paste"
-              />
-            </Tabs>
-          </Box>
+              <FormSelectOption isPlaceholder label="请选择集群类型" value="" />
+              <FormSelectOption label="G01" value="G01" />
+              <FormSelectOption label="OCP" value="OCP" />
+            </FormSelect>
+          </FormGroup>
+
+          <FormGroup fieldId="cluster-technology-stack" isRequired label="技术栈">
+            <FormSelect
+              aria-label="技术栈"
+              isDisabled={!clusterType || clusterType === 'OCP'}
+              id="cluster-technology-stack"
+              isRequired
+              onChange={(_, value) => {
+                setTechnologyStack(value)
+                setError('')
+              }}
+              value={technologyStack}
+            >
+              <FormSelectOption isPlaceholder label={clusterType ? '请选择技术栈' : '请先选择集群类型'} value="" />
+              {clusterType === 'G01' && <FormSelectOption label="TCS" value="TCS" />}
+              {clusterType === 'G01' && <FormSelectOption label="CMBK8S" value="CMBK8S" />}
+              {clusterType === 'OCP' && <FormSelectOption label="OCP（随集群类型自动选择）" value="OCP" />}
+            </FormSelect>
+          </FormGroup>
+
+          <Tabs
+            activeKey={mode}
+            aria-label="Kubeconfig 录入方式"
+            onSelect={(_, key) => setMode(key as InputMode)}
+          >
+            <Tab
+              eventKey="upload"
+              title={
+                <>
+                  <TabTitleIcon><UploadIcon /></TabTitleIcon>
+                  <TabTitleText>上传文件</TabTitleText>
+                </>
+              }
+            />
+            <Tab
+              eventKey="paste"
+              title={
+                <>
+                  <TabTitleIcon><ClipboardIcon /></TabTitleIcon>
+                  <TabTitleText>粘贴内容</TabTitleText>
+                </>
+              }
+            />
+          </Tabs>
 
           {mode === 'upload' ? (
-            <Box
-              sx={{
-                alignItems: 'center',
-                bgcolor: '#f6f9f8',
-                border: '1px dashed #9bb5b6',
-                borderRadius: 2,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-                px: 3,
-                py: 4,
-                textAlign: 'center',
-              }}
-            >
-              <UploadFileRounded color="primary" sx={{ fontSize: 34 }} />
-              <Typography sx={{ fontWeight: 700 }}>拖放 Kubeconfig 到这里</Typography>
-              <Typography color="text.secondary" variant="body2">
-                支持 .yaml、.yml 或无扩展名文件，最大 1 MiB
-              </Typography>
-              <Button component="label" size="small" variant="outlined">
+            <div className="ks-file-drop">
+              <UploadIcon className="ks-file-drop__icon" />
+              <strong>拖放 Kubeconfig 到这里</strong>
+              <span>支持 .yaml、.yml 或无扩展名文件，最大 1 MiB</span>
+              <Button component="label" variant="secondary">
                 选择文件
-                <input hidden type="file" />
+                <input
+                  accept=".yaml,.yml,application/yaml,text/yaml,text/plain"
+                  hidden
+                  onChange={handleFile}
+                  type="file"
+                />
               </Button>
-            </Box>
+              {fileName && <span className="ks-file-drop__selection">已选择：{fileName}</span>}
+            </div>
           ) : (
-            <TextField
-              fullWidth
-              label="Kubeconfig 内容"
-              minRows={9}
-              multiline
-              placeholder="apiVersion: v1&#10;clusters: ..."
-            />
+            <FormGroup fieldId="kubeconfig-content" label="Kubeconfig 内容">
+              <TextArea
+                aria-label="Kubeconfig 内容"
+                id="kubeconfig-content"
+                onChange={(_, value) => {
+                  setKubeconfig(value)
+                  setError('')
+                }}
+                placeholder={'apiVersion: v1\nclusters: ...'}
+                resizeOrientation="vertical"
+                rows={10}
+                value={kubeconfig}
+              />
+            </FormGroup>
           )}
 
-          <Alert severity="info">
-            测试连接成功后才会保存。Token 不会显示在页面中，原始 Kubeconfig
-            不会长期保留。
+          <Alert isInline title="凭据安全说明" variant="info">
+            支持内嵌 Token 或客户端证书。凭据不会显示在页面中，原始 Kubeconfig 不会长期保留。
           </Alert>
-        </Stack>
-      </DialogContent>
-      <DialogActions sx={{ borderColor: 'divider', borderTop: '1px solid', p: 2.5 }}>
-        <Button color="inherit" onClick={onClose}>
-          取消
+
+          {error && (
+            <Alert isInline title="纳管失败" variant="danger">
+              {error}
+            </Alert>
+          )}
+
+        </Form>
+      </ModalBody>
+      <ModalFooter>
+        <Button
+          isDisabled={
+            !name.trim()
+            || !environment.trim()
+            || !clusterType
+            || !technologyStack
+            || !kubeconfig.trim()
+            || isOnboarding
+          }
+          isLoading={isOnboarding}
+          onClick={handleOnboard}
+          variant="primary"
+        >
+          {isOnboarding ? '正在纳管' : '纳管集群'}
         </Button>
-        <Button disabled={!name.trim()} variant="contained">
-          测试连接
-        </Button>
-      </DialogActions>
-    </Dialog>
+        <Button onClick={handleClose} variant="link">取消</Button>
+      </ModalFooter>
+    </Modal>
   )
 }
 

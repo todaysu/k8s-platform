@@ -1,0 +1,19 @@
+.ks-classification-modal .pf-v6-c-modal-box__body { display: flex; flex-direction: column; gap: var(--pf-t--global--spacer--lg); }
+.ks-classification-modal .pf-v6-c-modal-box__body > * { flex-shrink: 0; }
+.ks-classification-loading { align-items: center; display: flex; gap: 1rem; justify-content: center; min-height: 18rem; }
+.ks-business-rule-summary { display: flex; flex-wrap: wrap; gap: 2rem; background: var(--pf-t--global--background--color--secondary--default); padding: 1rem; }
+.ks-classification-view-hint, .ks-business-candidates-header span { color: var(--pf-t--global--text--color--subtle); display: block; font-size: var(--pf-t--global--font--size--body--sm); margin-block-start: .5rem; }
+.ks-business-labels { display: flex; flex-wrap: wrap; gap: .5rem; }
+.ks-business-labels:empty { display: none; }
+.ks-business-candidates-header { align-items: center; display: flex; justify-content: space-between; gap: 1rem; }
+.ks-business-candidates-header > .pf-v6-c-form-control { max-width: 18rem; }
+.ks-classification-table { border: 1px solid var(--pf-t--global--border--color--default); max-height: 22rem; overflow: auto; }
+.ks-classification-table table { min-width: 58rem; }
+.ks-classification-table td:first-child strong { margin-inline-end: .5rem; }
+.ks-classification-empty { color: var(--pf-t--global--text--color--subtle); display: flex; flex-direction: column; gap: .5rem; padding: 1.5rem; text-align: center; }
+.ks-classification-note { max-width: 36rem; }
+@media (max-width: 48rem) {
+ .ks-business-candidates-header { align-items: stretch; flex-direction: column; }
+ .ks-business-candidates-header > .pf-v6-c-form-control { max-width: none; }
+ .ks-classification-table table { min-width: 0; }
+}

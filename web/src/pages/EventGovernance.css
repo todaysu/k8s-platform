@@ -1,0 +1,50 @@
+.ks-event-governance .pf-v6-c-card__body {
+  align-items: center;
+  display: flex;
+  gap: 28px;
+  justify-content: space-between;
+}
+
+.ks-event-governance p {
+  color: var(--pf-t--global--text--color--subtle);
+  margin-top: 5px;
+}
+
+.ks-event-governance dl {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  margin: 0;
+}
+
+.ks-event-governance dl div {
+  border-left: 3px solid var(--pf-t--global--color--brand--default);
+  padding-left: 14px;
+}
+
+.ks-event-governance dt,
+.ks-event-governance small {
+  color: var(--pf-t--global--text--color--subtle);
+  display: block;
+}
+
+.ks-event-governance dd {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 3px 0;
+}
+
+@media (max-width: 1100px) {
+  .ks-event-governance .pf-v6-c-card__body {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .ks-event-governance dl {
+    grid-template-columns: repeat(2, 1fr);
+    width: 100%;
+  }
+}
+
+@media (max-width: 700px) {
+  .ks-event-governance dl { grid-template-columns: 1fr; }
+}

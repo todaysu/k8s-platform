@@ -1,0 +1,74 @@
+.ks-fleet-capacity-page { display: flex; flex-direction: column; gap: var(--pf-t--global--spacer--lg); }
+.ks-capacity-pools-card .pf-v6-c-card__header { border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-capacity-pools-card .pf-v6-c-card__title > span { color: var(--pf-t--global--text--color--subtle); display: block; font-size: var(--pf-t--global--font--size--body--sm); font-weight: 400; margin-block-start: var(--pf-t--global--spacer--xs); }
+.ks-capacity-pools-card .pf-v6-c-toolbar { border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-capacity-pools-card .pf-v6-c-toolbar__content { padding-inline: var(--pf-t--global--spacer--xl); }
+.ks-capacity-pools-card td small { color: var(--pf-t--global--text--color--subtle); display: block; margin-block-start: .15rem; }
+.ks-capacity-stack-labels { align-items: center; display: flex; flex-wrap: wrap; gap: var(--pf-t--global--spacer--xs); }
+.ks-capacity-pools-card tr.is-selected > td { background: var(--pf-t--global--background--color--primary--hover, #f0f0f0); }
+.ks-capacity-pools-card tr.is-selected > td:first-child { box-shadow: inset 3px 0 0 var(--pf-t--global--color--brand--default); }
+.ks-active-pool-heading { align-items: center; background: var(--pf-t--global--background--color--primary--default); border-inline-start: 4px solid var(--pf-t--global--color--brand--default); display: flex; gap: var(--pf-t--global--spacer--md); padding: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--lg); }
+.ks-active-pool-heading > div { display: flex; flex-direction: column; min-width: 12rem; }
+.ks-active-pool-heading > div > span,
+.ks-active-pool-heading > span:last-child { color: var(--pf-t--global--text--color--subtle); font-size: var(--pf-t--global--font--size--body--sm); }
+.ks-active-pool-heading > div > strong { font-family: var(--acm-font-display); font-size: var(--pf-t--global--font--size--heading--lg); }
+
+.ks-fleet-capacity-kpis .pf-v6-c-card { border-block-start: 3px solid var(--pf-t--global--color--brand--default); min-height: 8.25rem; }
+.ks-fleet-capacity-kpis .pf-v6-c-card.is-attention { border-block-start-color: var(--pf-t--global--color--status--warning--default); }
+.ks-fleet-capacity-kpis span,
+.ks-fleet-capacity-kpis small { color: var(--pf-t--global--text--color--subtle); display: block; }
+.ks-fleet-capacity-kpis strong { display: block; font-family: var(--acm-font-display); font-size: 2rem; line-height: 1.2; margin-block: var(--pf-t--global--spacer--xs); }
+
+.ks-fleet-capacity-resource { height: 100%; }
+.ks-fleet-capacity-resource .pf-v6-c-card__header,
+.ks-fleet-capacity-table-card .pf-v6-c-card__header { border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-fleet-capacity-resource .pf-v6-c-card__title > span,
+.ks-fleet-capacity-table-card .pf-v6-c-card__title > span { color: var(--pf-t--global--text--color--subtle); display: block; font-size: var(--pf-t--global--font--size--body--sm); font-weight: 400; margin-block-start: var(--pf-t--global--spacer--xs); }
+.ks-fleet-capacity-total { align-items: baseline; display: flex; justify-content: space-between; }
+.ks-fleet-capacity-total span { color: var(--pf-t--global--text--color--subtle); }
+.ks-fleet-capacity-total strong { font-size: var(--pf-t--global--font--size--heading--lg); }
+.ks-fleet-capacity-stack { background: var(--pf-t--global--background--color--secondary--default); display: flex; height: 1rem; margin-block: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--lg); overflow: hidden; }
+.ks-fleet-capacity-stack span { min-width: 0; }
+.ks-fleet-capacity-stack .is-platform,
+.ks-fleet-capacity-legend .is-platform { background: #0066cc; }
+.ks-fleet-capacity-stack .is-business,
+.ks-fleet-capacity-legend .is-business { background: #6753ac; }
+.ks-fleet-capacity-stack .is-unclassified,
+.ks-fleet-capacity-legend .is-unclassified { background: #ec7a08; }
+.ks-fleet-capacity-stack .is-pending,
+.ks-fleet-capacity-legend .is-pending { background: #c9190b; }
+.ks-fleet-capacity-stack .is-reserve,
+.ks-fleet-capacity-legend .is-reserve { background: #f4c145; }
+.ks-fleet-capacity-stack .is-remaining,
+.ks-fleet-capacity-legend .is-remaining { background: #d2d2d2; }
+.ks-fleet-capacity-legend { display: grid; gap: var(--pf-t--global--spacer--sm); }
+.ks-fleet-capacity-legend > div { align-items: center; display: grid; gap: var(--pf-t--global--spacer--sm); grid-template-columns: auto 1fr auto 3.5rem; }
+.ks-fleet-capacity-legend i { border-radius: 50%; height: .625rem; width: .625rem; }
+.ks-fleet-capacity-legend span,
+.ks-fleet-capacity-legend small { color: var(--pf-t--global--text--color--subtle); }
+.ks-fleet-capacity-legend small { text-align: end; }
+
+.ks-fleet-capacity-finding { height: 100%; }
+.ks-fleet-capacity-finding .pf-v6-c-card__body { align-items: flex-start; display: flex; gap: var(--pf-t--global--spacer--md); }
+.ks-fleet-capacity-finding svg { color: var(--pf-t--global--color--status--warning--default); flex: 0 0 auto; margin-block-start: .2rem; }
+.ks-fleet-capacity-finding strong,
+.ks-fleet-capacity-finding span { display: block; }
+.ks-fleet-capacity-finding span { color: var(--pf-t--global--text--color--subtle); font-size: var(--pf-t--global--font--size--body--sm); margin-block-start: var(--pf-t--global--spacer--xs); }
+
+.ks-fleet-capacity-table-card .pf-v6-c-toolbar { border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-fleet-capacity-table-card .pf-v6-c-toolbar__content { padding-inline: var(--pf-t--global--spacer--xl); }
+.ks-fleet-capacity-table-card td small { color: var(--pf-t--global--text--color--subtle); display: block; margin-block-start: .15rem; }
+
+@media (max-width: 48rem) {
+  .ks-active-pool-heading { align-items: flex-start; flex-wrap: wrap; }
+  .ks-active-pool-heading > span:last-child { flex-basis: 100%; }
+  .ks-fleet-capacity-legend > div { grid-template-columns: auto 1fr auto; }
+  .ks-fleet-capacity-legend small { display: none; }
+}
+
+.ks-capacity-pools-header .pf-v6-c-card__header-main { display:flex; align-items:center; justify-content:space-between; gap:1rem; width:100%; }
+.ks-active-pool-heading { background:transparent; border-inline-start:0; padding:.5rem 0; gap:1rem; }
+.ks-active-pool-heading>div { flex-direction:row; align-items:baseline; gap:.75rem; min-width:0; }
+.ks-active-pool-heading>span:last-child { margin-left:auto; }
+.ks-fleet-capacity-kpis .pf-v6-c-card { min-height:7rem; border-block-start:0; }
+@media(max-width:48rem) { .ks-capacity-pools-header .pf-v6-c-card__header-main { align-items:flex-start; flex-direction:column; }.ks-active-pool-heading>div { flex-direction:column; gap:.25rem; } }

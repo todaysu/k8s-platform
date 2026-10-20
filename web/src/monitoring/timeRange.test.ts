@@ -1,0 +1,3 @@
+import {expect,it} from 'vitest'
+import {validateTimeRange} from './timeRange'
+it('validates absolute windows without accepting future, reversed or huge ranges',()=>{const now=Date.parse('2026-10-19T12:00:00Z');expect(validateTimeRange({start:'2026-10-19T11:00:00Z',end:'2026-10-19T12:00:00Z'},now)).toBe('');expect(validateTimeRange({start:'bad',end:'bad'},now)).toContain('完整');expect(validateTimeRange({start:'2026-10-19T12:00:00Z',end:'2026-10-19T11:00:00Z'},now)).toContain('晚于');expect(validateTimeRange({start:'2026-10-01T00:00:00Z',end:'2026-10-19T12:00:00Z'},now)).toContain('7 天');expect(validateTimeRange({start:'2026-10-19T11:00:00Z',end:'2026-10-20T12:00:00Z'},now)).toContain('当前时间')})

@@ -1,0 +1,70 @@
+.ks-platform-brand {
+  align-items: center;
+  color: #1f2730;
+  display: inline-flex;
+  gap: .625rem;
+  min-width: 0;
+}
+
+.ks-platform-logo {
+  align-items: center;
+  background: #b3132b;
+  border-radius: 7px;
+  box-shadow: 0 1px 2px rgb(37 12 17 / 18%);
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.ks-platform-logo svg {
+  height: 1.65rem;
+  width: 1.65rem;
+}
+
+.ks-platform-brand__copy {
+  display: grid;
+  line-height: 1.05;
+  min-width: 0;
+}
+
+.ks-platform-brand__copy strong {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.ks-platform-brand__copy small {
+  color: #697783;
+  font-size: .625rem;
+  font-weight: 400;
+  letter-spacing: .08em;
+  margin-top: .2rem;
+  white-space: nowrap;
+}
+
+.ks-platform-brand--login {
+  gap: .875rem;
+}
+
+.ks-platform-brand--login .ks-platform-logo {
+  border-radius: 10px;
+  height: 2.75rem;
+  width: 2.75rem;
+}
+
+.ks-platform-brand--login .ks-platform-logo svg {
+  height: 2.2rem;
+  width: 2.2rem;
+}
+
+.ks-platform-brand--login .ks-platform-brand__copy strong {
+  font-size: 1.25rem;
+}
+
+.ks-platform-brand--login .ks-platform-brand__copy small {
+  font-size: .75rem;
+}

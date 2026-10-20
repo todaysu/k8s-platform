@@ -1,0 +1,58 @@
+.ks-fleet-events { display: flex; flex-direction: column; gap: 1.25rem; }
+.ks-fleet-events > .pf-v6-c-tabs { flex: 0 0 auto; }
+.ks-fleet-event-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1rem; }
+.ks-fleet-event-summary .pf-v6-c-card { border-block-start: 3px solid var(--pf-t--global--color--brand--default); }
+.ks-fleet-event-summary span,.ks-fleet-event-summary small { display: block; color: var(--pf-t--global--text--color--subtle); }
+.ks-fleet-event-summary strong { display: block; font-size: 2rem; margin-block: .5rem; }
+.ks-fleet-events-card { overflow: hidden; }
+.ks-fleet-events-toolbar,.ks-event-advanced { display: flex; align-items: end; flex-wrap: wrap; gap: .75rem; padding: 1rem 1.5rem; }
+.ks-event-advanced { width: 100%; padding: .75rem 0 0; border-block-start: 1px solid var(--pf-t--global--border--color--default); }
+.ks-fleet-events-toolbar label { display: flex; flex-direction: column; gap: .375rem; font-size: .875rem; color: var(--pf-t--global--text--color--subtle); }
+.ks-fleet-events-toolbar select,.ks-fleet-events-toolbar input:not([type=checkbox]) { min-height: 2.5rem; padding-inline: .75rem; border: 1px solid var(--pf-t--global--border--color--default); background: var(--pf-t--global--background--color--primary--default); color: var(--pf-t--global--text--color--regular); }
+.ks-fleet-events-search { min-width: 15rem; flex: 1; }
+.ks-fleet-events-section-title { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem 1.5rem; border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-fleet-events-section-title p { margin-top: .375rem; color: var(--pf-t--global--text--color--subtle); }
+.ks-fleet-events-table { overflow: auto; }
+.ks-fleet-events-table td { vertical-align: top; }
+.ks-fleet-events-table td small,.ks-fleet-events-table td > span { display: block; color: var(--pf-t--global--text--color--subtle); margin-block-start: .25rem; }
+.ks-event-snippet { max-width: 44rem; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; margin-block: .375rem; }
+.ks-event-pager { display: flex; justify-content: flex-end; flex-wrap: wrap; align-items: center; gap: .75rem; padding: 1rem; border-block-start: 1px solid var(--pf-t--global--border--color--default); }
+.ks-event-pager > span { margin-inline-end: auto; color: var(--pf-t--global--text--color--subtle); }
+.ks-fleet-events-empty { min-height: 10rem; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem; padding: 1rem; color: var(--pf-t--global--text--color--subtle); }
+.ks-event-evidence { max-width: 48rem; margin-block-start: .5rem; overflow-wrap: anywhere; }
+.ks-event-evidence summary { cursor: pointer; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; max-width: min(38rem,65vw); color: var(--pf-t--global--color--brand--default); }
+.ks-event-evidence[open] summary { white-space: normal; }
+.ks-event-evidence pre { background: var(--pf-t--global--background--color--secondary--default); white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; margin-block: .75rem; font-family: var(--acm-font-mono,monospace); }
+.ks-event-evidence dl { display: flex; flex-direction: column; gap: .5rem; }
+.ks-event-evidence dt { font-weight: 600; }
+.ks-event-evidence dd { color: var(--pf-t--global--text--color--subtle); }
+.ks-event-collection { padding: 1rem; color: var(--pf-t--global--text--color--subtle); }
+.ks-event-collection summary { cursor: pointer; }
+.ks-event-collection p { margin-block: .5rem; }
+.ks-event-drawer { position: fixed; z-index: 250; inset-block: 0; inset-inline-end: 0; width: min(58rem,82vw); background: var(--pf-t--global--background--color--primary--default); box-shadow: -8px 0 24px #0003; border-inline-start: 1px solid var(--pf-t--global--border--color--default); display: flex; flex-direction: column; }
+.ks-event-drawer > header { display: flex; justify-content: space-between; gap: 1rem; padding: 1.5rem; border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-event-drawer > header p { margin-top: .5rem; color: var(--pf-t--global--text--color--subtle); }
+.ks-event-drawer-body { overflow: auto; padding: 1.25rem; }
+.ks-event-drawer-body section { display: flex; flex-direction: column; align-items: stretch; gap: 1rem; }
+.ks-event-resource { margin-block-start: 1.5rem; border-block-start: 3px solid var(--pf-t--global--color--brand--default); padding-block-start: 1.25rem; overflow-wrap: anywhere; }
+.ks-event-resource-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.ks-event-timeline { border-inline-start: 3px solid var(--pf-t--global--border--color--default); padding-inline-start: 1rem; }
+@media(max-width:1100px) { .ks-fleet-event-summary { grid-template-columns: repeat(2,1fr); } }
+@media(max-width:700px) { .ks-fleet-event-summary { grid-template-columns: 1fr; } .ks-event-drawer { width: 100%; } .ks-fleet-events-section-title { align-items: start; flex-direction: column; } .ks-fleet-events-table table { min-width: 44rem; } }
+
+.ks-event-issues-table { table-layout: fixed; min-width: 50rem; }
+.ks-event-issues-table th:first-child { width: 44%; }
+.ks-event-issues-table th:nth-child(2), .ks-event-issues-table th:nth-child(3) { width: 9%; }
+.ks-event-issues-table th:nth-child(4) { width: 19%; }
+.ks-event-issues-table th:last-child { width: 19%; }
+.ks-event-issues-table td { overflow-wrap: anywhere; }
+.ks-event-drawer .ks-fleet-events-table td { overflow-wrap: anywhere; }
+.ks-event-drawer select { padding: .5rem; border: 1px solid var(--pf-t--global--border--color--default); background: var(--pf-t--global--background--color--primary--default); color: var(--pf-t--global--text--color--regular); }
+
+.ks-event-drawer { inset-block-start: 4.5rem; }
+.ks-event-drawer > header { flex-shrink: 0; }
+.ks-event-drawer-body { flex: 1; min-block-size: 0; }
+.ks-event-resource { margin-block-start: 0; border-block-start: 0; padding-block-start: 0; gap: .75rem; }
+.ks-event-resource > .pf-v6-c-label, .ks-event-resource > .pf-v6-c-button { align-self: flex-start; }
+
+.ks-event-group-evidence { padding: 1rem 1.5rem; background: var(--pf-t--global--background--color--secondary--default); }
