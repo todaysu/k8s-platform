@@ -207,12 +207,25 @@ func (store *SQLite) SetEventCollectorStatus(ctx context.Context, status cluster
 	return nil
 }
 func (store *SQLite) DeleteEventsByRetention(ctx context.Context, normalCutoff, warningCutoff time.Time, limit int) (int64, error) {
-	result, err := store.db.ExecContext(ctx, `DELETE FROM cluster_events WHERE rowid IN (SELECT rowid FROM cluster_events WHERE (LOWER(type)='normal' AND last_observed_at < ?) OR (LOWER(type)<>'normal' AND last_observed_at < ?) LIMIT ?)`, normalCutoff.UTC().Format(timeLayout), warningCutoff.UTC().Format(timeLayout), limit)
+	if limit <= 0 {
+		limit = 5000
+	}
+	// Split by type so the time index can drive the scan.
+	normal, err := store.db.ExecContext(ctx, `DELETE FROM cluster_events WHERE rowid IN (SELECT rowid FROM cluster_events WHERE LOWER(type)='normal' AND last_observed_at < ? LIMIT ?)`, normalCutoff.UTC().Format(timeLayout), limit)
 	if err != nil {
 		return 0, &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
-	deleted, _ := result.RowsAffected()
-	return deleted, nil
+	deleted, _ := normal.RowsAffected()
+	remaining := limit - int(deleted)
+	if remaining <= 0 {
+		return deleted, nil
+	}
+	other, err := store.db.ExecContext(ctx, `DELETE FROM cluster_events WHERE rowid IN (SELECT rowid FROM cluster_events WHERE LOWER(type)<>'normal' AND last_observed_at < ? LIMIT ?)`, warningCutoff.UTC().Format(timeLayout), remaining)
+	if err != nil {
+		return deleted, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	more, _ := other.RowsAffected()
+	return deleted + more, nil
 }
 
 func (store *SQLite) DeleteEventRollupsBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {

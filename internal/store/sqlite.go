@@ -343,6 +343,7 @@ CREATE INDEX IF NOT EXISTS idx_events_cluster_type_time ON cluster_events(cluste
 CREATE INDEX IF NOT EXISTS idx_events_cluster_namespace_time ON cluster_events(cluster_id, regarding_namespace, last_observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_cluster_kind_time ON cluster_events(cluster_id, regarding_kind, last_observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_cluster_object ON cluster_events(cluster_id, regarding_uid);
+CREATE INDEX IF NOT EXISTS idx_events_last_observed ON cluster_events(last_observed_at);
 CREATE TABLE IF NOT EXISTS event_collector_checkpoints (
   cluster_id TEXT PRIMARY KEY, state TEXT NOT NULL, resource_version TEXT NOT NULL DEFAULT '',
   last_success_at TEXT, last_error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,

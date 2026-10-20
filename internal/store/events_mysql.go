@@ -59,10 +59,11 @@ regarding_kind VARCHAR(128) NOT NULL DEFAULT '',regarding_namespace VARCHAR(253)
 reporting_controller VARCHAR(255) NOT NULL DEFAULT '',reporting_instance VARCHAR(255) NOT NULL DEFAULT '',occurrence_count BIGINT NOT NULL DEFAULT 1,
 first_observed_at DATETIME(6) NOT NULL,last_observed_at DATETIME(6) NOT NULL,resource_version VARCHAR(64) NOT NULL DEFAULT '',PRIMARY KEY(cluster_id,event_uid),
 KEY idx_events_cluster_time(cluster_id,last_observed_at DESC),KEY idx_events_type_time(cluster_id,type,last_observed_at DESC),
-KEY idx_events_namespace_time(cluster_id,regarding_namespace,last_observed_at DESC),KEY idx_events_object(cluster_id,regarding_uid)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+KEY idx_events_namespace_time(cluster_id,regarding_namespace,last_observed_at DESC),KEY idx_events_object(cluster_id,regarding_uid),KEY idx_events_last_observed(last_observed_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS event_collector_checkpoints(cluster_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,resource_version VARCHAR(64) NOT NULL DEFAULT '',last_success_at DATETIME(6) NULL,last_error TEXT NOT NULL,updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS event_issue_hourly(bucket_start DATETIME(6) NOT NULL,cluster_id VARCHAR(64) NOT NULL,fingerprint VARCHAR(32) NOT NULL,type VARCHAR(32) NOT NULL DEFAULT '',reason VARCHAR(255) NOT NULL DEFAULT '',regarding_kind VARCHAR(128) NOT NULL DEFAULT '',message_sample TEXT NOT NULL,occurrence_count BIGINT NOT NULL DEFAULT 0,last_observed_at DATETIME(6) NOT NULL,PRIMARY KEY(bucket_start,cluster_id,fingerprint),KEY idx_event_rollup_cluster_time(cluster_id,bucket_start DESC)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`ALTER TABLE cluster_events ADD INDEX idx_events_kind_time(cluster_id,regarding_kind,last_observed_at DESC)`}
+		`ALTER TABLE cluster_events ADD INDEX idx_events_kind_time(cluster_id,regarding_kind,last_observed_at DESC)`,
+		`ALTER TABLE cluster_events ADD INDEX idx_events_last_observed(last_observed_at)`}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
 			if mysqlError, ok := err.(*mysql.MySQLError); ok && mysqlError.Number == 1061 {
@@ -73,77 +74,197 @@ KEY idx_events_namespace_time(cluster_id,regarding_namespace,last_observed_at DE
 	}
 	return nil
 }
+
+const eventBatchSize = 200
+
+const (
+	eventInsertPrefix  = `INSERT INTO cluster_events(cluster_id,event_uid,namespace,type,reason,action,message,regarding_api_version,regarding_kind,regarding_namespace,regarding_name,regarding_uid,reporting_controller,reporting_instance,occurrence_count,first_observed_at,last_observed_at,resource_version) VALUES`
+	eventInsertRow     = `(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	eventUpsertSuffix  = ` ON DUPLICATE KEY UPDATE namespace=VALUES(namespace),type=VALUES(type),reason=VALUES(reason),action=VALUES(action),message=VALUES(message),regarding_api_version=VALUES(regarding_api_version),regarding_kind=VALUES(regarding_kind),regarding_namespace=VALUES(regarding_namespace),regarding_name=VALUES(regarding_name),regarding_uid=VALUES(regarding_uid),reporting_controller=VALUES(reporting_controller),reporting_instance=VALUES(reporting_instance),occurrence_count=VALUES(occurrence_count),first_observed_at=LEAST(first_observed_at,VALUES(first_observed_at)),last_observed_at=GREATEST(last_observed_at,VALUES(last_observed_at)),resource_version=VALUES(resource_version)`
+	rollupInsertPrefix = `INSERT INTO event_issue_hourly(bucket_start,cluster_id,fingerprint,type,reason,regarding_kind,message_sample,occurrence_count,last_observed_at) VALUES`
+	rollupInsertRow    = `(?,?,?,?,?,?,?,?,?)`
+	rollupUpsertSuffix = ` ON DUPLICATE KEY UPDATE occurrence_count=occurrence_count+VALUES(occurrence_count),last_observed_at=GREATEST(last_observed_at,VALUES(last_observed_at)),message_sample=VALUES(message_sample)`
+)
+
+// UpsertEvents writes one multi-row statement per batch instead of two
+// statements per event. The previous implementation issued a SELECT with one
+// OR predicate per event and then a prepared upsert per row; at 60 clusters
+// replaying a full event list it exceeded the write capacity of a single
+// MySQL instance.
 func (store *MySQLEvents) UpsertEvents(ctx context.Context, events []cluster.ClusterEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
+	events = latestEventVersions(events)
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	previousCounts := make(map[string]int64, len(events))
-	for start := 0; start < len(events); start += 500 {
-		end := start + 500
-		if end > len(events) {
-			end = len(events)
+
+	previousCounts, err := loadPreviousEventCounts(ctx, tx, events)
+	if err != nil {
+		return err
+	}
+	for start := 0; start < len(events); start += eventBatchSize {
+		end := min(start+eventBatchSize, len(events))
+		query, args := eventUpsertStatement(events[start:end])
+		if _, err = tx.ExecContext(ctx, query, args...); err != nil {
+			return err
 		}
-		conditions := make([]string, 0, end-start)
+	}
+	rollups := buildEventRollups(events, previousCounts)
+	for start := 0; start < len(rollups); start += eventBatchSize {
+		end := min(start+eventBatchSize, len(rollups))
+		query, args := rollupUpsertStatement(rollups[start:end])
+		if _, err = tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// latestEventVersions collapses repeated watch updates for the same event so
+// occurrence deltas are applied once per batch.
+func latestEventVersions(events []cluster.ClusterEvent) []cluster.ClusterEvent {
+	if len(events) < 2 {
+		return events
+	}
+	positions := make(map[string]int, len(events))
+	result := make([]cluster.ClusterEvent, 0, len(events))
+	for _, event := range events {
+		key := event.ClusterID + "\x00" + event.EventUID
+		position, exists := positions[key]
+		if !exists {
+			positions[key] = len(result)
+			result = append(result, event)
+			continue
+		}
+		if event.OccurrenceCount >= result[position].OccurrenceCount {
+			result[position] = event
+		}
+	}
+	return result
+}
+
+func loadPreviousEventCounts(ctx context.Context, tx *sql.Tx, events []cluster.ClusterEvent) (map[string]int64, error) {
+	counts := make(map[string]int64, len(events))
+	for start := 0; start < len(events); start += eventBatchSize {
+		end := min(start+eventBatchSize, len(events))
+		placeholders := make([]string, 0, end-start)
 		args := make([]any, 0, (end-start)*2)
 		for _, event := range events[start:end] {
-			conditions = append(conditions, `(cluster_id=? AND event_uid=?)`)
+			placeholders = append(placeholders, `(?,?)`)
 			args = append(args, event.ClusterID, event.EventUID)
 		}
-		rows, queryErr := tx.QueryContext(ctx, `SELECT cluster_id,event_uid,occurrence_count FROM cluster_events WHERE `+strings.Join(conditions, ` OR `), args...)
-		if queryErr != nil {
-			return queryErr
+		rows, err := tx.QueryContext(ctx, `SELECT cluster_id,event_uid,occurrence_count FROM cluster_events WHERE (cluster_id,event_uid) IN (`+strings.Join(placeholders, `,`)+`)`, args...)
+		if err != nil {
+			return nil, err
 		}
 		for rows.Next() {
 			var clusterID, eventUID string
 			var count int64
-			if queryErr = rows.Scan(&clusterID, &eventUID, &count); queryErr != nil {
+			if err = rows.Scan(&clusterID, &eventUID, &count); err != nil {
 				_ = rows.Close()
-				return queryErr
+				return nil, err
 			}
-			previousCounts[clusterID+"\x00"+eventUID] = count
+			counts[clusterID+"\x00"+eventUID] = count
 		}
-		if queryErr = rows.Close(); queryErr != nil {
-			return queryErr
+		if err = rows.Close(); err != nil {
+			return nil, err
 		}
 	}
-	upsert, err := tx.PrepareContext(ctx, `INSERT INTO cluster_events(cluster_id,event_uid,namespace,type,reason,action,message,regarding_api_version,regarding_kind,regarding_namespace,regarding_name,regarding_uid,reporting_controller,reporting_instance,occurrence_count,first_observed_at,last_observed_at,resource_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE namespace=VALUES(namespace),type=VALUES(type),reason=VALUES(reason),action=VALUES(action),message=VALUES(message),regarding_api_version=VALUES(regarding_api_version),regarding_kind=VALUES(regarding_kind),regarding_namespace=VALUES(regarding_namespace),regarding_name=VALUES(regarding_name),regarding_uid=VALUES(regarding_uid),reporting_controller=VALUES(reporting_controller),reporting_instance=VALUES(reporting_instance),occurrence_count=VALUES(occurrence_count),first_observed_at=LEAST(first_observed_at,VALUES(first_observed_at)),last_observed_at=GREATEST(last_observed_at,VALUES(last_observed_at)),resource_version=VALUES(resource_version)`)
-	if err != nil {
-		return err
+	return counts, nil
+}
+
+func eventUpsertStatement(events []cluster.ClusterEvent) (string, []any) {
+	var builder strings.Builder
+	builder.WriteString(eventInsertPrefix)
+	args := make([]any, 0, len(events)*18)
+	for index, event := range events {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(eventInsertRow)
+		args = append(args,
+			event.ClusterID, event.EventUID, event.Namespace, event.Type, event.Reason, event.Action,
+			event.Message, event.RegardingAPIVersion, event.RegardingKind, event.RegardingNamespace,
+			event.RegardingName, event.RegardingUID, event.ReportingController, event.ReportingInstance,
+			event.OccurrenceCount, event.FirstObservedAt.UTC(), event.LastObservedAt.UTC(), event.ResourceVersion,
+		)
 	}
-	defer upsert.Close()
-	rollup, err := tx.PrepareContext(ctx, `INSERT INTO event_issue_hourly(bucket_start,cluster_id,fingerprint,type,reason,regarding_kind,message_sample,occurrence_count,last_observed_at) VALUES(?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE occurrence_count=occurrence_count+VALUES(occurrence_count),last_observed_at=GREATEST(last_observed_at,VALUES(last_observed_at)),message_sample=VALUES(message_sample)`)
-	if err != nil {
-		return err
-	}
-	defer rollup.Close()
-	for _, e := range events {
-		previous, exists := previousCounts[e.ClusterID+"\x00"+e.EventUID]
-		delta := e.OccurrenceCount - previous
+	builder.WriteString(eventUpsertSuffix)
+	return builder.String(), args
+}
+
+type eventRollupRow struct {
+	bucket        time.Time
+	clusterID     string
+	fingerprint   string
+	eventType     string
+	reason        string
+	regardingKind string
+	message       string
+	count         int64
+	lastObserved  time.Time
+}
+
+func buildEventRollups(events []cluster.ClusterEvent, previousCounts map[string]int64) []eventRollupRow {
+	rows := make(map[string]*eventRollupRow, len(events))
+	order := make([]string, 0, len(events))
+	for _, event := range events {
+		previous, exists := previousCounts[event.ClusterID+"\x00"+event.EventUID]
+		delta := event.OccurrenceCount - previous
 		if !exists && delta < 1 {
 			delta = 1
 		}
 		if delta < 0 {
 			delta = 0
 		}
-		_, err = upsert.ExecContext(ctx, e.ClusterID, e.EventUID, e.Namespace, e.Type, e.Reason, e.Action, e.Message, e.RegardingAPIVersion, e.RegardingKind, e.RegardingNamespace, e.RegardingName, e.RegardingUID, e.ReportingController, e.ReportingInstance, e.OccurrenceCount, e.FirstObservedAt.UTC(), e.LastObservedAt.UTC(), e.ResourceVersion)
-		if err != nil {
-			return err
+		if delta == 0 {
+			continue
 		}
-		if delta > 0 {
-			bucket := e.LastObservedAt.UTC().Truncate(time.Hour)
-			_, err = rollup.ExecContext(ctx, bucket, e.ClusterID, cluster.EventFingerprint(e), e.Type, e.Reason, e.RegardingKind, e.Message, delta, e.LastObservedAt.UTC())
-			if err != nil {
-				return err
+		bucket := event.LastObservedAt.UTC().Truncate(time.Hour)
+		fingerprint := cluster.EventFingerprint(event)
+		key := bucket.Format(time.RFC3339Nano) + "|" + event.ClusterID + "|" + fingerprint
+		row, exists := rows[key]
+		if !exists {
+			row = &eventRollupRow{
+				bucket: bucket, clusterID: event.ClusterID, fingerprint: fingerprint,
+				eventType: event.Type, reason: event.Reason, regardingKind: event.RegardingKind,
+				message: event.Message, lastObserved: event.LastObservedAt.UTC(),
 			}
+			rows[key] = row
+			order = append(order, key)
+		}
+		row.count += delta
+		if observed := event.LastObservedAt.UTC(); observed.After(row.lastObserved) {
+			row.lastObserved = observed
+			row.message = event.Message
 		}
 	}
-	return tx.Commit()
+	result := make([]eventRollupRow, 0, len(order))
+	for _, key := range order {
+		result = append(result, *rows[key])
+	}
+	return result
 }
+
+func rollupUpsertStatement(rows []eventRollupRow) (string, []any) {
+	var builder strings.Builder
+	builder.WriteString(rollupInsertPrefix)
+	args := make([]any, 0, len(rows)*9)
+	for index, row := range rows {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(rollupInsertRow)
+		args = append(args, row.bucket, row.clusterID, row.fingerprint, row.eventType, row.reason, row.regardingKind, row.message, row.count, row.lastObserved)
+	}
+	builder.WriteString(rollupUpsertSuffix)
+	return builder.String(), args
+}
+
 func mysqlEventWhere(clusterID string, q cluster.EventQuery, cursor bool) (string, []any) {
 	conditions := []string{"cluster_id=?", "last_observed_at>=?", "last_observed_at<=?"}
 	args := []any{clusterID, q.Since.UTC(), q.Until.UTC()}
@@ -263,11 +384,26 @@ func (store *MySQLEvents) SetEventCollectorStatus(ctx context.Context, s cluster
 	return err
 }
 func (store *MySQLEvents) DeleteEventsByRetention(ctx context.Context, normalCutoff, warningCutoff time.Time, limit int) (int64, error) {
-	result, err := store.db.ExecContext(ctx, "DELETE FROM cluster_events WHERE (LOWER(type)='normal' AND last_observed_at<?) OR (LOWER(type)<>'normal' AND last_observed_at<?) LIMIT ?", normalCutoff.UTC(), warningCutoff.UTC(), limit)
+	if limit <= 0 {
+		limit = 5000
+	}
+	// Split by type so each statement can use idx_events_last_observed for the
+	// time range. The previous OR predicate forced a full table scan per batch.
+	normal, err := store.db.ExecContext(ctx, "DELETE FROM cluster_events WHERE LOWER(type)='normal' AND last_observed_at<? LIMIT ?", normalCutoff.UTC(), limit)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	deleted, _ := normal.RowsAffected()
+	remaining := limit - int(deleted)
+	if remaining <= 0 {
+		return deleted, nil
+	}
+	other, err := store.db.ExecContext(ctx, "DELETE FROM cluster_events WHERE LOWER(type)<>'normal' AND last_observed_at<? LIMIT ?", warningCutoff.UTC(), remaining)
+	if err != nil {
+		return deleted, err
+	}
+	more, _ := other.RowsAffected()
+	return deleted + more, nil
 }
 
 func (store *MySQLEvents) DeleteEventRollupsBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
