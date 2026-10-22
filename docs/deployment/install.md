@@ -7,6 +7,8 @@
 >
 > **第一次接触 Kubernetes 的读者，请先看 [小白版](install-beginner.md)。**
 
+> **注意：`install.yaml` 不包含 ingress-nginx。** 它只创建 Ingress/IngressClass 的 RBAC、平台自己的 Ingress 对象，以及 bootstrap/setup/PXC Operator。集群必须先有 ingress-nginx（或客户已有的 Ingress Controller），否则 Preflight 会失败；安装/确认方式见 Step 2。
+
 **文档导航：**
 
 | 阶段 | 内容 |
