@@ -1,3 +1,7 @@
+# OPTIONAL / NOT USED by the external-MySQL delivery.
+# install.yaml does not include this file. Keep it only for a future
+# in-cluster PXC mode; the default delivery uses an existing MySQL 8.0+.
+
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:

@@ -1,11 +1,11 @@
-# FTC 平台交付版引导清单（第一阶段）
+# FTC 平台交付版引导清单（外部 MySQL 版）
 #
 # 这一份只创建初始化入口：
 #   - 命名空间、运行/初始化 ServiceAccount 与最小权限；
 #   - 自动生成 setup token 与凭据加密密钥；
 #   - setup Deployment/Service，不连接数据库、不创建 MySQL/Ingress/运行时。
 #
-# 使用前只需要替换两处 REPLACE_WITH_PLATFORM_IMAGE（引导 Job 与 setup Pod）。
+# 使用前只需要替换三处 REPLACE_WITH_PLATFORM_IMAGE（安装 ConfigMap、引导 Job、setup Pod）。
 # 然后：
 #   kubectl apply -f deploy/install-bootstrap.yaml
 #   kubectl -n ftc-platform rollout status deployment/ftc-platform-setup
@@ -13,7 +13,7 @@
 #   kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80
 #   浏览器打开 http://127.0.0.1:8080
 #
-# MySQL HA、本地 PV/SC、Ingress、自签 CA、正式运行 Deployment 由 setup 控制器
+# 外部 MySQL、Ingress、自签 CA、正式运行 Deployment 由 setup 控制器
 # 在后续阶段创建；本阶段先把初始化入口和安全边界跑通。
 apiVersion: v1
 kind: Namespace
@@ -103,10 +103,10 @@ metadata:
   namespace: ftc-platform
 rules:
   - apiGroups: [""]
-    resources: ["secrets", "configmaps", "services", "pods", "pods/log", "persistentvolumeclaims", "events"]
+    resources: ["secrets", "configmaps", "services", "pods", "pods/log", "events"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
+    resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
@@ -138,7 +138,7 @@ roleRef:
   kind: Role
   name: ftc-platform-setup
 ---
-# 集群级：节点/本地 PV/SC/IngressClass/PXC CR。
+# 集群级：节点和 IngressClass 只读。
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -147,24 +147,15 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["persistentvolumes"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingressclasses"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apiextensions.k8s.io"]
-    resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterrolebindings"]
     verbs: ["get", "delete"]
-  - apiGroups: ["pxc.percona.com"]
-    resources: ["perconaxtradbclusters"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -187,13 +178,6 @@ metadata:
   namespace: ftc-platform
 data:
   PLATFORM_IMAGE: REPLACE_WITH_PLATFORM_IMAGE
-  MYSQL_OPERATOR_IMAGE: ""
-  MYSQL_IMAGE: ""
-  MYSQL_PROXY_IMAGE: ""
-  MYSQL_BACKUP_IMAGE: ""
-  MYSQL_REPLICAS: "3"
-  MYSQL_STORAGE_SIZE: "200Gi"
-  MYSQL_STORAGE_CLASS: "ftc-platform-local"
   INGRESS_CLASS: "nginx"
   INGRESS_HOST: ""
   SETUP_RUNTIME_SECRET: "ftc-platform-runtime"
@@ -281,8 +265,6 @@ spec:
             - { name: WEB_DIST_DIR, value: "/app/web" }
             - { name: SECURE_COOKIES, value: "true" }
             - { name: TRUST_PROXY_HEADERS, value: "true" }
-            - { name: SETUP_DEFAULT_DB_HOST, value: "platform-mysql-haproxy.ftc-platform.svc" }
-            - { name: SETUP_DEFAULT_DB_NAME, value: "ftc_platform" }
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POD_NAMESPACE

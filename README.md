@@ -66,7 +66,7 @@ make dev-backend
 
 本地开发不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到 SQLite。`deploy/mysql.yaml` 仅用于本地/单副本开发，不是交付版高可用方案。
 
-Kubernetes 生产交付**不依赖 Helm**：使用 [`deploy/install.yaml`](deploy/install.yaml) + 浏览器初始化向导，自动创建 3 节点 PXC、本地 PV/SC、自签 CA/HTTPS Ingress 和运行 Deployment。
+Kubernetes 生产交付**不依赖 Helm，也不在集群内安装 MySQL**：使用已有的外部 MySQL 8.0+，通过 [`deploy/install.yaml`](deploy/install.yaml) + 浏览器初始化向导创建表结构、管理员、自签 CA/HTTPS Ingress 和运行 Deployment。一个人有 kubeconfig 和外部 MySQL 即可完成，不再需要 3 个 worker、本地盘、PXC Operator 或 HAProxy。
 
 - 运维详细版：[`docs/deployment/install.md`](docs/deployment/install.md)（Step 0–12、资源清单、排错、备份/升级/卸载）
 - 小白流程图版：[`docs/deployment/install-beginner.md`](docs/deployment/install-beginner.md)（按图操作，不需要懂 Kubernetes）

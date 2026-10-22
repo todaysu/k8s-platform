@@ -1,31 +1,17 @@
-# FTC 平台生产交付手册（运维详细版）
+# FTC 平台生产交付手册（外部 MySQL · 无 Helm · 一人可完成）
 
 > **交付方式：`kubectl apply` + 浏览器初始化向导，不依赖 Helm。**
 >
-> 适用场景：3 个可调度节点、本地磁盘、PXC 3 节点 MySQL、自签 HTTPS Ingress。
-> 本文按“一步一停”的方式编写：每一步都有 **目标 / 操作 / 通过标准 / 失败处理**。未通过当前步骤，不要进入下一步。
+> 本版本**不在集群内安装 MySQL**：使用你已有的外部 MySQL 8.0+。平台只创建表结构、管理员、Ingress 和运行 Deployment，因此不再需要 3 个 worker、本地盘、PXC Operator、HAProxy 或 PXC 镜像。
 >
-> **第一次接触 Kubernetes 的读者，请先看 [小白版](install-beginner.md)。**
+> 面向第一次部署的人：按 Step 0–12 顺序执行；每一步都有 **目标 / 操作 / 通过标准 / 失败处理**。第一次接触 Kubernetes 的读者可先看 [小白版](install-beginner.md)。
 
-> **注意：`install.yaml` 不包含 ingress-nginx。** 它只创建 Ingress/IngressClass 的 RBAC、平台自己的 Ingress 对象，以及 bootstrap/setup/PXC Operator。集群必须先有 ingress-nginx（或客户已有的 Ingress Controller），否则 Preflight 会失败；安装/确认方式见 Step 2。
+**为什么改成外部 MySQL：**
 
-**文档导航：**
-
-| 阶段 | 内容 |
-| --- | --- |
-| [Step 0](#3-step-0交付评审不执行命令) | 交付评审、域名/节点/磁盘/镜像决策 |
-| [Step 1](#4-step-1准备节点和本地磁盘) | 3 个 worker、本地磁盘、目录权限 |
-| [Step 2](#5-step-2准备-ingress不使用-helm) | IngressClass、443、TLS 终止 |
-| [Step 3](#6-step-3准备镜像) | 平台/PXC/HAProxy/Operator 镜像、imagePullSecret |
-| [Step 4](#7-step-4apply-安装清单) | apply install.yaml、bootstrap Job、token/密钥 |
-| [Step 5](#8-step-5打开初始化页面) | port-forward、打开 setup 页面 |
-| [Step 6](#9-step-6preflight) | 环境检查与失败处理 |
-| [Step 7](#10-step-7填写向导参数) | 节点/磁盘/MySQL/域名/管理员 |
-| [Step 8](#11-step-8执行安装) | storage → mysql → database → ingress → runtime → verify |
-| [Step 9](#12-step-9cahosts-与首次登录) | CA、hosts、首次登录 |
-| [Step 10](#13-step-10生产验收) | 生产验收清单 |
-| [Step 11](#14-step-11清理-setup-入口) | 清理 setup 入口 |
-| [Step 12](#15-step-12上线后运维) | 备份/监控/升级/节点故障/卸载 |
+- 少 3 个 StatefulSet、3 个 PVC、PXC Operator 和 HAProxy；
+- 不需要为 MySQL 规划本地盘和反亲和；
+- 数据库的备份、HA、监控由现有 MySQL 体系负责；
+- 平台本身变成无状态服务，节点故障后可直接重新调度。
 
 ---
 
@@ -33,259 +19,239 @@
 
 ```mermaid
 flowchart TD
-    S0["Step 0<br/>交付评审<br/>确认域名/节点/磁盘/镜像"] --> S1["Step 1<br/>准备 3 个节点<br/>本地磁盘与目录"]
-    S1 --> S2["Step 2<br/>准备 Ingress<br/>443 可访问 + IngressClass"]
-    S2 --> S3["Step 3<br/>准备镜像<br/>平台 + PXC + HAProxy + Operator"]
-    S3 --> S4["Step 4<br/>apply install.yaml<br/>等待 bootstrap Job"]
-    S4 --> S5["Step 5<br/>读取 token/密钥<br/>port-forward 初始化页"]
-    S5 --> S6{"Step 6<br/>Preflight"}
-    S6 -->|失败| S6F["按报告修复<br/>节点/Ingress/CRD/Secret"]
-    S6F --> S6
-    S6 -->|通过| S7["Step 7<br/>向导填写<br/>节点/磁盘/MySQL/域名/管理员"]
-    S7 --> S8["Step 8<br/>一键安装<br/>storage → mysql → database → ingress → runtime → verify"]
-    S8 -->|失败| S8F["查看步骤/日志<br/>修复后重试"]
-    S8F --> S8
-    S8 -->|成功| S9["Step 9<br/>下载 CA<br/>配置 hosts/DNS"]
-    S9 --> S10["Step 10<br/>HTTPS 登录<br/>管理员验收"]
-    S10 --> S11["Step 11<br/>清理 setup 入口<br/>确认权限已回收"]
-    S11 --> S12["Step 12<br/>上线后运维<br/>备份/监控/升级/演练"]
+    A["Step 0<br/>确认外部 MySQL<br/>域名/Ingress/镜像"] --> B["Step 1<br/>准备 kubeconfig<br/>至少 1 个可调度节点"]
+    B --> C["Step 2<br/>准备外部 MySQL<br/>建库/建账号/授权"]
+    C --> D["Step 3<br/>确认 Ingress<br/>443 + IngressClass"]
+    D --> E["Step 4<br/>准备平台镜像<br/>推 registry"]
+    E --> F["Step 5<br/>apply install.yaml<br/>等待 bootstrap Job"]
+    F --> G["Step 6<br/>取 token<br/>port-forward 初始化页"]
+    G --> H{"Step 7<br/>Preflight"}
+    H -->|失败| H1["按报告修复<br/>节点/Ingress/Secret"]
+    H1 --> H
+    H -->|通过| I["Step 8<br/>向导填写<br/>外部 MySQL/域名/管理员"]
+    I --> J["Step 9<br/>安装<br/>database → ingress → runtime → verify"]
+    J -->|失败| J1["看步骤/日志<br/>修复后重试"]
+    J1 --> J
+    J -->|成功| K["Step 10<br/>CA/hosts<br/>HTTPS 登录"]
+    K --> L["Step 11<br/>验收<br/>清理 setup"]
+    L --> M["Step 12<br/>上线后运维<br/>MySQL 备份/升级/监控"]
 ```
 
-**一句话流程：**
+**一句话：**
 
 ```text
-准备资源 → 装好 Ingress → 镜像入库 → apply 引导清单 → 取 token
-→ 打开向导 → 预检 → 填参安装 → 装 CA/配 hosts → 登录验收 → 清理 setup
+准备 kubeconfig 和外部 MySQL → 确认 Ingress → 推镜像 → apply
+→ 取 token → 打开向导 → 预检 → 填 MySQL/域名/管理员 → 安装
+→ 装 CA/配 hosts → 登录 → 验收 → 清理 setup
 ```
 
 ---
 
 ## 1. 交付物清单
 
-| 交付物 | 位置/说明 | 谁提供 |
-| --- | --- | --- |
-| 安装清单 | [`deploy/install.yaml`](../../deploy/install.yaml) | 平台方 |
-| 初始化向导 | setup 镜像内置，浏览器访问 | 平台方 |
-| 平台镜像 | 例如 `registry.example.com/ftc/ftc-platform:0.1.0` | 平台方构建 |
-| PXC Operator | `percona/percona-xtradb-cluster-operator:1.18.0` | 平台方/镜像仓库 |
-| PXC / HAProxy / XtraBackup | 见第 2.5 节镜像表 | 平台方/镜像仓库 |
-| Ingress Controller | ingress-nginx，**不使用 Helm 安装** | 客户/平台方 |
-| 内部域名 | 例如 `ftc-platform.cmb.local` | 客户 |
-| 3 块本地盘 | 每节点一块，建议 ≥200GiB | 客户 |
-| 管理员账号 | 初始化时设置 | 客户 |
+| 交付物 | 位置/说明 |
+| --- | --- |
+| 安装清单 | [`deploy/install.yaml`](../../deploy/install.yaml)（不含 MySQL/PXC） |
+| 初始化向导 | setup 镜像内置，浏览器访问 |
+| 平台镜像 | 例如 `registry.example.com/ftc/ftc-platform:0.1.0` |
+| 外部 MySQL | 8.0+，已有库/账号，或由你创建 |
+| Ingress Controller | 已有 ingress-nginx，或按 Step 3 静态安装 |
+| 内部域名 | 例如 `ftc-platform.cmb.local` |
+| 管理员账号 | 初始化时设置 |
+
+**不再需要：**
+
+- PXC Operator / PXC / HAProxy / XtraBackup 镜像；
+- 3 个 worker 的本地盘；
+- 本地 PV/StorageClass；
+- 3 节点 MySQL 反亲和规划。
 
 ---
 
-## 2. 资源清单（开工前逐项打勾）
+## 2. 资源清单
 
-### 2.1 集群资源
+### 2.1 Kubernetes 集群
 
-| 资源 | 最低要求 | 推荐 | 检查命令 |
+| 资源 | 最低 | 推荐 | 检查 |
 | --- | --- | --- | --- |
 | Kubernetes | 1.27+；本项目在 1.31 验证 | 1.31/1.32 | `kubectl version` |
-| 可调度节点 | **3 个 worker**（control-plane 不计入） | 3 worker + 3 control-plane | `kubectl get nodes` |
-| 单节点 CPU | 4 vCPU | 8 vCPU | `kubectl describe node <node>` |
-| 单节点内存 | 8 GiB | 16 GiB | 同上 |
-| MySQL 本地盘 | 每节点 ≥100GiB，独立于系统盘 | 每节点 ≥200GiB SSD/NVMe | `lsblk` / `df -h` |
-| 系统盘 | 100GiB | 200GiB | `df -h /` |
-| 架构 | amd64 或 arm64，镜像需匹配 | 多架构 manifest | `uname -m` |
-| 权限 | 可创建 Namespace/PV/SC/CRD/Ingress/RBAC | 集群管理员 | `kubectl auth can-i '*' '*'` |
-| 时间同步 | 所有节点 NTP/chrony 正常 | 同一时区/时间源 | `timedatectl` |
+| 可调度节点 | **1 个** | 2 个以上 | `kubectl get nodes` |
+| 单节点 CPU | 2 vCPU | 4 vCPU | `kubectl describe node <node>` |
+| 单节点内存 | 4 GiB | 8 GiB | 同上 |
+| 权限 | 创建 Namespace/Secret/Deployment/Ingress/RBAC | 集群管理员 | `kubectl auth can-i '*' '*'` |
+| 时间同步 | NTP/chrony 正常 | 同一时间源 | `timedatectl` |
 
-**3 个 worker 合计：**
+> 单节点可以完成安装，但**不是高可用**：节点故障时平台 Pod 无法重新调度。生产建议 2 个以上可调度节点，API/Collector 可以各 2 副本。
+>
+> 不再要求 3 个 worker；也不再检查 PXC CRD 和 StorageClass。
 
-| 口径 | CPU | 内存 | MySQL 数据盘 |
-| --- | --- | --- | --- |
-| 最低 | 12 vCPU | 24 GiB | 300 GiB（3×100） |
-| 推荐 | 24 vCPU | 48 GiB | 600 GiB（3×200） |
+### 2.2 外部 MySQL
 
-> 这是 3 个 worker 的合计，不含 control-plane 和系统盘。PXC 的 requests 约 3 CPU/6GiB，HAProxy 约 0.3 CPU/384MiB，其余留给平台 Pod、Ingress 和突发负载。
+| 资源 | 要求 |
+| --- | --- |
+| 版本 | MySQL 8.0+（PXC 8.0 也可作为外部 MySQL 使用） |
+| 数据库 | 已创建，例如 `ftc_platform` |
+| 账号 | 例如 `ftc`，对 `ftc_platform.*` 有建表/改表/索引权限 |
+| 网络 | 集群节点/Pod 能访问 MySQL 的 3306（或自定义端口） |
+| TLS | 可选；内网可关闭，跨网建议开启 |
+| 备份/HA | 由现有 MySQL 体系负责；平台不创建也不备份数据库 |
+| 规格 | 最低 2 vCPU/4GiB/50GiB；按纳管集群量评估 |
 
-> **不要用 3 个“总节点”包含 control-plane 来凑数。** PXC 有反亲和，3 个 PXC 副本需要 3 个可调度节点；control-plane 默认带 NoSchedule 污点。
+建库/建账号 SQL：
 
-### 2.2 网络与端口
+```sql
+CREATE DATABASE ftc_platform
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_0900_ai_ci;
 
-| 端口 | 方向 | 用途 | 是否必须 |
-| --- | --- | --- | --- |
-| 443/TCP | 用户 → 任意 worker/VIP | HTTPS 登录 | 必须 |
-| 80/TCP | 用户 → 任意 worker/VIP | HTTP 跳转/ACME 备用 | 可选 |
-| 6443/TCP | 管理员/堡垒机 → control-plane | kubectl | 必须（按现有集群） |
-| 3306/TCP | 平台 Pod → HAProxy Service | MySQL 读写 | 集群内，不对外 |
-| 33062/TCP | HAProxy → PXC | 管理/健康检查 | 集群内，不对外 |
-| 8404/TCP | 运维 → HAProxy | HAProxy 监控 | 仅内网 |
-| 9090/TCP | 监控 → 平台 API | Prometheus 指标 | 仅内网 |
+CREATE USER 'ftc'@'%' IDENTIFIED BY '<强密码>';
+GRANT ALL PRIVILEGES ON ftc_platform.* TO 'ftc'@'%';
+FLUSH PRIVILEGES;
+```
 
-如果使用外部负载均衡/VIP，**443 要转发到 ingress-nginx**，而不是直接转发到平台 Pod。
+> 平台不会执行 `CREATE DATABASE` 或 `CREATE USER`；请先创建，或用管理员账号完成。账号至少需要目标库的 `CREATE/ALTER/INDEX/INSERT/UPDATE/DELETE/SELECT` 权限。
 
-### 2.3 Ingress 资源
+### 2.3 Ingress
 
 | 项 | 要求 |
 | --- | --- |
-| Controller | ingress-nginx（或其他支持 `networking.k8s.io/v1` Ingress 的控制器） |
-| IngressClass | 例如 `nginx`；向导中要填同一个名字 |
-| TLS 终止 | 必须在 Ingress/Controller 层终止 TLS，不能是四层 TCP 透传 |
-| 443 暴露 | hostNetwork、hostPort、LoadBalancer 或外部 VIP 均可 |
-| 证书 | 平台默认生成自签 CA；也可后续替换为 cert-manager/企业 CA |
-| 域名 | 必须是合法 DNS 名称，建议内部二级域名，例如 `ftc-platform.cmb.local` |
+| Controller | ingress-nginx 或兼容 `networking.k8s.io/v1` 的 Controller |
+| IngressClass | 例如 `nginx`，向导中填同一个 |
+| 443 | 从用户网段可访问；TLS 必须在 Ingress 层终止 |
+| 证书 | 平台默认生成自签 CA；后续可替换为企业 CA |
 
-**本平台只创建 Ingress，不负责安装 Ingress Controller。** 生产环境应复用客户已有的 ingress-nginx。
+### 2.4 镜像
 
-### 2.4 存储资源
-
-3 个节点各准备一块**独立本地盘**，不要使用 NFS/Ceph 等共享存储替代 MySQL 数据盘。
-
-| 节点 | 挂载点 | 用途 | 权限 |
-| --- | --- | --- | --- |
-| worker-1 | `/data/ftc-platform/mysql` | PXC 副本 1 数据 | `1001:1001`，`0770` |
-| worker-2 | `/data/ftc-platform/mysql` | PXC 副本 2 数据 | 同上 |
-| worker-3 | `/data/ftc-platform/mysql` | PXC 副本 3 数据 | 同上 |
-
-说明：
-
-- 三个节点可以使用**相同路径**，因为 PV 是节点绑定的；
-- 不要在同一节点给两个 PXC 副本复用同一路径；
-- 本地 PV 使用 `Retain`，**不支持在线扩容**；容量不足只能换盘/迁移；
-- 节点故障时，该节点上的 PXC 副本不会自动漂移，需要人工替换节点并重建 PV。
-
-### 2.5 镜像资源
-
-| 镜像 | 用途 | 示例 |
+| 镜像 | 用途 | 是否必需 |
 | --- | --- | --- |
-| 平台镜像 | API/Collector/Worker/Setup/Bootstrap | `registry.example.com/ftc/ftc-platform:0.1.0` |
-| PXC Operator | 管理 PXC 集群 | `percona/percona-xtradb-cluster-operator:1.18.0` |
-| PXC | MySQL 3 副本 | `percona/percona-xtradb-cluster:8.0.42-33.1` |
-| HAProxy | MySQL 读写入口 | `percona/haproxy:2.8.15` |
-| XtraBackup | 备份（如启用） | `percona/percona-xtrabackup:8.0.42-33.1` |
-| ingress-nginx | 入口控制器 | `registry.k8s.io/ingress-nginx/controller:v1.11.3` |
-| kube-bench | 安全扫描（可选） | `aquasec/kube-bench:v0.16.0` |
+| 平台镜像 | API/Collector/Worker/Setup/Bootstrap | 必需 |
+| ingress-nginx | 入口控制器 | 已有则不需要 |
+| kube-bench | 安全扫描（可选） | 可选 |
 
-> 镜像放 registry，不要提交到 Git。离线交付用 `skopeo copy --all`/`docker save` 导入客户 registry 或节点。
+> 不再需要 PXC/HAProxy/Operator/XtraBackup 镜像。镜像放 registry，不要提交到 Git；离线用 `skopeo copy --all` 或 `docker save`。
 
-### 2.6 账号与密钥
+### 2.5 账号与密钥
 
 | 项 | 说明 |
 | --- | --- |
-| setup token | 引导 Job 生成，一次性使用 |
+| kubeconfig | 具有集群管理员权限 |
+| setup token | 引导 Job 生成，一次性 |
 | encryption key | 引导 Job 生成，**必须离线备份**；丢失后已纳管集群的 Kubeconfig 无法解密 |
-| 管理员密码 | 初始化向导设置，至少 12 位，建议 16 位以上 |
-| registry 凭据 | 私有仓库的只读拉取账号 |
-| CA 私钥 | 由平台生成并保存在 `ftc-platform-ca` Secret；不要导出到不受控位置 |
+| MySQL 密码 | 外部 MySQL 账号密码 |
+| 管理员密码 | 初始化时设置，至少 12 位 |
 
 ---
 
-## 3. Step 0：交付评审（不执行命令）
+## 3. Step 0：交付前决策
 
-在动手前，和客户确认并填入下表。**这张表就是后续所有步骤的输入。**
+| 决策项 | 示例 |
+| --- | --- |
+| 外部 MySQL 地址 | `mysql.internal` |
+| 端口 | `3306` |
+| 数据库 | `ftc_platform` |
+| 用户名 | `ftc` |
+| TLS 模式 | 关闭 / 优先 / 必须 |
+| 内部域名 | `ftc-platform.cmb.local` |
+| IngressClass | `nginx` |
+| 平台镜像 | `registry.example.com/ftc/ftc-platform:0.1.0` |
+| 管理员 | `admin` |
+| 变更窗口 | 例如周六 00:00–02:00 |
 
-| 决策项 | 客户填写 | 示例 |
-| --- | --- | --- |
-| 内部域名 |  | `ftc-platform.cmb.local` |
-| IngressClass |  | `nginx` |
-| 3 个 worker 节点名 |  | `prod-worker-01/02/03` |
-| 3 个 MySQL 路径 |  | `/data/ftc-platform/mysql` |
-| 单卷容量 |  | `200Gi` |
-| 平台镜像 |  | `registry.example.com/ftc/ftc-platform:0.1.0` |
-| 私有仓库地址 |  | `registry.example.com` |
-| imagePullSecret 名称 |  | `ftc-platform-registry` |
-| PXC/HAProxy/Operator 镜像 |  | 见第 2.5 节 |
-| 管理员用户名 |  | `admin` |
-| 备份目标 |  | S3/NFS（上线前必须确定） |
-| 变更窗口 |  | 例如周六 00:00–02:00 |
+检查：
 
-评审结论：
-
-- [ ] 3 个 worker 可调度，且不在同一台物理机；
-- [ ] 每节点有独立本地盘；
-- [ ] 443 可从用户网段访问；
-- [ ] 内部域名可解析，或确认用 hosts；
-- [ ] 镜像可从客户集群拉取；
-- [ ] 已确定备份方案和回滚窗口。
+- [ ] 我有 kubeconfig，能创建 Namespace/Deployment/Ingress；
+- [ ] 有可用的外部 MySQL，库和账号已创建；
+- [ ] 集群能访问 MySQL 地址和端口；
+- [ ] 有可用的 IngressClass 和 443；
+- [ ] 平台镜像已推到 registry。
 
 ---
 
-## 4. Step 1：准备节点和本地磁盘
+## 4. Step 1：确认集群
 
 ### 目标
 
-3 个 worker 可调度，每个节点有独立数据盘，路径对 PXC 运行用户可写。
+至少 1 个可调度节点，kubectl 能正常访问。
 
 ### 操作
 
-1. 确认节点：
-
 ```bash
+kubectl version
 kubectl get nodes -o wide
-kubectl get nodes -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,SCHEDULABLE:.spec.unschedulable'
-```
-
-2. 确认节点资源：
-
-```bash
-kubectl describe node <worker-1> | sed -n '/Allocatable/,+8p'
-kubectl describe node <worker-2> | sed -n '/Allocatable/,+8p'
-kubectl describe node <worker-3> | sed -n '/Allocatable/,+8p'
-```
-
-3. 在每个 worker 上准备独立盘（示例，盘符按实际替换）：
-
-```bash
-# 在每台 worker 上执行
-# 警告：先确认盘符，绝不要对系统盘执行 mkfs
-lsblk
-sudo mkfs.xfs /dev/<data-disk>
-sudo mkdir -p /data
-sudo mount /dev/<data-disk> /data
-echo '/dev/<data-disk> /data xfs defaults,noatime 0 2' | sudo tee -a /etc/fstab
-
-sudo mkdir -p /data/ftc-platform/mysql
-sudo chown -R 1001:1001 /data/ftc-platform/mysql
-sudo chmod 0770 /data/ftc-platform/mysql
-```
-
-4. 确认路径和权限：
-
-```bash
-df -h /data
-ls -ld /data/ftc-platform/mysql
-# 预期：drwxrwx--- 1001 1001
+kubectl auth can-i create deployments -n ftc-platform
+kubectl get ingressclass
 ```
 
 ### 通过标准
 
-- 3 个 worker 均为 `Ready` 且 `SCHEDULABLE` 为空；
-- 每节点 `/data` 已挂载，容量 ≥100GiB；
-- `/data/ftc-platform/mysql` 属主 `1001:1001`，权限 `0770`；
-- 三个节点使用相同路径没有问题。
+- `kubectl get nodes` 至少 1 个 `Ready` 且 `SCHEDULABLE` 为空的节点；
+- 有 IngressClass（没有则先做 Step 3）；
+- 当前 kubeconfig 有创建 Namespace/Deployment/Secret/Ingress 的权限。
 
 ### 失败处理
 
 | 现象 | 处理 |
 | --- | --- |
-| 只有 2 个可调度 worker | 增加节点，或去掉 control-plane 的 NoSchedule 污点（不推荐生产） |
-| 磁盘未挂载 | 先修复 `/etc/fstab`，重启后确认 `df -h` |
-| 权限不对 | `chown 1001:1001`；PXC 容器以 UID 1001 运行 |
-| 路径是 NFS | 不要用于 PXC 数据盘；改用本地盘 |
+| 0 个可调度节点 | 去掉 control-plane 的 NoSchedule 污点，或加一个 worker |
+| `Forbidden` | 使用集群管理员 kubeconfig |
+| 没有 IngressClass | 先做 Step 3 |
 
 ---
 
-## 5. Step 2：准备 Ingress（不使用 Helm）
+## 5. Step 2：准备外部 MySQL
 
 ### 目标
 
-`IngressClass` 存在，443 能从用户网段访问，TLS 在 Ingress 层终止。
+数据库存在，账号能连接，平台账号有建表权限。
 
 ### 操作
 
-1. 检查是否已有 ingress-nginx：
+1. 在 MySQL 上建库/建账号（见第 2.2 节 SQL）。
+2. 在能访问 MySQL 的机器上测试：
+
+```bash
+mysql -h mysql.internal -P 3306 -u ftc -p ftc_platform -e 'SELECT 1'
+```
+
+3. 如果 MySQL 只允许特定网段，把 Kubernetes 节点/Pod 网段加入白名单。
+4. TLS：
+   - 内网可关闭；
+   - 跨网建议 `优先 TLS`；
+   - 如果 MySQL 使用自签证书，`必须 TLS` 会校验证书，需要把 CA 放进系统信任库，或先使用 `优先 TLS`。
+
+### 通过标准
+
+- `SELECT 1` 成功；
+- 账号能在 `ftc_platform` 建表；
+- 集群到 MySQL 的 3306 网络可达。
+
+### 失败处理
+
+| 现象 | 处理 |
+| --- | --- |
+| `Access denied` | 检查用户名/密码/来源 `%` |
+| `Unknown database` | 先创建数据库 |
+| `Can't connect` | 检查网络/防火墙/白名单 |
+| TLS 错误 | 先用 `关闭` 验证，再补 CA |
+
+---
+
+## 6. Step 3：准备 Ingress（无 Helm）
+
+### 目标
+
+IngressClass 存在，443 能完成 TLS 握手。
+
+### 操作
 
 ```bash
 kubectl get ingressclass
 kubectl -n ingress-nginx get pods,svc
 ```
 
-2. 如果已有，记录 IngressClass 名称（通常 `nginx`），跳到“通过标准”。
+如果已有 ingress-nginx，记录 IngressClass 名称，跳过安装。
 
-3. 如果没有，使用静态清单安装 ingress-nginx（**不是 Helm**）：
+如果没有，使用静态清单（**不是 Helm**）：
 
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/baremetal/deploy.yaml
@@ -293,84 +259,53 @@ kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --ti
 kubectl get ingressclass
 ```
 
-> 官方 baremetal 清单默认是 NodePort。生产上需要满足以下任一种：
-> - 外部 LB/VIP 把 443 转发到 ingress-nginx；
-> - 把 controller 改成 hostNetwork/hostPort 80/443；
-> - 使用云厂商 LoadBalancer。
->
-> 平台只创建 Ingress，不负责把 443 暴露到集群外。
+把 443 暴露出来，任选一种：
 
-4. 验证 443 的 TLS 握手（即使返回 404 也说明 TLS 正常）：
+- 外部 LB/VIP 转发到 ingress-nginx；
+- controller 使用 hostPort 80/443；
+- 云厂商 LoadBalancer。
+
+验证：
 
 ```bash
-curl -kI https://<任一节点IP或VIP>/
-# 预期：HTTP/2 404 或 200；不应是 connection refused/timeout
-```
-
-5. 如果使用 hosts 而不是内部 DNS，先准备客户端记录（Step 9 再正式配置）：
-
-```text
-<VIP或任一节点IP>  ftc-platform.cmb.local
+curl -kI https://<节点IP或VIP>/
+# 404/200 都说明 TLS 通了；connection refused 说明 443 没通
 ```
 
 ### 通过标准
 
-- `kubectl get ingressclass` 至少有一个，名字与向导中填写一致；
-- `curl -kI https://<IP>/` 能完成 TLS 握手；
-- 防火墙允许用户网段访问 443；
-- 确认 Ingress 是 TLS 终止，不是四层透传。
+- `kubectl get ingressclass` 有名字；
+- 443 TLS 握手成功；
+- 用户网段能访问 443。
 
 ### 失败处理
 
 | 现象 | 处理 |
 | --- | --- |
-| `connection refused` | controller 未监听 443，检查 Service/hostPort/LB |
-| `404` 但 TLS 成功 | 正常，说明还没有 Ingress 规则 |
-| `no such host` | DNS/hosts 未配置 |
-| `ingressclass` 为空 | controller 未安装或未就绪 |
-| 客户使用其他 Controller | 确认支持 `networking.k8s.io/v1` Ingress 和 TLS Secret |
+| 没有 IngressClass | controller 未安装/未就绪 |
+| `connection refused` | 443 未暴露，检查 LB/hostPort |
+| 404 | 正常，还没有 Ingress 规则 |
+
+> `install.yaml` **不包含 ingress-nginx**。这是集群前置，避免和客户已有 Controller/Webhook 冲突；但一个人有集群权限时可以按本节自行安装。
 
 ---
 
-## 6. Step 3：准备镜像
-
-### 目标
-
-客户集群能从 registry 拉取平台和 PXC 相关镜像；私有仓库已配置 imagePullSecret。
+## 7. Step 4：准备平台镜像
 
 ### 操作
 
-1. 构建并推送平台镜像（在构建机执行，不在 K8s 节点执行）：
-
 ```bash
-# 单架构（匹配目标节点架构）
 docker build -t registry.example.com/ftc/ftc-platform:0.1.0 .
 docker push registry.example.com/ftc/ftc-platform:0.1.0
 
-# 多架构（推荐）
+# 多架构
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -t registry.example.com/ftc/ftc-platform:0.1.0 \
   --push .
 ```
 
-2. 把第三方镜像同步到客户 registry（或确认客户可直接拉取）：
-
-```bash
-# 有 skopeo 时，多架构镜像用 --all 保留 manifest list
-skopeo copy --all docker://percona/percona-xtradb-cluster-operator:1.18.0 \
-  docker://registry.example.com/ftc/percona-xtradb-cluster-operator:1.18.0
-skopeo copy --all docker://percona/percona-xtradb-cluster:8.0.42-33.1 \
-  docker://registry.example.com/ftc/percona-xtradb-cluster:8.0.42-33.1
-skopeo copy --all docker://percona/haproxy:2.8.15 \
-  docker://registry.example.com/ftc/percona-haproxy:2.8.15
-skopeo copy --all docker://percona/percona-xtrabackup:8.0.42-33.1 \
-  docker://registry.example.com/ftc/percona-xtrabackup:8.0.42-33.1
-```
-
-> 如果客户集群节点不能出网，优先推客户 registry；也可以 `docker save`/`ctr import` 到节点，但不建议作为长期方案。
-
-3. 创建 imagePullSecret（命名空间由 `install.yaml` 创建）：
+如果平台镜像来自私有仓库：
 
 ```bash
 kubectl create namespace ftc-platform --dry-run=client -o yaml | kubectl apply -f -
@@ -381,72 +316,30 @@ kubectl -n ftc-platform create secret docker-registry ftc-platform-registry \
   --docker-password='<password>'
 ```
 
-4. 如果 setup/bootstrap 使用私有平台镜像，推荐在 Step 4 复制出 `/tmp/ftc-install.yaml` 后、apply 之前，给两个 ServiceAccount 增加：
-
-```yaml
-imagePullSecrets:
-  - name: ftc-platform-registry
-```
-
-如果已经 apply 并出现 `ImagePullBackOff`，按 Step 4 的“私有镜像补充”处理；若使用公开镜像或节点已预加载，可跳过 Secret。
+> setup/bootstrap 也用同一个平台镜像。建议在 Step 5 apply 后 patch 两个 ServiceAccount；或者提前把 `imagePullSecrets` 写进 `install.yaml` 的两个 SA。
 
 ### 通过标准
 
-- 平台镜像在客户 registry 可拉取；
-- PXC/HAProxy/Operator 镜像已同步（或可直接拉取）；
-- `ftc-platform-registry` Secret 存在；
-- 节点的容器运行时能解析 registry 地址。
-
-### 失败处理
-
-| 现象 | 处理 |
-| --- | --- |
-| `ImagePullBackOff` | `kubectl describe pod` 看仓库地址/认证 |
-| `401/403` | 检查 imagePullSecret 和 ServiceAccount |
-| `no match for platform` | 镜像架构与节点不一致，补多架构 manifest |
-| 拉取超时 | 使用客户内网 registry 或预加载节点 |
+- 平台镜像可拉取；
+- `ftc-platform-registry` Secret 存在（私有仓库时）。
 
 ---
 
-## 7. Step 4：apply 安装清单
-
-### 目标
-
-创建 Namespace、RBAC、Bootstrap Job、Setup 入口、PXC Operator；生成一次性 token 和加密密钥。
+## 8. Step 5：apply 安装清单
 
 ### 操作
-
-1. 复制并替换平台镜像占位符（三处）：
 
 ```bash
 cp deploy/install.yaml /tmp/ftc-install.yaml
 sed -i 's|REPLACE_WITH_PLATFORM_IMAGE|registry.example.com/ftc/ftc-platform:0.1.0|g' /tmp/ftc-install.yaml
-
-# 必须为空
 grep -n 'REPLACE_WITH_PLATFORM_IMAGE' /tmp/ftc-install.yaml || echo "image placeholder ok"
-```
 
-2. 服务端 dry-run（先确保命名空间存在）：
-
-```bash
 kubectl create namespace ftc-platform --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml --dry-run=server
-```
-
-3. 正式 apply：
-
-```bash
 kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml
 ```
 
-4. 先检查 bootstrap/setup 是否在拉镜像：
-
-```bash
-kubectl -n ftc-platform get pods
-kubectl -n ftc-platform get job ftc-platform-bootstrap
-```
-
-如果出现 `ImagePullBackOff` / `ErrImagePull`，且两个 ServiceAccount 还没有拉取 Secret：
+如果私有镜像导致 `ImagePullBackOff`：
 
 ```bash
 kubectl -n ftc-platform patch serviceaccount ftc-platform-bootstrap \
@@ -459,52 +352,29 @@ kubectl -n ftc-platform delete pod -l app.kubernetes.io/name=ftc-platform-setup 
 kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml
 ```
 
-5. 等待引导 Job：
+等待引导 Job，并读取 token/密钥：
 
 ```bash
 kubectl -n ftc-platform wait --for=condition=complete job/ftc-platform-bootstrap --timeout=15m
 kubectl -n ftc-platform logs job/ftc-platform-bootstrap
-```
 
-6. 读取 token 和加密密钥（以 Secret 为准）：
-
-```bash
 kubectl -n ftc-platform get secret ftc-platform-bootstrap \
   -o jsonpath='{.data.setup-token}' | base64 -d; echo
 kubectl -n ftc-platform get secret ftc-platform-bootstrap \
   -o jsonpath='{.data.encryption-key}' | base64 -d; echo
 ```
 
-**立即做两件事：**
-
-- 把 `encryption-key` 存进客户密钥管理系统/离线保险柜；
-- 把 `setup-token` 只交给执行初始化的人，不要发群、不要写入 Git。
+**立即备份 encryption key。** 不要把 token 发群或写入 Git。
 
 ### 通过标准
 
-- `kubectl -n ftc-platform get pods` 中 bootstrap Job `Completed`；
-- `secret/ftc-platform-bootstrap` 存在，含 `setup-token`、`encryption-key`；
-- `deployment/ftc-platform-setup` Ready；
-- PXC Operator Deployment 启动（可能稍后 Ready）。
-
-### 失败处理
-
-| 现象 | 处理 |
-| --- | --- |
-| Job `ImagePullBackOff` | 回到 Step 3 配置 imagePullSecret |
-| Job `Forbidden` | 检查 `ftc-platform-bootstrap` Role/SA |
-| `secret not found` | 查看 Job 日志；不要手工伪造 token |
-| setup Pod 未启动 | `kubectl describe pod -l app.kubernetes.io/name=ftc-platform-setup` |
+- bootstrap Job `Completed`；
+- `secret/ftc-platform-bootstrap` 含 `setup-token`、`encryption-key`；
+- `deployment/ftc-platform-setup` Ready。
 
 ---
 
-## 8. Step 5：打开初始化页面
-
-### 目标
-
-在本地浏览器打开 setup 页面，不把 setup 入口暴露到公网。
-
-### 操作
+## 9. Step 6：打开初始化页面
 
 ```bash
 kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80 --address 127.0.0.1
@@ -516,202 +386,110 @@ kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80 --address 12
 http://127.0.0.1:8080
 ```
 
-如果操作机不能直连集群，用 SSH 隧道：
-
-```bash
-ssh -L 8080:127.0.0.1:8080 <user>@<bastion-or-node>
-# 然后本地浏览器仍打开 http://127.0.0.1:8080
-```
-
-> 不要把 setup Service 通过 Ingress/NodePort 暴露到公网。setup 身份拥有命名空间内编排权限，只在初始化窗口内使用。
-
-### 通过标准
-
-- 页面能打开，显示“环境检查/初始化”；
-- 输入 Step 4 的 setup token 能通过。
-
-### 失败处理
-
-| 现象 | 处理 |
-| --- | --- |
-| 端口被占用 | 换本地端口，例如 `18080:80` |
-| `connection refused` | setup Pod 未 Ready，或 port-forward 退出 |
-| 页面 404 | setup 镜像版本不对，确认镜像包含 setup 入口 |
-| token 错误 | 重新从 Secret 读取，注意不要带换行 |
+> 不要把 setup 暴露到公网；它拥有命名空间内编排权限。远程操作可用 SSH 隧道。
 
 ---
 
-## 9. Step 6：Preflight
+## 10. Step 7：Preflight
 
-### 目标
+向导第一页输入 token，点击“检查环境”。本版本只检查：
 
-在创建任何 PXC/PV 之前，确认集群具备安装条件。
-
-### 操作
-
-1. 在向导中输入 token，点击“环境检查”。
-2. 逐项看报告；不要只看“通过/失败”总览。
-3. 失败项按提示修复后重新检查。
-
-Preflight 会检查：
-
-| 检查项 | 期望 | 失败处理 |
-| --- | --- | --- |
-| 可调度节点 | ≥3 | 增加 worker / 去污点 |
-| 架构 | 与镜像一致 | 准备对应架构镜像 |
-| IngressClass | 存在 | 安装 ingress-nginx 或填正确名字 |
-| PXC CRD | 存在 | 确认 apply 的是完整 `install.yaml` |
-| 现有运行 Secret | 不存在 | 已初始化过；换命名空间或清理后重装 |
-| StorageClass | 由安装创建/可用 | 一般无需手工创建 |
-| Namespace/RBAC | 可读写 | 检查 kubeconfig 权限 |
-
-### 通过标准
-
-- 页面显示“环境检查通过”；
-- 没有红色错误项；
-- 你已确认 3 个节点名和 3 个路径就是 Step 1 准备的。
-
-### 失败处理
-
-| 现象 | 处理 |
+| 检查项 | 期望 |
 | --- | --- |
-| 节点少于 3 | 不要继续；PXC 3 副本无法满足反亲和 |
-| `already initialized` | 说明已有运行 Secret；不要重复初始化，先确认是否已有平台 |
-| IngressClass 不存在 | 回到 Step 2 |
-| PXC CRD 不存在 | 重新 apply `/tmp/ftc-install.yaml`，确认 CRD 未被裁剪 |
+| 可调度节点 | ≥1 |
+| IngressClass | 存在 |
+| 运行 Secret | 不存在（未初始化） |
+| Namespace/RBAC | 可读写 |
+
+不再检查 PXC CRD、StorageClass、3 个 worker 或本地盘。
+
+失败处理：
+
+| 错误 | 处理 |
+| --- | --- |
+| 没有可调度节点 | 去污点/加 worker |
+| 没有 IngressClass | 回到 Step 3 |
+| 已经初始化 | 不要重复安装；先确认是否已有平台 |
 
 ---
 
-## 10. Step 7：填写向导参数
+## 11. Step 8：填写外部 MySQL 和访问配置
 
-### 目标
-
-一次性填入节点、存储、MySQL、域名、管理员，生成安装计划。
-
-### 操作
-
-#### 10.1 数据库与存储
-
-- 选择 3 个 **不同** 的 worker；
-- 每个节点填同一个本地路径（例如 `/data/ftc-platform/mysql`）；
-- 单卷容量建议 `200Gi`，最低 `100Gi`；
-- 不要在同一节点重复选择同一路径。
-
-#### 10.2 MySQL 镜像
+### 数据库页
 
 | 字段 | 示例 |
 | --- | --- |
-| PXC Operator | `registry.example.com/ftc/percona-xtradb-cluster-operator:1.18.0` |
-| PXC | `registry.example.com/ftc/percona-xtradb-cluster:8.0.42-33.1` |
-| HAProxy | `registry.example.com/ftc/percona-haproxy:2.8.15` |
-| XtraBackup | `registry.example.com/ftc/percona-xtrabackup:8.0.42-33.1` |
-| imagePullSecret | `ftc-platform-registry` |
+| MySQL 地址 | `mysql.internal` |
+| 端口 | `3306` |
+| 数据库名 | `ftc_platform` |
+| 用户名 | `ftc` |
+| 密码 | 你的 MySQL 密码 |
+| TLS | 关闭/优先/必须 |
 
-#### 10.3 访问配置
+点击 **“测试数据库连接”**；成功后再下一步。
 
-- 内部域名：`ftc-platform.cmb.local`（不要带 `https://`）；
-- IngressClass：Step 2 确认的名字；
-- 管理员用户名/密码：至少 12 位，建议 16 位以上，包含大小写、数字、符号；
-- 平台运行镜像：如果与安装 ConfigMap 不同，在这里覆盖。
+> 平台不会创建数据库或账号；如果连接成功但安装报建表失败，给账号补 `CREATE/ALTER/INDEX` 权限。
 
-#### 10.4 确认
+### 访问页
 
-- 再次核对 3 个节点、3 个路径、容量、域名；
-- 点击“开始安装”后不要关闭浏览器；
-- 同一时间只允许一个安装任务。
+- 内部域名：`ftc-platform.cmb.local`（不带 `https://`）；
+- IngressClass：Step 3 的名字；
+- 平台运行镜像：留空使用安装 ConfigMap，或填完整镜像；
+- 管理员用户名/密码：至少 12 位。
 
-### 通过标准
+### 确认页
 
-- 页面进入“安装中”；
-- 每一步状态从 `pending → running → done`；
-- 没有参数校验错误。
-
-### 失败处理
-
-| 现象 | 处理 |
-| --- | --- |
-| 路径重复 | 同一节点不能选两次；不同节点可以同路径 |
-| 容量校验失败 | 不要低于 100Gi；本地盘容量要覆盖 PVC |
-| 域名格式错误 | 使用小写 DNS 名称，不要带协议/路径 |
-| 密码太短 | 按提示加长 |
+检查外部 MySQL、域名、管理员，点击“开始安装”。
 
 ---
 
-## 11. Step 8：执行安装
+## 12. Step 9：安装阶段
 
-### 目标
-
-按顺序创建 local PV/SC、PXC 3 节点、应用库/管理员、自签 CA/Ingress、运行 Deployment，并做健康检查。
-
-### 安装阶段
-
-| 阶段 | 做什么 | 预计耗时 | 失败时先看 |
-| --- | --- | --- | --- |
-| `storage` | 创建 `ftc-platform-local` SC、3 个 local PV | <1 min | PV 节点名/路径/容量 |
-| `mysql` | 创建 PXC CR、3 个 PXC + 3 个 HAProxy | 5–15 min | PXC/HAProxy Pod、PVC、镜像 |
-| `database` | 创建 `ftc_platform` 库、应用账号、管理员、runtime Secret | 1–3 min | HAProxy 连接、PXC 状态、迁移日志 |
-| `ingress` | 生成自签 CA、TLS Secret、Ingress | <1 min | IngressClass、域名、Secret |
-| `runtime` | 创建 API/Collector/Worker、PDB、Service | 1–2 min | PDB RBAC、镜像、资源 |
-| `verify` | 等待 API 健康检查 | 1–5 min | API Pod 日志、数据库连接 |
-
-### 操作
-
-1. 点击“开始安装”。
-2. 观察每一步状态和消息。
-3. 安装过程中不要：
-   - 手工删除 PXC Pod/PVC；
-   - 修改 PXC CR 的 size；
-   - 重启 setup Pod（内存中的状态会丢失）。
-4. 失败时先点“查看详情/日志”，不要直接重装。
-
-### 常见失败与处理
-
-| 错误 | 原因 | 处理 |
-| --- | --- | --- |
-| `ImagePullBackOff` | 镜像/Secret | 补 imagePullSecret，重建对应 Pod |
-| `pxc_strict_mode=ENFORCING` / `GET_LOCK` | 平台迁移锁与 PXC 严格模式冲突 | 当前交付版 CR 已设置 `pxc_strict_mode=DISABLED`；旧镜像需升级 |
-| `PXC 3 节点...` 长时间不完成 | 镜像慢/磁盘/资源不足/反亲和 | 看 PXC Pod 事件、PVC Bound、节点资源 |
-| `PDB forbidden` | setup Role 缺 `poddisruptionbudgets` | 使用当前 `install.yaml`；旧清单需补 RBAC |
-| `HAProxy` 无端点 | HAProxy 未 Ready/PXC 未就绪 | 看 HAProxy/pxc-monit 日志；不要只看 Pod Running |
-| `verify` 超时 | API 未 Ready/DB 连接失败 | `kubectl logs deploy/ftc-platform` |
-| 安装状态丢失 | setup Pod 重启 | 资源可能已部分创建；先检查再决定是否重试 |
-
-### 通过标准
-
-- 页面显示“安装完成”；
-- `verify` 为 done；
-- 结果页出现 URL、hosts、CA 下载；
-- 没有任何步骤处于 running/failed。
-
-### 失败处理
-
-```bash
-kubectl -n ftc-platform get pods,pvc,events --sort-by=.lastTimestamp
-kubectl -n ftc-platform describe pxc platform-mysql
-kubectl -n ftc-platform logs deployment/ftc-platform-setup --tail=200
-kubectl -n ftc-platform logs deployment/ftc-platform --tail=200
+```mermaid
+flowchart LR
+    A["database<br/>连接 MySQL<br/>建表/管理员"] --> B["ingress<br/>自签 CA<br/>Ingress"]
+    B --> C["runtime<br/>API/Collector/Worker"]
+    C --> D["verify<br/>健康检查"]
+    D --> E["✅ 完成"]
 ```
 
-如果失败发生在 `runtime` 之后且 runtime Secret 已创建，当前代码允许在 `failed` 状态下重试；不要删除 Secret 来“强行重装”。
+| 阶段 | 做什么 | 预计 |
+| --- | --- | --- |
+| `database` | 连接外部 MySQL、迁移表结构、创建管理员、写 runtime Secret | 1–3 分钟 |
+| `ingress` | 生成自签 CA、TLS Secret、Ingress | <1 分钟 |
+| `runtime` | 创建 API/Collector/Worker（默认各 1 副本） | 1–2 分钟 |
+| `verify` | 等待 API 健康检查 | 1–3 分钟 |
+
+安装中不要关浏览器、重复点安装、删 Pod 或重启 setup Pod。
+
+常见错误：
+
+| 错误 | 处理 |
+| --- | --- |
+| `无法连接外部 MySQL` | 检查地址/端口/白名单/TLS |
+| `Unknown database` | 先建库 |
+| `建表失败/权限不足` | 给账号 `CREATE/ALTER/INDEX` |
+| `ImagePullBackOff` | 补 imagePullSecret |
+| `verify` 超时 | 看 API Pod 日志和 MySQL 连接 |
+
+排查：
+
+```bash
+kubectl -n ftc-platform get pods,events --sort-by=.lastTimestamp
+kubectl -n ftc-platform logs deploy/ftc-platform-setup --tail=200
+kubectl -n ftc-platform logs deploy/ftc-platform --tail=200
+```
 
 ---
 
-## 12. Step 9：CA、hosts 与首次登录
-
-### 目标
-
-客户端信任平台 CA，域名解析到入口，浏览器能打开登录页。
-
-### 操作
-
-1. 从结果页下载 CA（也可从 Secret 取）：
+## 13. Step 10：CA、hosts、登录
 
 ```bash
 kubectl -n ftc-platform get secret ftc-platform-ca \
   -o jsonpath='{.data.ca\.crt}' | base64 -d > ftc-platform-ca.crt
 ```
 
-2. 把 CA 导入客户端信任库：
+导入 CA：
 
 macOS：
 
@@ -720,233 +498,124 @@ sudo security add-trusted-cert -d -r trustRoot \
   -k /Library/Keychains/System.keychain ftc-platform-ca.crt
 ```
 
-Linux（Debian/Ubuntu）：
+Linux：
 
 ```bash
 sudo cp ftc-platform-ca.crt /usr/local/share/ca-certificates/ftc-platform-ca.crt
 sudo update-ca-certificates
 ```
 
-Windows：
+Windows：双击证书 → 安装到“受信任的根证书颁发机构”。
+
+hosts（没有内部 DNS 时）：
 
 ```text
-certmgr.msc → 受信任的根证书颁发机构 → 导入 → 选择 ftc-platform-ca.crt
-```
-
-3. 配置 hosts（没有内部 DNS 时）：
-
-macOS/Linux：
-
-```bash
-sudo sh -c 'echo "10.20.30.11  ftc-platform.cmb.local" >> /etc/hosts'
-```
-
-Windows：
-
-```text
-C:\Windows\System32\drivers\etc\hosts
 10.20.30.11  ftc-platform.cmb.local
 ```
 
-> 优先使用内部 DNS 或 VIP；不要把 hosts 指向会漂移的单个节点 IP。生产建议用 4 层 VIP/LB。
-
-4. 浏览器访问：
+访问：
 
 ```text
 https://ftc-platform.cmb.local
 ```
 
-5. 命令行验证：
+命令行验证：
 
 ```bash
 curl -I --cacert ftc-platform-ca.crt https://ftc-platform.cmb.local/
 curl -s --cacert ftc-platform-ca.crt https://ftc-platform.cmb.local/api/v1/health
 ```
 
-### 通过标准
-
-- 浏览器无证书警告；
-- 登录页返回 200；
-- `/api/v1/health` 返回 `{"status":"ok"}`；
-- 管理员能登录。
-
-### 失败处理
-
-| 现象 | 处理 |
-| --- | --- |
-| 证书不受信任 | 确认导入的是 `ftc-platform-ca`，不是 `ftc-platform-tls` |
-| `NET::ERR_CERT_COMMON_NAME_INVALID` | 域名与证书 SAN 不一致；重新安装时填正确域名 |
-| 404 | Ingress host/class 不匹配 |
-| 502 | Service 无端点，检查 API Pod |
-| 连接拒绝 | 443 未暴露或 hosts 指错 |
-
 ---
 
-## 13. Step 10：生产验收
+## 14. Step 11：验收与清理 setup
 
-### 目标
-
-确认不是“页面能开”而已，而是数据库、入口、运行面、权限回收都正确。
-
-逐项执行：
+### 验收
 
 ```bash
-kubectl -n ftc-platform get pvc,pv,statefulset,pod,ingress,secret
-kubectl -n ftc-platform get perconaxtradbcluster platform-mysql
-kubectl -n ftc-platform get endpoints platform-mysql-haproxy
+kubectl -n ftc-platform get pods,ingress,secret
 kubectl -n ftc-platform rollout status deployment/ftc-platform --timeout=5m
 kubectl -n ftc-platform get rolebinding,clusterrolebinding | grep ftc-platform-setup
 ```
 
-| 验收项 | 期望 | 不通过时 |
-| --- | --- | --- |
-| PXC | 3/3 Running，CR `ready` | 看 PXC Pod/日志 |
-| HAProxy | 3/3 或至少 2/3 Ready | 看 pxc-monit/健康检查 |
-| PVC | 3 个 Bound | 看 PV 节点/容量 |
-| Ingress | 有 TLS、host 正确 | 看 IngressClass/Secret |
-| API | Deployment Ready | 看 Pod/DB 日志 |
-| Collector/Worker | Ready | 看镜像/权限 |
-| setup 权限 | RoleBinding/ClusterRoleBinding 已删除 | 等 30 秒；仍存在则查回收逻辑 |
-| 登录 | admin 可登录 | 看 auth/DB |
-| CA | 浏览器信任 | 重新导入 |
+| 项 | 期望 |
+| --- | --- |
+| API/Collector/Worker | Running |
+| Ingress | 有 TLS，host 正确 |
+| 登录 | admin 可登录 |
+| setup 权限 | RoleBinding/ClusterRoleBinding 已删除 |
+| 外部 MySQL | 表已创建，平台可读写 |
 
-另外检查：
+> 本版本没有 PXC/PVC/HAProxy 验收项。
 
-```bash
-kubectl -n ftc-platform get secret ftc-platform-tls ftc-platform-ca
-kubectl -n ftc-platform get ingress ftc-platform -o yaml
-```
-
-### 通过标准
-
-- 所有验收项通过；
-- `permissions_revoked` 为 true（结果页/状态接口）；
-- 管理员登录后能看到平台首页；
-- 已记录 PXC/HAProxy/API 的当前镜像 digest。
-
----
-
-## 14. Step 11：清理 setup 入口
-
-### 目标
-
-初始化完成后，移除 setup 的浏览器入口，减少攻击面。
-
-### 操作
-
-1. 确认 setup 权限已经回收：
-
-```bash
-kubectl -n ftc-platform get rolebinding ftc-platform-setup
-kubectl -n ftc-platform get clusterrolebinding ftc-platform-setup
-# 预期：NotFound
-```
-
-2. 删除 setup Deployment/Service（保留 Namespace 和 CA/TLS Secret）：
+清理 setup 入口：
 
 ```bash
 kubectl -n ftc-platform delete deployment ftc-platform-setup
 kubectl -n ftc-platform delete service ftc-platform-setup
 ```
 
-3. 保留以下对象，不要删：
-
-- `secret/ftc-platform-bootstrap`（token 已失效，但 encryption key 仍需保留）；
-- `secret/ftc-platform-ca`；
-- `secret/ftc-platform-tls`；
-- `secret/ftc-platform-runtime`。
-
-> 如果还需要重新初始化，必须重新 apply `install.yaml` 并重新生成 bootstrap Secret；不要复用旧 token。
-
-### 通过标准
-
-- setup Service/Deployment 删除；
-- 正式平台仍可登录；
-- CA/TLS Secret 保留。
+保留 `ftc-platform-bootstrap`、`ftc-platform-ca`、`ftc-platform-tls`、`ftc-platform-runtime`。
 
 ---
 
 ## 15. Step 12：上线后运维
 
-### 15.1 备份（上线前必须完成）
+### 备份
 
-当前交付包**没有内置备份 CronJob**。上线前必须补：
+平台不备份外部 MySQL。使用现有 MySQL 体系：
 
-- 使用 XtraBackup 对 PXC 做全量/增量备份；
-- 备份到 S3/NFS/对象存储；
-- 至少每周全量、每日增量；
-- 每季度做一次恢复演练；
-- 备份文件加密，密钥与备份分开存放。
+- 每日全量/增量 + binlog；
+- 定期恢复演练；
+- 备份加密，密钥分开保存。
 
-最低要求：在变更窗口前手工做一次全量备份，并验证可恢复。
+### 升级（无 Helm）
 
-### 15.2 监控
-
-- 平台 API `/metrics`（9090）只在内网暴露；
-- 监控 PXC 3 副本、HAProxy 端点、PVC 使用率、API 5xx、登录失败；
-- 对 `PVC > 80%`、`PXC ready < 3`、`HAProxy endpoints < 2` 告警。
-
-### 15.3 升级（无 Helm）
-
-当前没有 Helm release，升级通过替换运行镜像完成：
-
-1. 先做数据库全量备份；
-2. 构建并推送新平台镜像；
-3. 更新 API/Collector/Worker 镜像：
+1. 备份 MySQL；
+2. 推送新平台镜像；
+3. 更新 Deployment（三个容器名都是 `platform`）：
    ```bash
    kubectl -n ftc-platform set image deployment/ftc-platform platform=<new-image>
    kubectl -n ftc-platform set image deployment/ftc-platform-collector platform=<new-image>
    kubectl -n ftc-platform set image deployment/ftc-platform-worker platform=<new-image>
    kubectl -n ftc-platform rollout status deployment/ftc-platform
    ```
-4. API 启动时执行数据库迁移；迁移失败立即停止并回滚镜像；
-5. 数据库迁移通常不可逆，回滚镜像不等于回滚数据；必要时从备份恢复。
+4. API 启动时执行迁移；迁移失败先停，回滚镜像；数据库迁移通常不可逆，必要时恢复备份。
 
-> 升级前必须在测试环境验证 N-1 → N；当前交付包没有自动回滚。
+### 节点/平台故障
 
-### 15.4 节点故障
+- 平台无状态，Pod 会被重新调度；
+- 外部 MySQL 的连接和 HA 由 MySQL 体系负责；
+- 多节点建议把 API/Collector 调到 2 副本。
 
-- 本地 PV 绑定节点，故障节点的 PXC 副本不会漂移；
-- 剩余 2 个 PXC 副本可维持仲裁，但不要长期运行在 2 副本；
-- 替换节点后，需要重建该节点的本地 PV，并让 PXC 重新加入；
-- 具体步骤必须结合客户磁盘/节点替换流程演练。
-
-### 15.5 卸载
+### 卸载
 
 ```bash
-# 先确认已备份
 kubectl delete namespace ftc-platform
-kubectl delete pv -l ftc-platform/role=mysql-data
-kubectl delete sc ftc-platform-local
 kubectl delete clusterrole ftc-platform-setup --ignore-not-found
 kubectl delete clusterrolebinding ftc-platform-setup --ignore-not-found
 ```
 
-> 不要直接 `kubectl delete -f install.yaml`：清单里包含 PXC CRD，删除 CRD 会级联删除集群内**所有** PXC 集群。只有确认这台集群没有其他 PXC 实例时，才考虑删除 CRD。
->
-> 删除 PV/本地目录会丢失数据；先做备份并确认。
+> 不会删除外部 MySQL；是否需要清理库表由你决定。不要删除不属于本平台的 CRD。
 
-### 15.6 安全基线
+### 安全
 
-- 初始化后立即删除 setup Deployment/Service；
-- 不在 Git/聊天工具中保存 setup token/encryption key；
+- 初始化后删除 setup Deployment/Service；
 - 限制 9090/8404 只在内网；
-- 为平台 API 配置 NetworkPolicy（如集群支持）；
-- 定期轮换管理员密码；
-- 自签 CA 有效期 5 年，到期前重新签发并替换 TLS Secret；
-- 镜像使用 digest/不可变 tag，记录 SBOM/来源。
+- 管理员密码定期轮换；
+- 自签 CA 到期前替换 TLS Secret；
+- 外部 MySQL 使用最小权限账号 + 网络白名单。
 
 ---
 
-## 16. 已知限制（必须在交付说明中写明）
+## 16. 已知限制
 
-- 本地 PV 节点绑定，节点故障不能自动漂移；PXC 3 副本可容忍 1 个节点故障，但故障副本需要人工重建。
-- 本地 PV 不支持在线扩容；容量规划要一次性留足。
-- 自签 CA 只适合内部环境；企业 CA/cert-manager 需后续替换 TLS Secret。
-- 当前只支持集群内 PXC；已有托管 MySQL 的环境需要改 DSN/Secret，尚未做成向导选项。
-- 安装状态保存在 setup Pod 内存中；Pod 重启后状态页丢失，已创建资源不受影响。
-- 备份/恢复、自动升级/回滚尚未内置；上线前必须补流程。
-- Ingress 依赖客户提供 ingress-nginx 和 443 暴露方式；平台不安装 Controller。
+- 平台不再提供集群内 MySQL 高可用；外部 MySQL 的 HA/备份/监控由客户负责。
+- 单节点可安装，但不是平台高可用；生产建议 2 个以上可调度节点。
+- 自签 CA 只适合内部环境。
+- 安装状态保存在 setup Pod 内存；Pod 重启后状态页丢失。
+- 没有自动升级/回滚；升级前必须备份。
+- `install.yaml` 不含 ingress-nginx；需要已有 Controller 或按 Step 3 安装。
 - setup token 一次性；encryption key 丢失后已纳管集群的 Kubeconfig 无法解密。
 
 ---
@@ -954,55 +623,46 @@ kubectl delete clusterrolebinding ftc-platform-setup --ignore-not-found
 ## 附录 A：一页纸检查清单
 
 ```text
-[ ] 3 个 worker 可调度
-[ ] 每节点独立本地盘，/data/ftc-platform/mysql 属主 1001:1001
+[ ] kubectl 可访问，至少 1 个可调度节点
+[ ] 外部 MySQL 8.0+，库/账号已创建
+[ ] 集群能访问 MySQL 3306
 [ ] IngressClass 存在，443 可访问
-[ ] 内部域名确定，DNS/hosts 方案确定
-[ ] 平台/PXC/HAProxy/Operator 镜像可拉取
-[ ] imagePullSecret 已创建
-[ ] install.yaml 的 REPLACE_WITH_PLATFORM_IMAGE 已替换
+[ ] 平台镜像已推 registry
+[ ] install.yaml 占位符已替换
 [ ] bootstrap Job Completed
-[ ] setup token/encryption key 已备份
+[ ] token/encryption key 已备份
 [ ] Preflight 无错误
-[ ] 向导三节点/三路径/容量/域名/管理员已核对
-[ ] 安装完成，PXC 3/3、HAProxy ≥2/3
-[ ] CA 已导入客户端
-[ ] https 登录成功
-[ ] setup RoleBinding/ClusterRoleBinding 已删除
-[ ] 备份方案已确定并演练
+[ ] 外部 MySQL 连接测试成功
+[ ] 安装完成（database/ingress/runtime/verify）
+[ ] CA 已导入，https 登录成功
+[ ] setup 权限已回收
+[ ] MySQL 备份方案已确定
 ```
 
 ## 附录 B：常用排查命令
 
 ```bash
-# 总览
-kubectl -n ftc-platform get pods,pvc,svc,ingress,secret
-kubectl -n ftc-platform get events --sort-by=.lastTimestamp | tail -30
-
-# bootstrap/setup
+kubectl -n ftc-platform get pods,events --sort-by=.lastTimestamp
 kubectl -n ftc-platform logs job/ftc-platform-bootstrap
 kubectl -n ftc-platform logs deploy/ftc-platform-setup --tail=200
-
-# PXC
-kubectl -n ftc-platform get pxc platform-mysql
-kubectl -n ftc-platform get pods -l app.kubernetes.io/instance=platform-mysql
-kubectl -n ftc-platform describe pxc platform-mysql
-
-# 平台
 kubectl -n ftc-platform logs deploy/ftc-platform --tail=200
-kubectl -n ftc-platform port-forward svc/ftc-platform 8080:8080
-
-# Ingress/TLS
 kubectl -n ftc-platform get ingress ftc-platform -o yaml
 kubectl -n ftc-platform get secret ftc-platform-tls ftc-platform-ca
 ```
 
-## 附录 C：无 Helm 的 Ingress 说明
+## 附录 C：关于 Ingress
 
-本平台不依赖 Helm。Ingress Controller 由客户提供，验收标准只有三条：
+`install.yaml` 只创建平台 Ingress 和 TLS Secret，不安装 ingress-nginx。若集群没有 Controller，按 Step 3 用静态清单安装；如果你有集群管理员权限，一个人即可完成，不需要运维交接。
 
-1. `kubectl get ingressclass` 有可用的 Class；
-2. 443 能完成 TLS 握手，并转发到 Ingress；
-3. Ingress 能按 host 路由到 `ftc-platform` Service。
+---
 
-如果客户没有 ingress-nginx，可用 Step 2 的静态清单安装；如果客户已有其他 Ingress Controller，只要支持 `networking.k8s.io/v1` 和 TLS Secret，也可以复用，向导里填对应 IngressClass 即可。
+## 附录 D：不再需要的配置
+
+以下内容已从本交付路径移除：
+
+- PXC Operator / PXC / HAProxy / XtraBackup 镜像；
+- 3 节点本地盘、PV、StorageClass；
+- PXC CRD 检查；
+- 3 副本反亲和；
+- HAProxy 端点验收；
+- MySQL 密码 Secret（外部 MySQL 密码由向导直接写入运行 Secret）。

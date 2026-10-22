@@ -72,6 +72,9 @@
 .ks-setup-review p { color: #425466; font-size: 13px; line-height: 1.55; margin: 4px 0; overflow-wrap: anywhere; }
 .ks-setup-hosts { background: #fafbfc; border: 1px solid #e2e6ea; border-radius: 8px; margin-top: 16px; padding: 14px 16px; }
 .ks-setup-hosts pre { background: #fff; border: 1px solid #e7eaed; border-radius: 6px; font-size: 12px; line-height: 1.7; margin: 10px 0 0; overflow-x: auto; padding: 10px 12px; user-select: all; }
+.ks-setup-sql { background: #fafbfc; border: 1px solid #e2e6ea; border-radius: 8px; margin-top: 16px; padding: 14px 16px; }
+.ks-setup-sql p { color: #425466; font-size: 13px; margin: 4px 0; }
+.ks-setup-sql pre { background: #fff; border: 1px solid #e7eaed; border-radius: 6px; font-size: 12px; line-height: 1.7; margin: 10px 0 0; overflow-x: auto; padding: 10px 12px; user-select: all; white-space: pre-wrap; }
 
 .ks-setup-progress { border-top: 1px solid #e1e4e7; display: grid; gap: 2px; list-style: none; margin: 20px 0 0; padding: 18px 0 0; }
 .ks-setup-progress li { align-items: flex-start; color: #5f6b76; display: flex; gap: 12px; padding: 8px 0; }

@@ -55,7 +55,7 @@ func TestInstallStatusEndpointRequiresToken(t *testing.T) {
 
 func TestInstallRejectsInvalidAdmin(t *testing.T) {
 	server := &Server{config: Config{Token: "setup-token-value"}}
-	body := `{"token":"setup-token-value","domain":"ftc-platform.cmb.local","volumes":[{"node":"n1","path":"/data"},{"node":"n2","path":"/data"},{"node":"n3","path":"/data"}],"admin_username":"x","admin_password":"short"}`
+	body := `{"token":"setup-token-value","domain":"ftc-platform.cmb.local","admin_username":"x","admin_password":"short"}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/install", strings.NewReader(body))
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
@@ -114,5 +114,19 @@ func TestWaitForDeploymentReady(t *testing.T) {
 	server := &Server{config: Config{Namespace: "ftc-platform"}, client: client}
 	if err := server.WaitForDeployment(context.Background(), "ftc-platform", "ftc-platform", time.Second); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHandleInstallRejectsInvalidExternalDatabase(t *testing.T) {
+	server := &Server{config: Config{Token: "setup-token-value"}}
+	body := `{"token":"setup-token-value","domain":"ftc-platform.cmb.local","admin_username":"admin","admin_password":"long-enough-password","external_database":{"host":"","port":"3306","database":"ftc_platform","username":"ftc","password":"secret"}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/install", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "INVALID_DATABASE") {
+		t.Fatalf("unexpected response: %s", recorder.Body.String())
 	}
 }

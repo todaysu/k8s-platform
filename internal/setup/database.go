@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +24,68 @@ var (
 	ErrAdminConflict = errors.New("admin account already exists with different credentials")
 	applicationName  = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 )
+
+// externalDatabaseDSN builds the DSN for an existing MySQL 8.0+ database. The
+// setup flow never creates the database or the account; it only verifies the
+// connection, runs migrations and stores the DSN for the runtime.
+func externalDatabaseDSN(config ExternalDatabase) (string, error) {
+	host := strings.TrimSpace(config.Host)
+	if host == "" {
+		return "", errors.New("外部 MySQL 地址不能为空")
+	}
+	if strings.ContainsAny(host, " \t\r\n") {
+		return "", errors.New("外部 MySQL 地址不能包含空白字符")
+	}
+	port := strings.TrimSpace(config.Port)
+	if port == "" {
+		port = "3306"
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return "", errors.New("外部 MySQL 端口必须在 1–65535 之间")
+	}
+	database := strings.TrimSpace(config.Database)
+	if database == "" {
+		database = "ftc_platform"
+	}
+	if !applicationName.MatchString(database) {
+		return "", errors.New("数据库名只能包含字母、数字和下划线")
+	}
+	user := strings.TrimSpace(config.Username)
+	if user == "" {
+		user = "ftc"
+	}
+	if !applicationName.MatchString(user) {
+		return "", errors.New("数据库用户名只能包含字母、数字和下划线")
+	}
+	if config.Password == "" {
+		return "", errors.New("数据库密码不能为空")
+	}
+	tls := strings.ToLower(strings.TrimSpace(config.TLS))
+	switch tls {
+	case "", "disabled":
+		tls = ""
+	case "preferred":
+	case "required", "true":
+		tls = "true"
+	case "skip-verify":
+	default:
+		return "", errors.New("数据库 TLS 模式无效")
+	}
+	databaseConfig := mysql.NewConfig()
+	databaseConfig.User = user
+	databaseConfig.Passwd = config.Password
+	databaseConfig.Net = "tcp"
+	databaseConfig.Addr = net.JoinHostPort(host, port)
+	databaseConfig.DBName = database
+	databaseConfig.ParseTime = true
+	databaseConfig.Loc = time.UTC
+	databaseConfig.Params = map[string]string{"charset": "utf8mb4"}
+	if tls != "" {
+		databaseConfig.TLSConfig = tls
+	}
+	return databaseConfig.FormatDSN(), nil
+}
 
 // provisionAdmin runs the schema migrations and creates the first admin. A
 // retry with the same credentials is accepted so a failed Secret write can be

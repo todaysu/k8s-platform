@@ -30,14 +30,6 @@ type PreflightNode = {
   taints?: string[]
 }
 
-type PreflightStorageClass = {
-  name: string
-  default: boolean
-  provisioner: string
-  allow_volume_expansion: boolean
-  volume_binding_mode: string
-}
-
 type PreflightIngressClass = {
   name: string
   default: boolean
@@ -47,9 +39,7 @@ type PreflightIngressClass = {
 type Preflight = {
   namespace: string
   nodes: PreflightNode[]
-  storage_classes: PreflightStorageClass[]
   ingress_classes: PreflightIngressClass[]
-  pxc_available: boolean
   runtime_secret_exists: boolean
   warnings: string[]
   errors: string[]
@@ -73,15 +63,16 @@ type InstallStatus = {
   permissions_revoked?: boolean
 }
 
-type Volume = { node: string; path: string }
-
-const setupSteps = ['环境检查', '数据库与存储', '访问配置', '确认安装']
-const defaultMySQLImages = {
-  operator: 'percona/percona-xtradb-cluster-operator:1.18.0',
-  pxc: 'percona/percona-xtradb-cluster:8.0.42-33.1',
-  haproxy: 'percona/haproxy:2.8.15',
-  backup: 'percona/percona-xtrabackup:8.0.42-33.1',
+type ExternalDatabase = {
+  host: string
+  port: string
+  database: string
+  username: string
+  password: string
+  tls: string
 }
+
+const setupSteps = ['环境检查', '外部 MySQL', '访问配置', '确认安装']
 
 async function readResponse<T>(response: Response, fallback: string): Promise<T> {
   let payload: ApiResponse<T>
@@ -114,17 +105,22 @@ const formatMemory = (bytes: number) => `${Math.round(bytes / 1024 / 1024 / 1024
 const formatCPU = (millis: number) => `${(millis / 1000).toFixed(millis % 1000 === 0 ? 0 : 1)} 核`
 
 const domainPattern = /^(?=.{1,253}$)([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
-const absolutePathPattern = /^\/(?!\/)[^\s]*$/
 
 export default function SetupPage() {
   const [step, setStep] = useState(1)
   const [token, setToken] = useState('')
   const [preflight, setPreflight] = useState<Preflight | null>(null)
   const [checking, setChecking] = useState(false)
-  const [volumes, setVolumes] = useState<Volume[]>([0, 1, 2].map(() => ({ node: '', path: '/data/ftc-platform/mysql' })))
-  const [storageSize, setStorageSize] = useState('200')
-  const [mysqlImages, setMySQLImages] = useState(defaultMySQLImages)
-  const [mysqlPullSecret, setMySQLPullSecret] = useState('')
+  const [database, setDatabase] = useState<ExternalDatabase>({
+    host: '',
+    port: '3306',
+    database: 'ftc_platform',
+    username: 'ftc',
+    password: '',
+    tls: 'disabled',
+  })
+  const [testingDatabase, setTestingDatabase] = useState(false)
+  const [databaseTestResult, setDatabaseTestResult] = useState('')
   const [domain, setDomain] = useState('')
   const [ingressClass, setIngressClass] = useState('')
   const [platformImage, setPlatformImage] = useState('')
@@ -161,7 +157,6 @@ export default function SetupPage() {
     return () => { active = false; window.clearInterval(timer) }
   }, [installing, token])
 
-  const schedulableNodes = preflight?.nodes.filter(node => node.schedulable) ?? []
   const usableIngressClasses = preflight?.ingress_classes ?? []
   const preflightErrors = preflight?.errors ?? []
   const preflightWarnings = preflight?.warnings ?? []
@@ -172,10 +167,6 @@ export default function SetupPage() {
     try {
       const result = await post<Preflight>('/api/v1/setup/preflight', { token })
       setPreflight(result)
-      setVolumes(current => current.map((volume, index) => ({
-        ...volume,
-        node: volume.node || result.nodes.filter(node => node.schedulable)[index]?.name || '',
-      })))
       const defaultClass = result.ingress_classes.find(item => item.default)?.name || result.ingress_classes[0]?.name || ''
       setIngressClass(current => current || defaultClass)
       if (result.errors.length > 0) setError('环境检查未通过，请先处理下方问题。')
@@ -187,18 +178,15 @@ export default function SetupPage() {
     }
   }
 
-  const volumeError = useMemo(() => {
-    const nodes = new Set<string>()
-    for (const volume of volumes) {
-      if (!volume.node) return '请为三个副本分别选择节点。'
-      if (nodes.has(volume.node)) return '三个副本必须使用不同节点。'
-      nodes.add(volume.node)
-      if (!absolutePathPattern.test(volume.path.trim()) || volume.path.trim() === '/') return '本地盘路径必须是 / 开头的绝对路径，且不能是根目录。'
-    }
-    const size = Number(storageSize)
-    if (!Number.isInteger(size) || size < 10 || size > 8192) return '单卷容量必须是 10–8192 之间的整数 GiB。'
+  const databaseError = useMemo(() => {
+    if (!database.host.trim()) return '请填写外部 MySQL 地址。'
+    const port = Number(database.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return 'MySQL 端口必须在 1–65535 之间。'
+    if (!/^[a-zA-Z0-9_]+$/.test(database.database.trim())) return '数据库名只能包含字母、数字和下划线。'
+    if (!/^[a-zA-Z0-9_]+$/.test(database.username.trim())) return '数据库用户名只能包含字母、数字和下划线。'
+    if (!database.password) return '请填写数据库密码。'
     return ''
-  }, [storageSize, volumes])
+  }, [database])
 
   const accessError = useMemo(() => {
     if (!domainPattern.test(domain.trim().toLowerCase())) return '请输入合法的内部域名，例如 ftc-platform.cmb.local。'
@@ -212,7 +200,7 @@ export default function SetupPage() {
   const canContinue = step === 1
     ? Boolean(preflight) && preflightErrors.length === 0 && !preflight?.runtime_secret_exists
     : step === 2
-      ? Boolean(preflight) && !volumeError
+      ? !databaseError
       : step === 3
         ? !accessError
         : true
@@ -221,7 +209,7 @@ export default function SetupPage() {
     setError('')
     if (step === 1 && preflightErrors.length > 0) { setError('请先处理环境检查中的错误。'); return }
     if (step === 1 && preflight?.runtime_secret_exists) { setError('平台已经初始化，不能重复安装。'); return }
-    if (step === 2 && volumeError) { setError(volumeError); return }
+    if (step === 2 && databaseError) { setError(databaseError); return }
     if (step === 3 && accessError) { setError(accessError); return }
     setStep(current => Math.min(4, current + 1))
   }
@@ -239,9 +227,33 @@ export default function SetupPage() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  const testDatabase = async () => {
+    setError('')
+    setDatabaseTestResult('')
+    if (databaseError) { setError(databaseError); return }
+    setTestingDatabase(true)
+    try {
+      await post('/api/v1/setup/test', {
+        token,
+        mode: 'external',
+        host: database.host.trim(),
+        port: database.port.trim(),
+        database: database.database.trim(),
+        user: database.username.trim(),
+        password: database.password,
+        tls: database.tls,
+      })
+      setDatabaseTestResult('连接成功，可以继续。')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '数据库连接失败。')
+    } finally {
+      setTestingDatabase(false)
+    }
+  }
+
   const startInstall = async () => {
     setError('')
-    if (volumeError) { setError(volumeError); return }
+    if (databaseError) { setError(databaseError); return }
     if (accessError) { setError(accessError); return }
     setInstalling(true)
     setInstallStatus(null)
@@ -250,27 +262,20 @@ export default function SetupPage() {
         token,
         domain: domain.trim().toLowerCase(),
         ingress_class: ingressClass,
-        volumes: volumes.map(volume => ({ node: volume.node, path: volume.path.trim(), size_gib: Number(storageSize) })),
-        storage_size_gib: Number(storageSize),
-        mysql: {
-          namespace: preflight?.namespace ?? 'ftc-platform',
-          name: 'platform-mysql',
-          secret_name: 'platform-mysql-secrets',
-          replicas: 3,
-          storage_class: 'ftc-platform-local',
-          storage_size: `${Number(storageSize)}Gi`,
-          pxc_image: mysqlImages.pxc.trim(),
-          haproxy_image: mysqlImages.haproxy.trim(),
-          backup_image: mysqlImages.backup.trim(),
-          operator_image: mysqlImages.operator.trim(),
-          image_pull_secret: mysqlPullSecret.trim(),
+        external_database: {
+          host: database.host.trim(),
+          port: database.port.trim(),
+          database: database.database.trim(),
+          username: database.username.trim(),
+          password: database.password,
+          tls: database.tls,
         },
         admin_username: adminUsername,
         admin_password: adminPassword,
         platform_image: platformImage.trim(),
         platform_image_pull_secret: platformPullSecret.trim(),
-        api_replicas: 2,
-        collector_replicas: 2,
+        api_replicas: 1,
+        collector_replicas: 1,
         worker_replicas: 1,
       })
       setInstallStatus(result)
@@ -292,7 +297,7 @@ export default function SetupPage() {
             <div>
               <span className="ks-setup-eyebrow">平台初始化</span>
               <Title headingLevel="h1" size="2xl">准备部署 FTC 集群运维平台</Title>
-              <p className="ks-setup-lead">完成环境检查、MySQL 高可用、内部域名和管理员配置。初始化结束后即可通过 HTTPS 登录。</p>
+              <p className="ks-setup-lead">完成环境检查、外部 MySQL、内部域名和管理员配置。初始化结束后即可通过 HTTPS 登录。</p>
             </div>
             <span className={`ks-setup-mode${preflight ? ' is-ready' : ''}`}>{preflight ? '环境已检查' : '等待初始化'}</span>
           </header>
@@ -310,7 +315,7 @@ export default function SetupPage() {
           {step === 1 && <>
             <section className="ks-setup-panel">
               <h2>检查运行环境</h2>
-              <p className="ks-setup-panel-lead">初始化令牌由引导 Job 自动生成。平台会检查节点、存储、Ingress 和 PXC Operator。</p>
+              <p className="ks-setup-panel-lead">初始化令牌由引导 Job 自动生成。平台会检查节点、IngressClass 和是否已经初始化。</p>
               <Form onSubmit={event => { event.preventDefault(); void runPreflight() }}>
                 <FormGroup label="初始化凭证" isRequired fieldId="setup-token">
                   <TextInput aria-label="初始化凭证" id="setup-token" type="password" value={token} onChange={(_, value) => setToken(value)} isDisabled={checking || installing} />
@@ -336,11 +341,10 @@ export default function SetupPage() {
                   </div>)}
                 </div>
                 <div className="ks-setup-report-card">
-                  <h4>存储与 Ingress</h4>
-                  <p><b>StorageClass：</b>{preflight.storage_classes.length ? preflight.storage_classes.map(item => `${item.name}${item.default ? '（默认）' : ''}`).join('、') : '将创建本地 SC'}</p>
+                  <h4>Ingress 与状态</h4>
                   <p><b>IngressClass：</b>{preflight.ingress_classes.length ? preflight.ingress_classes.map(item => `${item.name}${item.default ? '（默认）' : ''}`).join('、') : '未发现'}</p>
-                  <p><b>PXC Operator：</b>{preflight.pxc_available ? '已安装' : '未检测到'}</p>
                   <p><b>已有运行 Secret：</b>{preflight.runtime_secret_exists ? '是' : '否'}</p>
+                  <p><b>MySQL：</b>下一步填写外部 MySQL 连接信息</p>
                 </div>
               </div>
             </section>}
@@ -348,45 +352,44 @@ export default function SetupPage() {
 
           {step === 2 && <>
             <section className="ks-setup-panel">
-              <h2>配置 MySQL 高可用</h2>
-              <p className="ks-setup-panel-lead">PXC 使用 3 个副本，分别落到 3 个节点的本地盘。节点故障时依靠剩余副本维持仲裁；本地盘不会漂移。</p>
-              <div className="ks-setup-volume-list">
-                {volumes.map((volume, index) => <div className="ks-setup-volume" key={index}>
-                  <span className="ks-setup-volume-index">{index + 1}</span>
-                  <FormGroup label={`副本 ${index + 1} 节点`} isRequired fieldId={`setup-node-${index}`}>
-                    <FormSelect id={`setup-node-${index}`} value={volume.node} onChange={(_, value) => setVolumes(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, node: value } : item))}>
-                      <FormSelectOption value="" label="选择节点" />
-                      {schedulableNodes.map(node => <FormSelectOption key={node.name} value={node.name} label={`${node.name} · ${node.arch}`} />)}
-                    </FormSelect>
-                  </FormGroup>
-                  <FormGroup label="本地盘路径" isRequired fieldId={`setup-path-${index}`}>
-                    <TextInput id={`setup-path-${index}`} value={volume.path} onChange={(_, value) => setVolumes(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, path: value } : item))} placeholder="/data/ftc-platform/mysql" />
-                  </FormGroup>
-                </div>)}
-              </div>
-              {volumeError && <Alert isInline title={volumeError} variant="danger" />}
+              <h2>配置外部 MySQL</h2>
+              <p className="ks-setup-panel-lead">平台不会在集群里安装 MySQL。请使用已有的 MySQL 8.0+，并提前创建数据库和账号；安装时会自动建表并创建管理员。</p>
               <div className="ks-setup-form-grid">
-                <FormGroup label="单卷容量（GiB）" isRequired fieldId="setup-size">
-                  <TextInput id="setup-size" type="number" value={storageSize} onChange={(_, value) => setStorageSize(value)} />
-                  <small className="ks-setup-hint">建议 200 GiB 起；本地 PV 不支持在线扩容。</small>
+                <FormGroup label="MySQL 地址" isRequired fieldId="setup-db-host">
+                  <TextInput id="setup-db-host" value={database.host} onChange={(_, value) => setDatabase(current => ({ ...current, host: value }))} placeholder="mysql.internal 或 10.20.30.20" isDisabled={installing} />
                 </FormGroup>
-                <FormGroup label="MySQL 镜像拉取 Secret" fieldId="setup-mysql-pull">
-                  <TextInput id="setup-mysql-pull" value={mysqlPullSecret} onChange={(_, value) => setMySQLPullSecret(value)} placeholder="可选，命名空间内已有的 Secret" />
+                <FormGroup label="端口" isRequired fieldId="setup-db-port">
+                  <TextInput id="setup-db-port" value={database.port} onChange={(_, value) => setDatabase(current => ({ ...current, port: value }))} placeholder="3306" isDisabled={installing} />
+                </FormGroup>
+                <FormGroup label="数据库名" isRequired fieldId="setup-db-name">
+                  <TextInput id="setup-db-name" value={database.database} onChange={(_, value) => setDatabase(current => ({ ...current, database: value }))} placeholder="ftc_platform" isDisabled={installing} />
+                </FormGroup>
+                <FormGroup label="用户名" isRequired fieldId="setup-db-user">
+                  <TextInput id="setup-db-user" value={database.username} onChange={(_, value) => setDatabase(current => ({ ...current, username: value }))} placeholder="ftc" isDisabled={installing} />
+                </FormGroup>
+                <FormGroup label="密码" isRequired fieldId="setup-db-password">
+                  <TextInput id="setup-db-password" type="password" value={database.password} onChange={(_, value) => setDatabase(current => ({ ...current, password: value }))} isDisabled={installing} />
+                </FormGroup>
+                <FormGroup label="TLS 模式" fieldId="setup-db-tls">
+                  <FormSelect id="setup-db-tls" value={database.tls} onChange={(_, value) => setDatabase(current => ({ ...current, tls: value }))} isDisabled={installing}>
+                    <FormSelectOption value="disabled" label="关闭（内网明文）" />
+                    <FormSelectOption value="preferred" label="优先 TLS" />
+                    <FormSelectOption value="required" label="必须 TLS（校验证书）" />
+                  </FormSelect>
                 </FormGroup>
               </div>
-              <div className="ks-setup-form-grid">
-                <FormGroup label="PXC Operator 镜像" fieldId="setup-operator-image">
-                  <TextInput id="setup-operator-image" value={mysqlImages.operator} onChange={(_, value) => setMySQLImages(current => ({ ...current, operator: value }))} />
-                </FormGroup>
-                <FormGroup label="PXC 镜像" fieldId="setup-pxc-image">
-                  <TextInput id="setup-pxc-image" value={mysqlImages.pxc} onChange={(_, value) => setMySQLImages(current => ({ ...current, pxc: value }))} />
-                </FormGroup>
-                <FormGroup label="HAProxy 镜像" fieldId="setup-haproxy-image">
-                  <TextInput id="setup-haproxy-image" value={mysqlImages.haproxy} onChange={(_, value) => setMySQLImages(current => ({ ...current, haproxy: value }))} />
-                </FormGroup>
-                <FormGroup label="备份镜像" fieldId="setup-backup-image">
-                  <TextInput id="setup-backup-image" value={mysqlImages.backup} onChange={(_, value) => setMySQLImages(current => ({ ...current, backup: value }))} />
-                </FormGroup>
+              {databaseError && <Alert isInline title={databaseError} variant="danger" />}
+              <div className="ks-setup-inline-actions">
+                <Button variant="secondary" isDisabled={testingDatabase || installing} isLoading={testingDatabase} onClick={() => void testDatabase()}>测试数据库连接</Button>
+                {databaseTestResult && <Alert isInline title={databaseTestResult} variant="success" />}
+              </div>
+              <div className="ks-setup-sql">
+                <p><b>如果数据库和账号还未创建，请让 MySQL 管理员执行：</b></p>
+                <pre>{`CREATE DATABASE ftc_platform CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'ftc'@'%' IDENTIFIED BY '<强密码>';
+GRANT ALL PRIVILEGES ON ftc_platform.* TO 'ftc'@'%';
+FLUSH PRIVILEGES;`}</pre>
+                <p className="ks-setup-hint">账号需要对 ftc_platform 库有建表/改表/索引权限；平台不会创建数据库或账号。</p>
               </div>
             </section>
           </>}
@@ -394,7 +397,7 @@ export default function SetupPage() {
           {step === 3 && <>
             <section className="ks-setup-panel">
               <h2>配置访问方式</h2>
-              <p className="ks-setup-panel-lead">Ingress 使用 hostNetwork 暴露节点 443。平台会生成私有 CA 和服务证书，初始化完成后下载 CA 并配置 hosts。</p>
+              <p className="ks-setup-panel-lead">使用集群已有的 IngressClass 暴露平台。平台会生成私有 CA 和服务证书，初始化完成后下载 CA 并配置 hosts。</p>
               <div className="ks-setup-form-grid">
                 <FormGroup label="内部域名" isRequired fieldId="setup-domain">
                   <TextInput id="setup-domain" value={domain} onChange={(_, value) => setDomain(value)} placeholder="ftc-platform.cmb.local" />
@@ -432,9 +435,9 @@ export default function SetupPage() {
           {step === 4 && <>
             <section className="ks-setup-panel">
               <h2>确认并安装</h2>
-              <p className="ks-setup-panel-lead">安装开始后会依次创建本地存储、PXC、Ingress 和平台实例，过程约 5–15 分钟。</p>
+              <p className="ks-setup-panel-lead">安装开始后会连接外部 MySQL、建表、创建 Ingress 和平台实例，过程约 2–5 分钟。</p>
               <div className="ks-setup-review">
-                <div><h3>MySQL 与存储</h3><p>PXC 3 副本 / HAProxy 3 副本</p><p>{volumes.map(volume => `${volume.node}:${volume.path}`).join('、')}</p><p>单卷 {storageSize} GiB，本地 PV（Retain，不支持扩容）</p></div>
+                <div><h3>外部 MySQL</h3><p>{database.username}@{database.host}:{database.port}/{database.database}</p><p>TLS：{database.tls === 'disabled' ? '关闭' : database.tls === 'preferred' ? '优先' : '必须'}</p><p>平台只建表，不创建数据库/账号</p></div>
                 <div><h3>访问方式</h3><p>https://{domain.trim().toLowerCase()}</p><p>IngressClass {ingressClass} · 自签 CA</p><p>管理员 {adminUsername}</p></div>
               </div>
               {preflight?.nodes.length ? <div className="ks-setup-hosts"><b>安装完成后的 hosts 目标（任一节点）：</b><pre>{preflight.nodes.flatMap(node => node.internal_ips).map(ip => `${ip}  ${domain.trim().toLowerCase()}`).join('\n')}</pre></div> : null}

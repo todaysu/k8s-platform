@@ -540,3 +540,31 @@ Operator 的 Webhook 建议关闭或使用预生成证书，避免额外引入 c
 ## 18. 目标集群验收状态
 
 尚未执行目标生产集群验收：没有目标集群的 kubeconfig/访问权限。kind 多节点验收已完成，代码、清单、向导和文档已具备交付条件；目标集群验收是唯一外部阻塞。
+
+## 19. 切换外部 MySQL 并完成真实 e2e（2026-10-22）
+
+按“一个人可完成、外部 MySQL 优先”的方向调整：
+
+- `deploy/install.yaml` 现在只包含 bootstrap/setup/RBAC，不再包含 PXC Operator、PXC CRD、HAProxy、本地 PV/SC；文件从约 500KB 降到 300 行左右；
+- 向导第二页改为外部 MySQL：host/port/database/user/password/TLS，支持“测试数据库连接”；
+- 安装步骤变为 `preflight → database → ingress → runtime → verify`；
+- 不再要求 3 个 worker、本地盘、PXC CRD 或 StorageClass；只需至少 1 个可调度节点；
+- PXC 代码/`deploy/pxc-operator.yaml` 保留为可选未来能力，不参与当前安装。
+
+真实 e2e：
+
+- 新 kind 集群 `ftc-ext`：1 control-plane + 1 worker，仅 worker 可调度；
+- 独立 MySQL 8.0 部署在 `ftc-mysql` 命名空间（不是平台命名空间），库 `ftc_platform`、账号 `ftc`；
+- `deploy/install.yaml` 使用当前源码构建的 `ftc-platform:e2e6`；
+- 安装结果：preflight / database / ingress / runtime / verify 全部 done；
+- `GET /` 200，`GET /api/v1/health` 200；
+- admin 登录成功，session 返回 admin；
+- setup RoleBinding/ClusterRoleBinding 已自动删除，`permissions_revoked=true`；
+- 外部 MySQL 中已创建 `auth_users`、`auth_sessions`、`cluster_events` 等表。
+
+已知限制：
+
+- 外部 MySQL 的 HA/备份/监控由客户负责；
+- 单节点可安装，但不是平台高可用；
+- ingress-nginx 仍是集群前置，文档给出无 Helm 静态安装方式；
+- 自签 CA、无自动升级/回滚不变。

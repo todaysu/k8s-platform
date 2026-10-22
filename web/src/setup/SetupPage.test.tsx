@@ -21,7 +21,7 @@ const preflight = {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('initialization wizard', () => {
-  it('runs preflight and advances to MySQL storage', async () => {
+  it('runs preflight and advances to external MySQL', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       json: async () => ({ data: preflight, error: null }),
@@ -34,22 +34,22 @@ describe('initialization wizard', () => {
     await user.click(screen.getByRole('button', { name: '检查环境' }))
 
     expect(await screen.findByText('node-a')).toBeInTheDocument()
-    expect(screen.getByText('已安装')).toBeInTheDocument()
+    expect(screen.getByText('nginx（默认）')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '下一步' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: '下一步' }))
-    expect(await screen.findByRole('heading', { name: '配置 MySQL 高可用' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '配置外部 MySQL' })).toBeInTheDocument()
   })
 
   it('blocks the next step when preflight reports errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
-      json: async () => ({ data: { ...preflight, pxc_available: false, errors: ['未检测到 PXC Operator CRD。'] }, error: null }),
+      json: async () => ({ data: { ...preflight, errors: ['未发现 IngressClass；请先安装 ingress-nginx。'] }, error: null }),
     })))
     const user = userEvent.setup()
     render(<SetupPage />)
     await user.type(screen.getByLabelText('初始化凭证'), 'setup-token-value')
     await user.click(screen.getByRole('button', { name: '检查环境' }))
-    expect(await screen.findByText('未检测到 PXC Operator CRD。')).toBeInTheDocument()
+    expect(await screen.findByText('未发现 IngressClass；请先安装 ingress-nginx。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '下一步' })).toBeDisabled()
   })
 })

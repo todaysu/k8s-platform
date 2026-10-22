@@ -1,4 +1,4 @@
-> **交付版提示**：本文是较早的生产部署手册。旧 `deploy/mysql-ha.yaml` 已从仓库移除，不能提供自动 failover；交付版统一使用 `deploy/install.yaml`（PXC Operator 三节点）和 `docs/deployment/install.md`。
+> **交付版提示**：当前交付已改为**外部 MySQL**，不使用 PXC/本地盘，也不再需要 3 个 worker。请以 [外部 MySQL 交付手册](install.md) 为准；本文保留为早期生产部署的历史参考。
 
 # FTC 集群运维平台 · 生产部署手册
 

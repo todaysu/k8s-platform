@@ -93,10 +93,10 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 			result.Nodes = append(result.Nodes, item)
 		}
 		sort.Slice(result.Nodes, func(i, j int) bool { return result.Nodes[i].Name < result.Nodes[j].Name })
-		if len(result.Nodes) < 3 {
-			result.Errors = append(result.Errors, "PXC 3 节点高可用至少需要 3 个节点；当前集群节点不足。")
-		} else if schedulable < 3 {
-			result.Errors = append(result.Errors, "可调度节点少于 3 个；请先解除节点污点或增加节点。")
+		if len(result.Nodes) == 0 {
+			result.Errors = append(result.Errors, "未发现 Kubernetes 节点。")
+		} else if schedulable == 0 {
+			result.Errors = append(result.Errors, "没有可调度节点；请解除节点污点或增加 worker。")
 		}
 	}
 
@@ -115,9 +115,6 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 			result.StorageClasses = append(result.StorageClasses, item)
 		}
 		sort.Slice(result.StorageClasses, func(i, j int) bool { return result.StorageClasses[i].Name < result.StorageClasses[j].Name })
-		if len(result.StorageClasses) == 0 {
-			result.Warnings = append(result.Warnings, "未发现 StorageClass；向导会创建本地 PV 和 no-provisioner SC，不需要外部 provisioner。")
-		}
 	}
 
 	ingressClasses, err := server.client.NetworkingV1().IngressClasses().List(ctx, metav1.ListOptions{})
@@ -137,18 +134,15 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 		}
 	}
 
-	resources, err := server.client.Discovery().ServerResourcesForGroupVersion(pxcGroupVersion)
-	if err != nil || resources == nil {
-		result.Errors = append(result.Errors, "未检测到 PXC Operator CRD（perconaxtradbclusters.pxc.percona.com）；请先安装 PXC Operator。")
-	} else {
+	// PXC is no longer required for the external-MySQL delivery. Keep the
+	// discovery result informational so an existing PXC installation is visible
+	// in diagnostics, but never block setup on it.
+	if resources, err := server.client.Discovery().ServerResourcesForGroupVersion(pxcGroupVersion); err == nil && resources != nil {
 		for _, resource := range resources.APIResources {
 			if resource.Name == pxcResource || resource.Kind == "PerconaXtraDBCluster" {
 				result.PXCAvailable = true
 				break
 			}
-		}
-		if !result.PXCAvailable {
-			result.Errors = append(result.Errors, "PXC API 组存在，但未找到 PerconaXtraDBCluster 资源；请检查 Operator 版本。")
 		}
 	}
 

@@ -402,8 +402,17 @@ func (server *Server) connectionDSN(writer http.ResponseWriter, payload connecti
 	databaseConfig.ParseTime = true
 	databaseConfig.Loc = time.UTC
 	databaseConfig.Params = map[string]string{"charset": "utf8mb4"}
-	if payload.TLS != "" {
-		databaseConfig.TLSConfig = payload.TLS
+	switch strings.ToLower(strings.TrimSpace(payload.TLS)) {
+	case "", "disabled":
+	case "preferred":
+		databaseConfig.TLSConfig = "preferred"
+	case "required", "true":
+		databaseConfig.TLSConfig = "true"
+	case "skip-verify":
+		databaseConfig.TLSConfig = "skip-verify"
+	default:
+		writeError(writer, http.StatusBadRequest, "DATABASE_TLS_INVALID", "数据库 TLS 模式无效。")
+		return "", false
 	}
 	return databaseConfig.FormatDSN(), true
 }

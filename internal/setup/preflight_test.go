@@ -106,7 +106,7 @@ func TestPreflightReportsClusterCapabilities(t *testing.T) {
 	}
 }
 
-func TestPreflightBlocksMissingHARequirements(t *testing.T) {
+func TestPreflightAllowsSmallExternalMySQLCluster(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		testNode("node1", "amd64"),
 		testNode("node2", "amd64", corev1.Taint{Key: "dedicated", Effect: corev1.TaintEffectNoSchedule}),
@@ -115,22 +115,13 @@ func TestPreflightBlocksMissingHARequirements(t *testing.T) {
 
 	result := server.preflight(context.Background())
 	if result.PXCAvailable {
-		t.Fatal("PXC should not be detected")
+		t.Fatal("PXC should not be required for an external-MySQL install")
 	}
-	if len(result.Errors) < 3 {
-		t.Fatalf("expected node, ingress and PXC errors, got %v", result.Errors)
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "IngressClass") {
+		t.Fatalf("expected only the missing IngressClass error, got %v", result.Errors)
 	}
 	if result.Nodes[1].Schedulable {
 		t.Fatal("tainted node must not be schedulable")
-	}
-	foundNodeError := false
-	for _, message := range result.Errors {
-		if strings.Contains(message, "3 个节点") || strings.Contains(message, "可调度节点") {
-			foundNodeError = true
-		}
-	}
-	if !foundNodeError {
-		t.Fatalf("missing node count error: %v", result.Errors)
 	}
 }
 

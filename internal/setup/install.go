@@ -10,20 +10,30 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// ExternalDatabase is an existing MySQL 8.0+ instance. The setup controller
+// does not create the database or user; it only verifies connectivity, runs
+// migrations and stores the DSN for the runtime.
+type ExternalDatabase struct {
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	Database string `json:"database"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	TLS      string `json:"tls"`
+}
+
 type InstallRequest struct {
-	Token                   string               `json:"token"`
-	Domain                  string               `json:"domain"`
-	IngressClass            string               `json:"ingress_class"`
-	Volumes                 []LocalVolumeRequest `json:"volumes"`
-	StorageSizeGiB          int64                `json:"storage_size_gib"`
-	MySQL                   MySQLPlan            `json:"mysql"`
-	AdminUsername           string               `json:"admin_username"`
-	AdminPassword           string               `json:"admin_password"`
-	PlatformImage           string               `json:"platform_image"`
-	PlatformImagePullSecret string               `json:"platform_image_pull_secret"`
-	APIReplicas             int32                `json:"api_replicas"`
-	CollectorReplicas       int32                `json:"collector_replicas"`
-	WorkerReplicas          int32                `json:"worker_replicas"`
+	Token                   string           `json:"token"`
+	Domain                  string           `json:"domain"`
+	IngressClass            string           `json:"ingress_class"`
+	ExternalDatabase        ExternalDatabase `json:"external_database"`
+	AdminUsername           string           `json:"admin_username"`
+	AdminPassword           string           `json:"admin_password"`
+	PlatformImage           string           `json:"platform_image"`
+	PlatformImagePullSecret string           `json:"platform_image_pull_secret"`
+	APIReplicas             int32            `json:"api_replicas"`
+	CollectorReplicas       int32            `json:"collector_replicas"`
+	WorkerReplicas          int32            `json:"worker_replicas"`
 }
 
 type InstallStep struct {
@@ -50,9 +60,7 @@ var installStepDefinitions = []struct {
 	label string
 }{
 	{"preflight", "环境预检"},
-	{"storage", "创建本地存储"},
-	{"mysql", "部署 MySQL 高可用"},
-	{"database", "初始化数据库与管理员"},
+	{"database", "连接外部 MySQL 并初始化"},
 	{"ingress", "创建 HTTPS Ingress"},
 	{"runtime", "部署平台实例"},
 	{"verify", "健康检查"},
@@ -159,77 +167,14 @@ func (server *Server) runInstall(request InstallRequest) {
 	}
 	step("preflight", "done", "集群能力检查通过")
 
-	step("storage", "running", "正在创建本地 PV 和 StorageClass")
-	if len(request.Volumes) != 3 {
-		fail("storage", fmt.Errorf("需要恰好 3 个本地卷"))
-		return
-	}
-	sizeGiB := request.StorageSizeGiB
-	if sizeGiB == 0 {
-		sizeGiB = 200
-	}
-	if sizeGiB < minimumVolumeGiB || sizeGiB > 8192 {
-		fail("storage", fmt.Errorf("单卷容量必须在 %d–8192 GiB 之间", minimumVolumeGiB))
-		return
-	}
-	volumes := make([]LocalVolumeRequest, len(request.Volumes))
-	for index, volume := range request.Volumes {
-		volume.SizeGiB = sizeGiB
-		volumes[index] = volume
-	}
-	storagePlan, err := PlanLocalStorage(volumes, "")
-	if err != nil {
-		fail("storage", err)
-		return
-	}
-	if err := server.ApplyLocalStorage(ctx, storagePlan); err != nil {
-		fail("storage", err)
-		return
-	}
-	step("storage", "done", "本地 PV/SC 已创建")
-
-	step("mysql", "running", "正在创建 PXC 3 节点集群，这可能需要几分钟")
-	mysqlPlan := DefaultMySQLPlan()
-	mysqlPlan.Namespace = namespace
-	mysqlPlan.Replicas = 3
-	mysqlPlan.StorageClass = storagePlan.ClassName
-	mysqlPlan.StorageSize = fmt.Sprintf("%dGi", sizeGiB)
-	if strings.TrimSpace(request.MySQL.PXCImage) != "" {
-		mysqlPlan.PXCImage = strings.TrimSpace(request.MySQL.PXCImage)
-	}
-	if strings.TrimSpace(request.MySQL.HAProxyImage) != "" {
-		mysqlPlan.HAProxyImage = strings.TrimSpace(request.MySQL.HAProxyImage)
-	}
-	if strings.TrimSpace(request.MySQL.BackupImage) != "" {
-		mysqlPlan.BackupImage = strings.TrimSpace(request.MySQL.BackupImage)
-	}
-	if strings.TrimSpace(request.MySQL.OperatorImage) != "" {
-		mysqlPlan.OperatorImage = strings.TrimSpace(request.MySQL.OperatorImage)
-	}
-	mysqlPlan.ImagePullSecret = strings.TrimSpace(request.MySQL.ImagePullSecret)
-	if err := server.EnsurePXCOperator(ctx, mysqlPlan); err != nil {
-		fail("mysql", err)
-		return
-	}
-	if err := server.EnsureMySQL(ctx, mysqlPlan); err != nil {
-		fail("mysql", err)
-		return
-	}
-	if err := server.WaitForMySQL(ctx, mysqlPlan.Name, namespace, 25*time.Minute); err != nil {
-		fail("mysql", err)
-		return
-	}
-	step("mysql", "done", "PXC 3 节点与 HAProxy 已就绪")
-
-	step("database", "running", "正在创建应用数据库、管理员和运行 Secret")
-	appPassword, err := randomPassword(32)
+	step("database", "running", "正在连接外部 MySQL、创建表结构和管理员")
+	dsn, err := externalDatabaseDSN(request.ExternalDatabase)
 	if err != nil {
 		fail("database", err)
 		return
 	}
-	dsn, err := server.ensureApplicationDatabase(ctx, mysqlPlan, "ftc", appPassword, "ftc_platform")
-	if err != nil {
-		fail("database", err)
+	if err := pingDatabase(ctx, dsn); err != nil {
+		fail("database", fmt.Errorf("无法连接外部 MySQL：%w", err))
 		return
 	}
 	adminHash, err := provisionAdmin(ctx, dsn, request.AdminUsername, request.AdminPassword, server.config.SecureCookies, server.config.SessionTTL)
@@ -241,7 +186,7 @@ func (server *Server) runInstall(request InstallRequest) {
 		fail("database", err)
 		return
 	}
-	step("database", "done", "应用数据库、管理员和运行 Secret 已创建")
+	step("database", "done", "外部 MySQL 已连接，表结构和管理员已就绪")
 
 	step("ingress", "running", "正在创建自签 CA、TLS Secret 和 Ingress")
 	if err := server.ApplyIngress(ctx, IngressPlan{Namespace: namespace, Host: domain, IngressClass: ingressClass}); err != nil {
@@ -269,10 +214,10 @@ func (server *Server) runInstall(request InstallRequest) {
 		WorkerReplicas:    request.WorkerReplicas,
 	}
 	if runtimePlan.APIReplicas <= 0 {
-		runtimePlan.APIReplicas = 2
+		runtimePlan.APIReplicas = 1
 	}
 	if runtimePlan.CollectorReplicas <= 0 {
-		runtimePlan.CollectorReplicas = 2
+		runtimePlan.CollectorReplicas = 1
 	}
 	if runtimePlan.WorkerReplicas <= 0 {
 		runtimePlan.WorkerReplicas = 1
@@ -387,12 +332,8 @@ func (server *Server) handleInstall(writer http.ResponseWriter, request *http.Re
 		writeError(writer, http.StatusBadRequest, "INVALID_DOMAIN", err.Error())
 		return
 	}
-	if len(payload.Volumes) != 3 {
-		writeError(writer, http.StatusBadRequest, "INVALID_VOLUMES", "需要恰好 3 个节点和 3 个本地路径。")
-		return
-	}
-	if payload.StorageSizeGiB != 0 && (payload.StorageSizeGiB < minimumVolumeGiB || payload.StorageSizeGiB > 8192) {
-		writeError(writer, http.StatusBadRequest, "INVALID_STORAGE_SIZE", "单卷容量必须在 10–8192 GiB 之间。")
+	if _, err := externalDatabaseDSN(payload.ExternalDatabase); err != nil {
+		writeError(writer, http.StatusBadRequest, "INVALID_DATABASE", err.Error())
 		return
 	}
 	exists, err := server.runtimeSecretExists(request.Context())
