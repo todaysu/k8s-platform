@@ -26,7 +26,7 @@
 | --- | --- | --- | --- |
 | 一个 kubeconfig | 能操作 Kubernetes 的“钥匙” | 找集群管理员要；这是权限，不是安装交接 | [ ] |
 | 一个外部 MySQL 8.0+ | 平台存数据的数据库 | 用现有 MySQL；或按第 3 节建库/账号 | [ ] |
-| 一个内部域名 + 443 入口 | 浏览器访问的地址和“大门” | 按第 4 节装 ingress-nginx | [ ] |
+| 一个内部域名 + 443 入口 | 浏览器访问的地址和“大门” | `install.yaml` 已包含 ingress-nginx；只需确认节点 80/443 空闲 | [ ] |
 | 一个平台镜像 | 平台自己的程序 | 按第 5 节构建/推 registry | [ ] |
 
 > **一个人完成的前提**：你有 kubeconfig，且能创建 Namespace/Deployment/Ingress/Secret。
@@ -109,46 +109,55 @@ mysql -h mysql.internal -P 3306 -u ftc -p ftc_platform -e 'SELECT 1'
 
 ---
 
-## 4. 第 2 步：确认 Ingress（大门）
+## 4. 第 2 步：确认 443 没被占用
+
+`install.yaml` 已经包含 ingress-nginx，会自动用 **hostNetwork** 监听节点的 80/443。你不需要再单独安装 Controller。
 
 ### 先检查
 
 ```bash
 kubectl get nodes -o wide
-kubectl get ingressclass
 ```
+
+在每台节点上确认 80/443 空闲：
+
+```bash
+sudo ss -lntp | grep -E ':80 |:443 '
+# 没有输出 = 空闲
+```
+
+如果已有 ingress-nginx：
+
+- `install.yaml` 会更新同一个 Deployment/Service/IngressClass；
+- 如果 80/443 被别的程序占用，hostNetwork Pod 会启动失败，先停掉冲突程序。
 
 ### ✅ 通过标准
 
-- 至少 1 个可调度节点（`kubectl get nodes` 里 Ready，且没有 NoSchedule）；
-- `kubectl get ingressclass` 有名字，通常是 `nginx`。
+- 至少 1 个可调度节点；
+- 节点 80/443 空闲，或已有 ingress-nginx 可以被更新；
+- 防火墙允许用户网段访问 443。
 
-### 没有 ingress-nginx 怎么办
-
-自己用静态清单安装（**不是 Helm**）：
-
-```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/baremetal/deploy.yaml
-kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=10m
-kubectl get ingressclass
-```
-
-然后把 443 暴露出来，任选一种：
-
-- 有外部 LB/VIP：把 443 转发到 ingress-nginx；
-- 没有 LB：把 controller 改成 hostPort 80/443；
-- 云上：用 LoadBalancer。
-
-验证 TLS：
+### apply 后怎么找 443 在哪台节点
 
 ```bash
-curl -kI https://<节点IP或VIP>/
-# 404/200 说明 TLS 通了；connection refused 说明 443 没通
+kubectl -n ingress-nginx get pods -o wide
 ```
 
-> 平台只创建 Ingress 规则，不安装 ingress-nginx；但**你一个人**有集群权限时，按上面命令就能装。
+例如：
 
----
+```text
+NAME                                      READY   STATUS    IP             NODE
+ingress-nginx-controller-xxxxx            1/1     Running   172.18.0.4     worker-1
+```
+
+后面 hosts 就写 **worker-1 的 IP**（或 VIP），不要写错节点。
+
+```bash
+curl -kI https://<worker-1-IP>/
+# 404/200 = 443 通了；connection refused = 443 没监听
+```
+
+> 只部署 1 个 controller 副本，所以只有它所在节点有 443；多节点生产建议用 VIP/LB，或把 replicas 调大并配反亲和。
 
 ## 5. 第 3 步：准备平台镜像
 
@@ -180,6 +189,8 @@ docker login registry.example.com
 - 你知道完整镜像地址，例如 `registry.example.com/ftc/ftc-platform:0.1.0`。
 
 > 不需要准备 PXC、HAProxy、XtraBackup 镜像；这一版没有它们。
+>
+> `install.yaml` 还包含 ingress-nginx controller 和 certgen 两个镜像；如果客户是内网/私有仓库，需要把这两个也从 `registry.k8s.io` 同步到客户 registry，并替换 `install.yaml` 里的地址。
 
 ---
 
@@ -195,8 +206,7 @@ sed -i 's|REPLACE_WITH_PLATFORM_IMAGE|registry.example.com/ftc/ftc-platform:0.1.
 ### 应用
 
 ```bash
-kubectl create namespace ftc-platform --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml
+kubectl apply -f /tmp/ftc-install.yaml
 ```
 
 ### 等初始化 Job
@@ -493,7 +503,7 @@ kubectl get ingressclass
 # 3. 应用安装清单
 cp deploy/install.yaml /tmp/ftc-install.yaml
 sed -i 's|REPLACE_WITH_PLATFORM_IMAGE|registry.example.com/ftc/ftc-platform:0.1.0|g' /tmp/ftc-install.yaml
-kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml
+kubectl apply -f /tmp/ftc-install.yaml
 
 # 4. 等 Job，取 token
 kubectl -n ftc-platform wait --for=condition=complete job/ftc-platform-bootstrap --timeout=15m
@@ -532,7 +542,7 @@ kubectl -n ftc-platform rollout status deployment/ftc-platform
 
 - 没有 kubeconfig：找集群管理员要权限；
 - 没有 MySQL：找 DBA 建库/账号，或使用你已有权限的 MySQL；
-- 没有 443/Ingress：找网络/平台管理员开入口，或你自己按第 2 步装 ingress-nginx；
+- 节点 80/443 被占用：停掉冲突程序，或换节点；
 - 镜像推不上去：找 registry 管理员要推送权限。
 
 **相关文档：**

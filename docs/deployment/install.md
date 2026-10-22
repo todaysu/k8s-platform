@@ -4,6 +4,8 @@
 >
 > 本版本**不在集群内安装 MySQL**：使用你已有的外部 MySQL 8.0+。平台只创建表结构、管理员、Ingress 和运行 Deployment，因此不再需要 3 个 worker、本地盘、PXC Operator、HAProxy 或 PXC 镜像。
 >
+> `install.yaml` 同时包含 **ingress-nginx（hostNetwork，节点 80/443）**；不需要再手动装 Controller。
+>
 > 面向第一次部署的人：按 Step 0–12 顺序执行；每一步都有 **目标 / 操作 / 通过标准 / 失败处理**。第一次接触 Kubernetes 的读者可先看 [小白版](install-beginner.md)。
 
 **为什么改成外部 MySQL：**
@@ -55,7 +57,7 @@ flowchart TD
 | 初始化向导 | setup 镜像内置，浏览器访问 |
 | 平台镜像 | 例如 `registry.example.com/ftc/ftc-platform:0.1.0` |
 | 外部 MySQL | 8.0+，已有库/账号，或由你创建 |
-| Ingress Controller | 已有 ingress-nginx，或按 Step 3 静态安装 |
+| Ingress Controller | 已包含在 `install.yaml`（hostNetwork，节点 80/443） |
 | 内部域名 | 例如 `ftc-platform.cmb.local` |
 | 管理员账号 | 初始化时设置 |
 
@@ -117,7 +119,7 @@ FLUSH PRIVILEGES;
 | --- | --- |
 | Controller | ingress-nginx 或兼容 `networking.k8s.io/v1` 的 Controller |
 | IngressClass | 例如 `nginx`，向导中填同一个 |
-| 443 | 从用户网段可访问；TLS 必须在 Ingress 层终止 |
+| 443 | 由 `install.yaml` 的 ingress-nginx hostNetwork 监听；TLS 在 Ingress 层终止 |
 | 证书 | 平台默认生成自签 CA；后续可替换为企业 CA |
 
 ### 2.4 镜像
@@ -125,7 +127,8 @@ FLUSH PRIVILEGES;
 | 镜像 | 用途 | 是否必需 |
 | --- | --- | --- |
 | 平台镜像 | API/Collector/Worker/Setup/Bootstrap | 必需 |
-| ingress-nginx | 入口控制器 | 已有则不需要 |
+| ingress-nginx | 入口控制器，`install.yaml` 内置 hostNetwork | 必需（已包含） |
+| kube-webhook-certgen | ingress-nginx admission 证书 Job | 必需（已包含） |
 | kube-bench | 安全扫描（可选） | 可选 |
 
 > 不再需要 PXC/HAProxy/Operator/XtraBackup 镜像。镜像放 registry，不要提交到 Git；离线用 `skopeo copy --all` 或 `docker save`。
@@ -236,59 +239,77 @@ mysql -h mysql.internal -P 3306 -u ftc -p ftc_platform -e 'SELECT 1'
 
 ---
 
-## 6. Step 3：准备 Ingress（无 Helm）
+## 6. Step 3：确认 443 可用（ingress-nginx 已并入 install.yaml）
 
 ### 目标
 
-IngressClass 存在，443 能完成 TLS 握手。
+节点 80/443 没有被别的程序占用；apply 后 ingress-nginx 以 hostNetwork 监听节点 443。
 
 ### 操作
 
+1. 确认节点和已有 Ingress：
+
 ```bash
+kubectl get nodes -o wide
 kubectl get ingressclass
-kubectl -n ingress-nginx get pods,svc
+kubectl -n ingress-nginx get pods,svc 2>/dev/null || true
 ```
 
-如果已有 ingress-nginx，记录 IngressClass 名称，跳过安装。
-
-如果没有，使用静态清单（**不是 Helm**）：
+2. 在每台节点上确认 80/443 空闲：
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/baremetal/deploy.yaml
-kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=10m
-kubectl get ingressclass
+sudo ss -lntp | grep -E ':80 |:443 '
+# 没有输出 = 空闲
 ```
 
-把 443 暴露出来，任选一种：
+3. `install.yaml` 已包含 ingress-nginx：
 
-- 外部 LB/VIP 转发到 ingress-nginx；
-- controller 使用 hostPort 80/443；
-- 云厂商 LoadBalancer。
+- namespace：`ingress-nginx`；
+- Deployment：`ingress-nginx-controller`；
+- `hostNetwork: true`；
+- 单副本；
+- 节点 80/443；
+- `IngressClass: nginx`。
 
-验证：
+不需要再单独执行 ingress-nginx 静态清单。
 
-```bash
-curl -kI https://<节点IP或VIP>/
-# 404/200 都说明 TLS 通了；connection refused 说明 443 没通
-```
+> 如果集群里已有 ingress-nginx，`kubectl apply -f install.yaml` 会更新同一个 Deployment/Service/IngressClass。
+> 如果 80/443 已被其他进程占用，hostNetwork Pod 会启动失败；先停掉冲突进程或换节点。
 
 ### 通过标准
 
-- `kubectl get ingressclass` 有名字；
-- 443 TLS 握手成功；
-- 用户网段能访问 443。
+- 节点 80/443 空闲，或已有 ingress-nginx 可以被更新；
+- 防火墙允许用户网段访问 443。
+
+### apply 之后验证
+
+```bash
+kubectl -n ingress-nginx get pods -o wide
+kubectl -n ingress-nginx get svc ingress-nginx-controller
+```
+
+找到 controller 所在节点，例如：
+
+```text
+NAME                                      READY   STATUS    IP             NODE
+ingress-nginx-controller-xxxxx            1/1     Running   172.18.0.4     worker-1
+```
+
+后续 hosts 使用 **worker-1 的 IP**（或 VIP），不要随便指向没有 controller 的节点。
+
+```bash
+curl -kI https://<worker-1-IP>/
+# 404/200 = 443 通了；connection refused = 443 没监听
+```
 
 ### 失败处理
 
 | 现象 | 处理 |
 | --- | --- |
-| 没有 IngressClass | controller 未安装/未就绪 |
-| `connection refused` | 443 未暴露，检查 LB/hostPort |
-| 404 | 正常，还没有 Ingress 规则 |
-
-> `install.yaml` **不包含 ingress-nginx**。这是集群前置，避免和客户已有 Controller/Webhook 冲突；但一个人有集群权限时可以按本节自行安装。
-
----
+| Pod `CrashLoopBackOff` / `0/1` | 节点 80/443 被占用，`ss -lntp` 查进程 |
+| `no nodes available` | 节点有污点，检查 tolerations 或去污点 |
+| 443 仍 refused | controller 未 Ready，或防火墙 |
+| 已有 Controller 被更新后其他 Ingress 异常 | 回滚该 Deployment，或改用独立 IngressClass |
 
 ## 7. Step 4：准备平台镜像
 
@@ -334,9 +355,8 @@ cp deploy/install.yaml /tmp/ftc-install.yaml
 sed -i 's|REPLACE_WITH_PLATFORM_IMAGE|registry.example.com/ftc/ftc-platform:0.1.0|g' /tmp/ftc-install.yaml
 grep -n 'REPLACE_WITH_PLATFORM_IMAGE' /tmp/ftc-install.yaml || echo "image placeholder ok"
 
-kubectl create namespace ftc-platform --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml --dry-run=server
-kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml
+kubectl apply -f /tmp/ftc-install.yaml --dry-run=client
+kubectl apply -f /tmp/ftc-install.yaml
 ```
 
 如果私有镜像导致 `ImagePullBackOff`：
@@ -349,7 +369,7 @@ kubectl -n ftc-platform patch serviceaccount ftc-platform-setup \
 
 kubectl -n ftc-platform delete job ftc-platform-bootstrap --ignore-not-found
 kubectl -n ftc-platform delete pod -l app.kubernetes.io/name=ftc-platform-setup --ignore-not-found
-kubectl apply -n ftc-platform -f /tmp/ftc-install.yaml
+kubectl apply -f /tmp/ftc-install.yaml
 ```
 
 等待引导 Job，并读取 token/密钥：
@@ -652,7 +672,7 @@ kubectl -n ftc-platform get secret ftc-platform-tls ftc-platform-ca
 
 ## 附录 C：关于 Ingress
 
-`install.yaml` 只创建平台 Ingress 和 TLS Secret，不安装 ingress-nginx。若集群没有 Controller，按 Step 3 用静态清单安装；如果你有集群管理员权限，一个人即可完成，不需要运维交接。
+`install.yaml` 已包含 ingress-nginx hostNetwork 以及平台 Ingress/TLS Secret。你不需要再单独安装 Controller；apply 后只需确认 controller Pod 所在节点的 443 可访问。
 
 ---
 

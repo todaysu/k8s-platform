@@ -545,8 +545,9 @@ Operator 的 Webhook 建议关闭或使用预生成证书，避免额外引入 c
 
 按“一个人可完成、外部 MySQL 优先”的方向调整：
 
-- `deploy/install.yaml` 现在只包含 bootstrap/setup/RBAC，不再包含 PXC Operator、PXC CRD、HAProxy、本地 PV/SC；文件从约 500KB 降到 300 行左右；
+- `deploy/install.yaml` 现在包含 **ingress-nginx hostNetwork（单副本，节点 80/443）** + bootstrap/setup/RBAC，不再包含 PXC Operator、PXC CRD、HAProxy、本地 PV/SC；
 - 向导第二页改为外部 MySQL：host/port/database/user/password/TLS，支持“测试数据库连接”；
+- ingress-nginx 直接并入 `install.yaml`，使用 hostNetwork 暴露节点 80/443；apply 不再需要 `-n`（清单含两个命名空间）；
 - 安装步骤变为 `preflight → database → ingress → runtime → verify`；
 - 不再要求 3 个 worker、本地盘、PXC CRD 或 StorageClass；只需至少 1 个可调度节点；
 - PXC 代码/`deploy/pxc-operator.yaml` 保留为可选未来能力，不参与当前安装。
