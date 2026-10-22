@@ -22,12 +22,12 @@
 | `deploy/platform.yaml` 只部署平台，setup 模式需要人工 patch ServiceAccount | 一个 YAML + 向导自动完成 | 需要引导清单和 setup 控制器 |
 | 初始化页只填 MySQL 连接和管理员 | 还要域名、Ingress、TLS、SC、MySQL HA、镜像 | 需要重做向导 |
 | 没有 Ingress/TLS 清单和代码 | HTTPS 内部域名 | 需要新增 Ingress/TLS 编排 |
-| `deploy/mysql-ha.yaml` 是两套 StatefulSet + 人工复制 | 真高可用、自动切换 | 当前清单不可用，需要替换 |
+| `deploy/mysql-ha.yaml` 曾是两套 StatefulSet + 人工复制 | 真高可用、自动切换 | 已删除；交付版由 `install.yaml` 创建 PXC Operator 三节点 |
 | SC 需要人工选择/创建 | 自动配置 SC | SC 不能凭空创建，需要 provisioner；见第 4 节 |
 | MySQL 备份是单 PVC + mysqldump | HA 下的备份/恢复 | 需要独立备份目标和恢复验证 |
 | 文档中的 setup roleRef patch 写法不一致 | 可执行、可回滚 | 需要统一并修正 |
 
-### 2.1 `mysql-ha.yaml` 的具体问题
+### 2.1 旧 `mysql-ha.yaml` 的具体问题（文件已移除）
 
 当前清单不能称为高可用：
 

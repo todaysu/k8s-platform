@@ -43,7 +43,7 @@ spec:
         - name: mysql
           # 镜像地址：替换为企业镜像仓库地址。
           # 多架构集群请推送 manifest list，StatefulSet 按节点架构自动选择。
-          # 生产高可用请改用 deploy/mysql-ha.yaml。
+          # 交付版高可用请使用 deploy/install.yaml（PXC Operator 三节点）；本清单仅用于本地开发。
           image: mysql:8.4
           imagePullPolicy: IfNotPresent
           args:

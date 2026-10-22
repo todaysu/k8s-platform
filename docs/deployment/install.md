@@ -16,7 +16,7 @@
 | 域名 | 内部域名，例如 `ftc-platform.cmb.local` |
 | hosts | 客户端把域名指向任意一个节点内网 IP |
 
-> `deploy/mysql-ha.yaml` 是旧的实验清单，不是高可用实现，不要用于交付。
+> 旧的 `deploy/mysql-ha.yaml` 实验清单已从仓库移除；交付版统一使用 `deploy/install.yaml`（PXC Operator 三节点）。
 
 ## 2. 替换镜像并 apply
 

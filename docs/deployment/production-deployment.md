@@ -1,4 +1,4 @@
-> **交付版提示**：本文是较早的生产部署手册。`deploy/mysql-ha.yaml` 已弃用，不能提供自动 failover；交付版统一使用 `deploy/install.yaml`（PXC Operator 三节点）和 `docs/deployment/install.md`。
+> **交付版提示**：本文是较早的生产部署手册。旧 `deploy/mysql-ha.yaml` 已从仓库移除，不能提供自动 failover；交付版统一使用 `deploy/install.yaml`（PXC Operator 三节点）和 `docs/deployment/install.md`。
 
 # FTC 集群运维平台 · 生产部署手册
 
@@ -162,7 +162,7 @@ docker buildx build \
 | 方案 | 适用 | 清单 | 高可用 |
 |---|---|---|---|
 | **A. 外部托管 MySQL** | 生产推荐 | 初始化页面选「集群外 MySQL」 | 由 DBA 负责（云 RDS / 企业现有实例） |
-| **B. 集群内主从** | 平台与数据库同集群，要求自持数据 | `deploy/mysql-ha.yaml` | 主从双副本，人工/脚本切换 |
+| **B. 集群内 PXC 高可用** | 平台与数据库同集群，要求自持数据 | `deploy/install.yaml` | PXC Operator 三节点 + HAProxy，自动 failover |
 | **C. 集群内单副本** | 开发、测试，或可接受短时中断 | `deploy/mysql.yaml` | 无 |
 
 > **强烈建议生产用方案 A**。方案 B 的主从切换需要人工介入，在真实故障中会拉长恢复时间；方案 C 是单点。
@@ -203,7 +203,7 @@ docker buildx build \
 #    - root 密码、应用密码、复制密码
 #    - REPLACE_WITH_STORAGE_CLASS
 # 2. 部署
-kubectl apply -f deploy/mysql-ha.yaml   # 方案 B
+kubectl apply -n ftc-platform -f deploy/install.yaml   # 方案 B
 # 或
 kubectl apply -f deploy/mysql.yaml      # 方案 C
 
