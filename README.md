@@ -64,12 +64,9 @@ make dev-backend
 
 `make dev-backend` 仅在本地开发时默认开启 Pod Exec。如需关闭，使用 `ENABLE_POD_EXEC=false make dev-backend`。直接运行 `go run ./cmd/platform` 时 Pod Exec 仍默认关闭。
 
-本地开发不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到 SQLite。部署到 Kubernetes 时，首次打开平台会进入数据库初始化页，可选择：
+本地开发不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到 SQLite。`deploy/mysql.yaml` 仅用于本地/单副本开发，不是交付版高可用方案。
 
-- 随平台部署在集群内的 MySQL（`deploy/mysql.yaml`）；
-- 集群外 MySQL，填写地址、端口、数据库名、账号和密码。
-
-初始化完成后平台把连接配置写入 `ftc-platform-runtime` Secret 并自动重启，启动时自动创建集群、健康、容量、事件、账号和会话所需的全部表及索引；多个平台 Pod 通过数据库迁移锁和 Kubernetes Lease 安全启动。也可以预先提供 `PLATFORM_DATABASE_DSN` 跳过初始化页。部署示例见 [`deploy/platform.yaml`](deploy/platform.yaml) 与 [`deploy/mysql.yaml`](deploy/mysql.yaml)，详细步骤见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
+Kubernetes 生产交付**不依赖 Helm**：使用 [`deploy/install.yaml`](deploy/install.yaml) + 浏览器初始化向导，自动创建 3 节点 PXC、本地 PV/SC、自签 CA/HTTPS Ingress 和运行 Deployment。请按 [`docs/deployment/install.md`](docs/deployment/install.md) 的 Step 0–12 逐步执行；其中包含资源清单、节点/磁盘准备、Ingress、镜像、初始化、验收和上线后运维。
 
 后端启动后，可访问健康检查接口：
 
@@ -88,7 +85,7 @@ make dev-frontend
 
 历史模块设计与开发步骤位于 [`docs/plans`](docs/plans)。
 
-Kubernetes 内部署 MySQL、平台数据库接入和 Pod Exec 开启方法见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
+Kubernetes 本地开发/调试（单副本 MySQL、Pod Exec）见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)；生产交付按 [`docs/deployment/install.md`](docs/deployment/install.md) 执行。
 
 设置 `METRICS_ADDR`（例如 `:9090`）后，平台在独立端口暴露 Prometheus 文本指标：采集轮次/错误/耗时、事件 List/Watch 重连、API 请求量与 5xx、托管集群数。该端口不经过登录认证，生产环境只应通过内网 Service 或 NetworkPolicy 暴露。
 
