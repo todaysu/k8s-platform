@@ -1,9 +1,29 @@
-# FTC 平台生产交付手册
+# FTC 平台生产交付手册（运维详细版）
 
 > **交付方式：`kubectl apply` + 浏览器初始化向导，不依赖 Helm。**
 >
 > 适用场景：3 个可调度节点、本地磁盘、PXC 3 节点 MySQL、自签 HTTPS Ingress。
 > 本文按“一步一停”的方式编写：每一步都有 **目标 / 操作 / 通过标准 / 失败处理**。未通过当前步骤，不要进入下一步。
+>
+> **第一次接触 Kubernetes 的读者，请先看 [小白版](install-beginner.md)。**
+
+**文档导航：**
+
+| 阶段 | 内容 |
+| --- | --- |
+| [Step 0](#3-step-0交付评审不执行命令) | 交付评审、域名/节点/磁盘/镜像决策 |
+| [Step 1](#4-step-1准备节点和本地磁盘) | 3 个 worker、本地磁盘、目录权限 |
+| [Step 2](#5-step-2准备-ingress不使用-helm) | IngressClass、443、TLS 终止 |
+| [Step 3](#6-step-3准备镜像) | 平台/PXC/HAProxy/Operator 镜像、imagePullSecret |
+| [Step 4](#7-step-4apply-安装清单) | apply install.yaml、bootstrap Job、token/密钥 |
+| [Step 5](#8-step-5打开初始化页面) | port-forward、打开 setup 页面 |
+| [Step 6](#9-step-6preflight) | 环境检查与失败处理 |
+| [Step 7](#10-step-7填写向导参数) | 节点/磁盘/MySQL/域名/管理员 |
+| [Step 8](#11-step-8执行安装) | storage → mysql → database → ingress → runtime → verify |
+| [Step 9](#12-step-9cahosts-与首次登录) | CA、hosts、首次登录 |
+| [Step 10](#13-step-10生产验收) | 生产验收清单 |
+| [Step 11](#14-step-11清理-setup-入口) | 清理 setup 入口 |
+| [Step 12](#15-step-12上线后运维) | 备份/监控/升级/节点故障/卸载 |
 
 ---
 
