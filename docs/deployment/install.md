@@ -635,6 +635,8 @@ kubectl -n ftc-platform delete service ftc-platform-setup
 
 ### 升级（无 Helm）
 
+> 完整的版本升级、回滚和发布流程见 [升级手册](upgrade.md)。下面是最短路径。
+
 1. 备份 MySQL；
 2. 推送新平台镜像；
 3. 更新 Deployment（三个容器名都是 `platform`）：

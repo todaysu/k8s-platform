@@ -70,6 +70,7 @@ Kubernetes 生产交付**不依赖 Helm，也不在集群内安装 MySQL**：使
 
 - 运维详细版：[`docs/deployment/install.md`](docs/deployment/install.md)（Step 0–12、资源清单、排错、备份/升级/卸载）
 - 小白流程图版：[`docs/deployment/install-beginner.md`](docs/deployment/install-beginner.md)（按图操作，不需要懂 Kubernetes）
+- 版本升级/回滚：[`docs/deployment/upgrade.md`](docs/deployment/upgrade.md)（无 Helm、外部 MySQL）
 
 后端启动后，可访问健康检查接口：
 

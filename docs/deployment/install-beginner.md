@@ -563,4 +563,5 @@ kubectl -n ftc-platform rollout status deployment/ftc-platform
 **相关文档：**
 
 - [运维详细版](install.md)
+- [版本升级/回滚](upgrade.md)
 - [平台 README](../../README.md)
