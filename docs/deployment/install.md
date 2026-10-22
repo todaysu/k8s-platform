@@ -26,7 +26,7 @@ flowchart TD
     C --> D["Step 3<br/>确认 Ingress<br/>443 + IngressClass"]
     D --> E["Step 4<br/>准备平台镜像<br/>推 registry"]
     E --> F["Step 5<br/>apply install.yaml<br/>等待 bootstrap Job"]
-    F --> G["Step 6<br/>取 token<br/>port-forward 初始化页"]
+    F --> G["Step 6<br/>取 token<br/>NodePort 初始化页"]
     G --> H{"Step 7<br/>Preflight"}
     H -->|失败| H1["按报告修复<br/>节点/Ingress/Secret"]
     H1 --> H
@@ -394,21 +394,64 @@ kubectl -n ftc-platform get secret ftc-platform-bootstrap \
 
 ---
 
-## 9. Step 6：打开初始化页面
+## 9. Step 6：打开初始化页面（NodePort）
+
+### 目标
+
+不依赖 port-forward，直接用节点 IP 打开 setup 向导。
+
+### 操作
+
+1. 查看节点 IP：
 
 ```bash
-kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80 --address 127.0.0.1
+kubectl get nodes -o wide
+kubectl -n ftc-platform get svc ftc-platform-setup
+# 预期：80:30080/TCP
 ```
 
-浏览器打开：
+2. 浏览器打开任意一个 Ready 节点的 IP：
 
 ```text
-http://127.0.0.1:8080
+http://<节点IP>:30080
 ```
 
-> 不要把 setup 暴露到公网；它拥有命名空间内编排权限。远程操作可用 SSH 隧道。
+3. 命令行验证：
 
----
+```bash
+curl -s http://<节点IP>:30080/api/v1/health
+# {"data":{"status":"ok"},"error":null}
+```
+
+4. 如果浏览器打不开，检查：
+
+- 节点安全组/防火墙是否放行 TCP 30080；
+- setup Pod 是否 Ready；
+- Service 是否为 `NodePort 30080`；
+- 30080 是否被其他 Service 占用。
+
+### 通过标准
+
+- `ftc-platform-setup` Service 显示 `80:30080/TCP`；
+- `curl http://<节点IP>:30080/api/v1/health` 返回 200；
+- 浏览器能打开初始化页。
+
+### 失败处理
+
+| 现象 | 处理 |
+| --- | --- |
+| `connection refused/timeout` | 安全组未放行 30080，或 setup Pod 未 Ready |
+| `30080 already allocated` | 修改 `install.yaml` 里的 `nodePort` 后重新 apply |
+| 页面 404 | 平台镜像版本不对，确认 setup 镜像包含前端 |
+| token 错误 | 重新从 Secret 读取，注意不要带换行 |
+
+> **安全提醒：** NodePort 会把 setup 入口暴露到节点网络。setup 拥有命名空间编排权限，必须：
+> - 只允许管理网段访问 30080；
+> - 初始化完成后立即删除 setup Service/Deployment（Step 11）；
+> - 不要把 30080 暴露到公网；
+> - token 只给执行初始化的人。
+>
+> 如果你更希望临时隧道，仍然可以 `kubectl port-forward`；但本交付默认使用 NodePort。
 
 ## 10. Step 7：Preflight
 
@@ -573,6 +616,7 @@ kubectl -n ftc-platform get rolebinding,clusterrolebinding | grep ftc-platform-s
 ```bash
 kubectl -n ftc-platform delete deployment ftc-platform-setup
 kubectl -n ftc-platform delete service ftc-platform-setup
+# 删除后节点 30080 不再监听
 ```
 
 保留 `ftc-platform-bootstrap`、`ftc-platform-ca`、`ftc-platform-tls`、`ftc-platform-runtime`。

@@ -225,32 +225,47 @@ kubectl -n ftc-platform get secret ftc-platform-bootstrap \
 
 把输出的 32 位字符串记下来，这就是 setup token。
 
-### 打开初始化页面
+### 打开初始化页面（NodePort）
+
+不需要 port-forward。先看节点 IP：
 
 ```bash
-kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80 --address 127.0.0.1
+kubectl get nodes -o wide
+kubectl -n ftc-platform get svc ftc-platform-setup
+# 预期：80:30080/TCP
 ```
 
-浏览器打开：
+浏览器打开任意一个 Ready 节点：
 
 ```text
-http://127.0.0.1:8080
+http://<节点IP>:30080
+```
+
+验证：
+
+```bash
+curl -s http://<节点IP>:30080/api/v1/health
+# {"data":{"status":"ok"},"error":null}
 ```
 
 ### ✅ 通过标准
 
 - bootstrap Job `Completed`；
 - 拿到 token；
+- Service 显示 `80:30080/TCP`；
 - 浏览器能打开初始化页。
 
 ### ❌ 如果页面打不开
 
 | 现象 | 处理 |
 | --- | --- |
-| 端口被占用 | 换端口，例如 `18080:80` |
-| `connection refused` | setup Pod 没 Ready，或 port-forward 掉了 |
+| `connection refused/timeout` | 节点安全组/防火墙没放行 30080 |
+| `30080 already allocated` | 换一个 nodePort 后重新 apply |
 | `ImagePullBackOff` | 平台镜像私有，需要给两个 SA 加 imagePullSecret |
 | 页面 404 | 镜像版本不对 |
+| 页面能开但 token 错 | 重新从 Secret 读取，不要带换行 |
+
+> **安全提醒**：30080 只给管理网段访问；初始化完成后删除 setup Service，关闭端口。不要把 30080 暴露到公网。
 
 ---
 
@@ -463,7 +478,7 @@ kubectl -n ftc-platform get rolebinding,clusterrolebinding | grep ftc-platform-s
 ```mermaid
 flowchart TD
     A["出问题"] --> B{"哪一步？"}
-    B -->|页面打不开| C["检查 port-forward / setup Pod"]
+    B -->|页面打不开| C["检查 30080 / setup Pod"]
     B -->|环境检查红| D["节点或 IngressClass"]
     B -->|MySQL 连接失败| E["地址/端口/白名单/账号"]
     B -->|建表失败| F["补 CREATE/ALTER/INDEX 权限"]
@@ -511,7 +526,7 @@ kubectl -n ftc-platform get secret ftc-platform-bootstrap \
   -o jsonpath='{.data.setup-token}' | base64 -d; echo
 
 # 5. 打开初始化页
-kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80
+# 浏览器访问 http://<节点IP>:30080
 
 # 6. 安装后检查
 kubectl -n ftc-platform get pods,ingress,secret

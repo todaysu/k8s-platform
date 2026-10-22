@@ -1,7 +1,7 @@
 # FTC 平台交付版安装清单（外部 MySQL + ingress-nginx hostNetwork，不使用 Helm）
 # 使用：替换 REPLACE_WITH_PLATFORM_IMAGE 后执行（不要加 -n，清单内含两个命名空间）
 #   kubectl apply -f deploy/install.yaml
-# 然后按 README 读取 bootstrap token 并 port-forward。
+# 初始化入口：http://<节点IP>:30080
 # 包含：ingress-nginx hostNetwork（节点 80/443）+ 平台 bootstrap/setup。
 ---
 apiVersion: v1
@@ -981,7 +981,11 @@ metadata:
   name: ftc-platform-setup
   namespace: ftc-platform
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: ftc-platform-setup
   ports:
-    - { name: http, port: 80, targetPort: http }
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
