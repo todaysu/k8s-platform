@@ -43,7 +43,7 @@ func (repository *capacityCollectorRepository) ListFleetCapacitySnapshots(contex
 
 func TestCapacityCollectorPersistsSnapshotAndFleetReadsCache(t *testing.T) {
 	cipher, _ := NewAESGCMCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	repository := &capacityCollectorRepository{records: []ClusterRecord{{ManagedCluster: ManagedCluster{ID: "cluster-1", Name: "stp-1", Environment: "stp", ClusterType: "G01", TechnologyStack: "TCS"}, EncryptedCredentials: encrypted}}}
 	service := NewOnboardingService(fakeConnector{capacity: ClusterCapacity{WorkerNodes: 200, CPUAllocatableMilli: 640000}}, cipher, repository)
 	NewCapacityCollector(service, time.Minute, 1, time.Second).CollectOnce(context.Background())

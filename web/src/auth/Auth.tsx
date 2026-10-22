@@ -14,7 +14,7 @@ export function AccountMenu() {
  }, [])
  if (!auth) return <span>平台管理员</span>
  const select = (action: () => void) => { if (menu.current) menu.current.open = false; action() }
- return <details ref={menu} className="ks-account-menu"><summary aria-label={`${auth.user.username} · ${roleNames[auth.user.role]}`}><span className="ks-account-avatar">{auth.user.username.slice(0,1).toUpperCase()}</span><span className="ks-account-identity"><strong>{auth.user.username}</strong><small>{roleNames[auth.user.role]}</small></span></summary><div>{auth.user.role === 'admin' && <button onClick={() => select(auth.manage)}>平台角色权限</button>}<button onClick={() => select(auth.password)}>修改密码</button><button onClick={() => select(auth.logout)}>退出登录</button></div></details>
+ return <details ref={menu} className="ks-account-menu"><summary aria-label={`${auth.user.username} · ${roleNames[auth.user.role]}`}><span className="ks-account-avatar">{auth.user.username.slice(0,1).toUpperCase()}</span><span className="ks-account-identity"><strong>{auth.user.username}</strong><small>{roleNames[auth.user.role]}</small></span></summary><div>{auth.user.role === 'admin' && <button onClick={() => select(auth.manage)}>平台管理</button>}<button onClick={() => select(auth.password)}>修改密码</button><button onClick={() => select(auth.logout)}>退出登录</button></div></details>
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {

@@ -1,0 +1,55 @@
+.ks-settings-page { display:grid; grid-template-columns:15.5rem minmax(0,1fr); gap:1.25rem; align-items:start; }
+.ks-settings-page.is-embedded { grid-template-columns:15rem minmax(0,1fr); gap:1rem; width:100%; height:100%; min-height:0; overflow:hidden; }
+.ks-settings-page.is-embedded .ks-settings-nav { position:static; top:auto; height:100%; max-height:none; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; align-self:stretch; }
+.ks-settings-nav,.ks-settings-card { background:#fff; border:1px solid #d7dce1; border-radius:10px; box-shadow:0 1px 2px rgb(3 3 3 / 6%); }
+.ks-settings-nav { position:sticky; top:8.75rem; overflow:hidden; padding:.75rem 0; }
+.ks-settings-nav>strong { display:block; padding:.5rem 1rem .75rem; color:#4f5d69; font-size:.875rem; }
+.ks-settings-nav button { width:100%; display:grid; grid-template-columns:1.25rem minmax(0,1fr); gap:.75rem; align-items:start; padding:.7rem 1rem .75rem; border:0; border-left:3px solid transparent; color:#273746; background:transparent; text-align:left; cursor:pointer; }
+.ks-settings-nav button:hover { background:#f5f7f9; }.ks-settings-nav button.is-active { background:#e7f1fa; border-left-color:#06c; color:#004b95; }
+.ks-settings-nav button:focus-visible { outline:2px solid #06c; outline-offset:-2px; }
+.ks-settings-nav svg { margin-top:.15rem; }.ks-settings-nav b { display:block; font-size:.9375rem; line-height:1.35; }
+.ks-settings-nav small { display:block; margin-top:.2rem; color:#6a7580; font-size:.75rem; font-weight:400; line-height:1.45; }
+.ks-settings-nav button.is-active small { color:#315e8b; }
+.ks-settings-main { min-width:0; display:grid; gap:1rem; }.ks-settings-card { min-width:0; }.ks-settings-card .pf-v6-c-card__body { padding:1.5rem; }
+.ks-settings-page.is-embedded .ks-settings-main { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; }
+.ks-settings-page.is-embedded .ks-settings-main>.pf-v6-c-alert { flex:0 0 auto; }
+.ks-settings-page.is-embedded .ks-settings-card { flex:1 1 auto; height:100%; min-height:0; overflow:hidden; }
+.ks-settings-page.is-embedded .ks-settings-card-body { display:grid; grid-template-rows:auto minmax(0,1fr) auto auto; height:100%; min-height:0; overflow:hidden; }
+.ks-settings-page.is-embedded .ks-settings-form { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; padding:1.5rem .5rem 1.5rem 0; }
+
+/* Compact section header: keeps the module label, drops the duplicated category title + long description. */
+.ks-settings-section-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.75rem 1.25rem; border-bottom:1px solid #e4e7eb; padding-bottom:.875rem; }
+.ks-settings-heading { display:flex; align-items:center; gap:.75rem; min-width:0; }
+.ks-settings-heading-icon { display:grid; place-items:center; flex:none; width:2.25rem; height:2.25rem; border-radius:8px; background:#e7f1fa; color:#004b95; }
+.ks-settings-heading-icon svg { width:1.1rem; height:1.1rem; }
+.ks-settings-heading-text { display:flex; align-items:center; gap:.6rem; min-width:0; }.ks-settings-heading-text h2 { margin:0; color:#172735; font-size:1.0625rem; line-height:1.3; white-space:nowrap; }
+.ks-settings-heading-count { padding:.1rem .45rem; border-radius:999px; background:#f1f4f7; color:#5f6b76; font-size:.75rem; font-weight:500; white-space:nowrap; }
+.ks-settings-head-actions { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; }
+.ks-settings-current { display:inline-flex; align-items:center; gap:.4rem; padding:.3rem .65rem; border:1px solid #d7e2ec; border-radius:999px; background:#f5f9fd; color:#315e8b; font-size:.8125rem; font-weight:600; white-space:nowrap; }
+.ks-settings-current svg { width:.9rem; height:.9rem; }
+.ks-settings-dirty { display:inline-flex; align-items:center; gap:.4rem; padding:.25rem .6rem; border-radius:999px; background:#fff4cc; color:#795600; font-size:.8125rem; font-weight:600; white-space:nowrap; }
+.ks-settings-dirty>span { width:.45rem; height:.45rem; border-radius:50%; background:#c58c00; }
+
+.ks-settings-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-content:start; gap:1.5rem 2rem; padding:1.5rem 0; }
+.ks-settings-field { display:grid; gap:.4rem; align-content:start; min-width:0; color:#1f2d3a; font-weight:600; }.ks-settings-field.is-wide { grid-column:1/-1; }
+.ks-settings-field-label { display:flex; align-items:center; gap:.4rem; font-size:.875rem; line-height:1.35; }
+.ks-settings-field-help { display:flex; align-items:baseline; gap:.4rem; color:#6a7580; font-size:.8125rem; font-weight:400; line-height:1.5; }
+.ks-settings-field-help>span { flex:none; padding:0 .3rem; border:1px solid #d7e2ec; border-radius:4px; background:#f5f9fd; color:#315e8b; font-size:.6875rem; font-weight:600; line-height:1.6; }
+.ks-settings-field.has-error .ks-settings-field-label { color:#a30000; }
+.ks-settings-field.has-error .ks-settings-field-control>input,.ks-settings-field.has-error .ks-settings-field-control>select { border-color:#c9190b; background:#fff8f7; }
+.ks-settings-field.has-error .ks-settings-field-control>input:focus,.ks-settings-field.has-error .ks-settings-field-control>select:focus { border-color:#c9190b; outline-color:rgb(201 25 11 / 20%); }
+.ks-settings-field-error { display:flex; align-items:flex-start; gap:.35rem; color:#a30000; font-size:.8125rem; font-weight:400; line-height:1.45; }
+.ks-settings-field-error:before { content:'!'; display:grid; place-items:center; flex:none; width:1rem; height:1rem; margin-top:.05rem; border-radius:50%; background:#c9190b; color:#fff; font-size:.6875rem; font-weight:700; line-height:1; }
+.ks-settings-field-control { display:block; min-width:0; }
+.ks-settings-field-control>input,.ks-settings-field-control>select { display:block; width:100%; min-height:2.25rem; border:1px solid #8a949e; border-radius:6px; padding:.4rem .65rem; background:#fff; color:#172735; font:inherit; font-size:1rem; font-weight:400; line-height:1.4; }
+.ks-settings-field-control>input:hover,.ks-settings-field-control>select:hover { border-color:#66737f; }
+.ks-settings-field-control>input:focus,.ks-settings-field-control>select:focus { border-color:#06c; outline:2px solid rgb(0 102 204 / 20%); outline-offset:1px; }
+.ks-settings-field-control>input[type=time] { max-width:16rem; }
+.ks-settings-group { grid-column:1/-1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1.25rem 1.5rem; padding:1.25rem; border:1px solid #e0e5ea; border-radius:10px; background:#fafbfc; }
+.ks-settings-group h3 { grid-column:1/-1; display:flex; align-items:center; gap:.5rem; margin:0; font-size:.9375rem; color:#315e8b; }
+.ks-settings-group h3:before { content:''; width:.25rem; height:1rem; border-radius:2px; background:#06c; }
+.ks-settings-check { display:flex; align-items:center; min-height:2.25rem; gap:.6rem; font-size:.9375rem; font-weight:400; }.ks-settings-check input { flex:none; width:1.125rem; height:1.125rem; margin:0; accent-color:#06c; }
+.ks-settings-footer { display:flex; align-items:center; justify-content:flex-end; gap:.75rem; border-top:1px solid #e4e7eb; padding-top:1rem; }.ks-settings-footer>span { margin-right:auto; color:#65727e; font-size:.875rem; }.ks-settings-footer svg { color:#3e8635; margin-right:.3rem; }
+.ks-settings-readonly { margin:.5rem 0 0; color:#6a7580; font-size:.875rem; }.ks-settings-loading { min-height:20rem; display:flex; align-items:center; justify-content:center; gap:.75rem; color:#5f6b76; }
+@media(max-width:1000px) { .ks-settings-page,.ks-settings-page.is-embedded { grid-template-columns:1fr; height:auto; overflow:visible; }.ks-settings-nav,.ks-settings-page.is-embedded .ks-settings-nav { position:static; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); height:auto; overflow:visible; }.ks-settings-nav>strong { grid-column:1/-1; }.ks-settings-page.is-embedded .ks-settings-main { height:auto; overflow:visible; }.ks-settings-page.is-embedded .ks-settings-card { height:auto; overflow:visible; }.ks-settings-page.is-embedded .ks-settings-card-body { display:block; height:auto; overflow:visible; }.ks-settings-page.is-embedded .ks-settings-form { overflow:visible; padding-right:0; }.ks-settings-group { grid-template-columns:1fr; }.ks-settings-group h3 { grid-column:auto; } }
+@media(max-width:680px) { .ks-settings-nav,.ks-settings-form { grid-template-columns:1fr; }.ks-settings-field.is-wide { grid-column:auto; }.ks-settings-section-head { align-items:flex-start; flex-direction:column; }.ks-settings-footer { align-items:flex-start; flex-direction:column; }.ks-settings-footer>span { margin-right:0; } }

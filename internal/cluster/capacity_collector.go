@@ -65,14 +65,16 @@ func (collector *CapacityCollector) collect(ctx context.Context, stagger bool) {
 	if !ok {
 		return
 	}
-	records, err := collector.service.repository.ListRecords(ctx)
+	records, err := collector.service.collectionRecords(ctx)
 	if err != nil || len(records) == 0 {
 		if err != nil {
 			log.Printf("capacity collector: list managed clusters: %v", err)
 		}
 		return
 	}
-	metrics.ClustersTotal.Set(int64(len(records)))
+	if _, scoped := CollectionLeaseFromContext(ctx); !scoped {
+		metrics.ClustersTotal.Set(int64(len(records)))
+	}
 	classification, err := collector.service.activeCapacityClassification(ctx)
 	if err != nil {
 		log.Printf("capacity collector: read classification: %v", err)
@@ -89,9 +91,25 @@ func (collector *CapacityCollector) collect(ctx context.Context, stagger bool) {
 		go func() {
 			defer waitGroup.Done()
 			for record := range jobs {
-				requestContext, cancel := context.WithTimeout(ctx, collector.timeout)
+				if ctx.Err() != nil {
+					return
+				}
+				queueContext, queueCancel := context.WithTimeout(ctx, 5*time.Minute)
+				budgetCtx, release, budgetErr := collector.service.collectionBudget(queueContext, ctx, record.ID, "collection_list", 4)
+				if budgetErr != nil {
+					queueCancel()
+					if ctx.Err() == nil {
+						log.Printf("collection admission expired for cluster %s: %v", record.ID, budgetErr)
+					}
+					continue
+				}
+				queueCancel()
+				requestContext, cancel := context.WithTimeout(budgetCtx, collector.timeout)
+
 				snapshot, collectErr := collector.service.capacityForRecordWithClassification(requestContext, record, classification)
+				release()
 				cancel()
+				queueCancel()
 				at := collector.service.now().UTC()
 				metadata := record.ManagedCluster
 				if collectErr != nil {

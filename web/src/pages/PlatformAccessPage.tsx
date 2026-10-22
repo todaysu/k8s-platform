@@ -4,15 +4,22 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table'
 import { useContext, useEffect, useState } from 'react'
 import { AuthContext, type User } from '../auth/context'
 import { request, roleNames } from '../auth/api'
+import PlatformSettingsPage from './PlatformSettingsPage'
 import './PlatformAccessPage.css'
 const roleDetails = { admin: '管理平台配置、账号和角色，并使用全部排查功能。', operator: '查看集群、日志与事件，进入容器终端排查。', viewer: '查看集群、资源、日志与事件，适合观察与协作。' }
+const managementTabFromLocation = () => {
+ const requested = new URLSearchParams(window.location.search).get('tab')
+ if (requested === 'roles') return 'roles'
+ if (requested === 'parameters' || /^\/settings\/(runtime|collection|events|security|java|database)/.test(window.location.pathname)) return 'parameters'
+ return 'accounts'
+}
 export default function PlatformAccessPage() {
  const auth = useContext(AuthContext)
  const [users, setUsers] = useState<User[]>([])
  const [loading, setLoading] = useState(true)
  const [error, setError] = useState('')
  const [notice, setNotice] = useState('')
- const [tab, setTab] = useState('accounts')
+ const [tab, setTab] = useState(managementTabFromLocation)
  const [search, setSearch] = useState('')
  const [role, setRole] = useState('')
  const [status, setStatus] = useState('')
@@ -20,6 +27,11 @@ export default function PlatformAccessPage() {
  const [refresh, setRefresh] = useState(0)
  const [editor, setEditor] = useState<User | 'new' | null>(null)
  const allowed = auth?.user.role === 'admin'
+ useEffect(() => {
+  const onPopState = () => setTab(managementTabFromLocation())
+  window.addEventListener('popstate', onPopState)
+  return () => window.removeEventListener('popstate', onPopState)
+ }, [])
  useEffect(() => {
   if (!allowed) return
   let active = true
@@ -32,9 +44,14 @@ export default function PlatformAccessPage() {
  const current = Math.min(page, pages)
  const changeFilter = (fn: () => void) => { fn(); setPage(1) }
  const reload = () => { setLoading(true); setRefresh(value => value + 1) }
- return <div className="ks-access-page">
+ const selectTab = (next: string) => {
+  const path = next === 'accounts' ? '/settings/access' : `/settings/access?tab=${next}`
+  window.history.pushState({ managementTab: next }, '', path)
+  setTab(next)
+ }
+ return <div className={`ks-access-page${tab === 'parameters' ? ' is-parameters' : ''}`}>
   
-  <Tabs activeKey={tab} onSelect={(_, key) => setTab(String(key))} aria-label="平台管理视图"><Tab eventKey="accounts" title={<TabTitleText>账号管理</TabTitleText>} /><Tab eventKey="roles" title={<TabTitleText>角色与权限</TabTitleText>} /></Tabs>
+  <Tabs activeKey={tab} onSelect={(_, key) => selectTab(String(key))} aria-label="平台管理视图"><Tab eventKey="accounts" title={<TabTitleText>账号管理</TabTitleText>} /><Tab eventKey="roles" title={<TabTitleText>角色与权限</TabTitleText>} /><Tab eventKey="parameters" title={<TabTitleText>参数配置</TabTitleText>} /></Tabs>
   {notice && <Alert isInline variant="success" title={notice} />}
   {tab === 'accounts' ? <>
    <div className="ks-access-summary" aria-label="账号概况"><span>全部账号 <strong>{users.length}</strong></span><span>启用 <strong>{users.filter(user => !user.disabled).length}</strong></span><span>已禁用 <strong>{users.filter(user => user.disabled).length}</strong></span><span>管理员 <strong>{users.filter(user => user.role === 'admin' && !user.disabled).length}</strong></span></div>
@@ -45,7 +62,7 @@ export default function PlatformAccessPage() {
     {loading && !users.length ? <div className="ks-access-empty"><Spinner aria-label="正在读取账号" /></div> : <><div className="ks-access-table"><Table aria-label="平台账号列表" variant="compact"><Thead><Tr><Th>账号</Th><Th>角色</Th><Th>状态</Th><Th>访问范围</Th><Th screenReaderText="账号操作" /></Tr></Thead><Tbody>{filtered.slice((current - 1) * 20, current * 20).map(user => <Tr key={user.id}><Td><strong>{user.username}</strong>{user.id === auth.user.id && <Label isCompact>当前账号</Label>}</Td><Td><Label color={user.role === 'admin' ? 'blue' : 'grey'}>{roleNames[user.role]}</Label></Td><Td><span className={`ks-access-status ${user.disabled ? 'is-disabled' : ''}`}>{user.disabled ? '已禁用' : '启用'}</span></Td><Td>全部已纳管集群</Td><Td><Button variant="link" aria-label={`编辑账号 ${user.username}`} onClick={() => setEditor(user)}>编辑</Button></Td></Tr>)}</Tbody></Table></div>{!filtered.length && !error && <div className="ks-access-empty"><strong>没有匹配的账号</strong><p>调整搜索或筛选条件后再试。</p><Button variant="link" onClick={() => { setSearch(''); setRole(''); setStatus('') }}>清除筛选</Button></div>}<div className="ks-access-pagination"><span>共 {filtered.length} 个账号 · 第 {current} / {pages} 页</span><Button variant="secondary" isDisabled={current <= 1 || loading} onClick={() => setPage(current - 1)}>上一页</Button><Button variant="secondary" isDisabled={current >= pages || loading} onClick={() => setPage(current + 1)}>下一页</Button></div></>}
    </CardBody></Card>
    
-  </> : <Card><CardBody><div className="ks-access-heading"><div><Title headingLevel="h2" size="lg">角色权限一览</Title></div></div><div className="ks-access-table"><Table aria-label="角色权限对照" variant="compact"><Thead><Tr><Th>操作</Th><Th>管理员</Th><Th>运维员</Th><Th>只读用户</Th></Tr></Thead><Tbody>{[['查看集群、资源与容量',true,true,true],['查看日志和事件',true,true,true],['使用容器终端',true,true,false],['纳管与移除集群',true,false,false],['修改业务命名空间与交付基线',true,false,false],['管理账号、角色与密码重置',true,false,false]].map(([label,...values]) => <Tr key={String(label)}><Td>{label}</Td>{values.map((value,index) => <Td key={index}>{value ? '允许' : '—'}</Td>)}</Tr>)}</Tbody></Table></div></CardBody></Card>}
+  </> : tab === 'roles' ? <Card><CardBody><div className="ks-access-heading"><div><Title headingLevel="h2" size="lg">角色权限一览</Title></div></div><div className="ks-access-table"><Table aria-label="角色权限对照" variant="compact"><Thead><Tr><Th>操作</Th><Th>管理员</Th><Th>运维员</Th><Th>只读用户</Th></Tr></Thead><Tbody>{[['查看集群、资源与容量',true,true,true],['查看日志和事件',true,true,true],['使用容器终端',true,true,false],['纳管与移除集群',true,false,false],['修改业务命名空间与交付基线',true,false,false],['管理账号、角色与密码重置',true,false,false],['修改平台运行参数',true,false,false]].map(([label,...values]) => <Tr key={String(label)}><Td>{label}</Td>{values.map((value,index) => <Td key={index}>{value ? '允许' : '—'}</Td>)}</Tr>)}</Tbody></Table></div></CardBody></Card> : <PlatformSettingsPage embedded />}
   {editor && <AccountEditor key={editor === 'new' ? 'new' : editor.id} actor={auth.user} account={editor} onClose={() => setEditor(null)} onSaved={async () => { const currentAccount = editor !== 'new' && editor.id === auth.user.id; setEditor(null); setNotice(currentAccount ? '账号已更新，请重新登录。' : '账号已保存。受影响账号的旧会话已失效。'); reload() }} />}
  </div>
 }

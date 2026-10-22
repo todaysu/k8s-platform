@@ -63,6 +63,7 @@ type fakeManager struct {
 	podLogs             cluster.PodLogSnapshot
 	workloads           []cluster.ClusterWorkload
 	workload            cluster.ClusterWorkloadDetail
+	securityRecord      cluster.SecurityBaselineRecord
 	err                 error
 }
 
@@ -140,6 +141,32 @@ func (manager fakeManager) GetWorkloads(context.Context, string) ([]cluster.Clus
 
 func (manager fakeManager) GetWorkload(context.Context, string, string, string, string) (cluster.ClusterWorkloadDetail, error) {
 	return manager.workload, manager.err
+}
+
+func (manager fakeManager) StartSecurityBaselineScan(_ context.Context, _ string, mode cluster.SecurityScanMode) (cluster.SecurityBaselineRecord, error) {
+	record := manager.securityRecord
+	record.Scanner = string(mode)
+	return record, manager.err
+}
+
+func (manager fakeManager) GetFleetSecurityBaselines(context.Context) (cluster.FleetSecurityBaseline, error) {
+	return cluster.FleetSecurityBaseline{}, manager.err
+}
+
+func (manager fakeManager) GetSecurityBaselineHistory(context.Context, string, int) (cluster.SecurityBaselineHistory, error) {
+	return cluster.SecurityBaselineHistory{}, manager.err
+}
+
+func (manager fakeManager) GetSecurityWhitelist(context.Context, string) ([]cluster.SecurityWhitelistEntry, error) {
+	return []cluster.SecurityWhitelistEntry{}, manager.err
+}
+
+func (manager fakeManager) AddSecurityWhitelist(_ context.Context, clusterID, controlID, reason string) (cluster.SecurityWhitelistEntry, error) {
+	return cluster.SecurityWhitelistEntry{ClusterID: clusterID, ControlID: controlID, Reason: reason}, manager.err
+}
+
+func (manager fakeManager) DeleteSecurityWhitelist(context.Context, string, string) error {
+	return manager.err
 }
 
 func (validator fakeValidator) Validate(context.Context, string, []byte) (cluster.ValidationPreview, error) {
@@ -355,6 +382,38 @@ func TestGetClusterWorkloads(t *testing.T) {
 	}
 	if !strings.Contains(responseRecorder.Body.String(), `"kind":"Deployment"`) || !strings.Contains(responseRecorder.Body.String(), `"name":"web"`) {
 		t.Fatalf("unexpected response: %s", responseRecorder.Body.String())
+	}
+}
+
+func TestScanClusterSecurityBaselineQueuesManualScan(t *testing.T) {
+	manager := fakeManager{securityRecord: cluster.SecurityBaselineRecord{ClusterID: "cluster-1", Status: "queued"}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/clusters/cluster-1/security-baseline/scan", nil)
+	response := httptest.NewRecorder()
+
+	NewRouter("test", manager).ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"status":"queued"`) || !strings.Contains(response.Body.String(), `"scanner":"full"`) {
+		t.Fatalf("unexpected response: %s", response.Body.String())
+	}
+}
+
+func TestScanClusterSecurityBaselineDefaultsToKubeBenchAndRejectsUnknownMode(t *testing.T) {
+	manager := fakeManager{securityRecord: cluster.SecurityBaselineRecord{ClusterID: "cluster-1", Status: "queued"}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/clusters/cluster-1/security-baseline/scan", nil)
+	response := httptest.NewRecorder()
+	NewRouter("test", manager).ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"scanner":"full"`) {
+		t.Fatalf("expected kube-bench mode by default: %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/clusters/cluster-1/security-baseline/scan", strings.NewReader(`{"mode":"unknown"}`))
+	response = httptest.NewRecorder()
+	NewRouter("test", manager).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), cluster.CodeSecurityScanModeInvalid) {
+		t.Fatalf("expected invalid mode: %d %s", response.Code, response.Body.String())
 	}
 }
 

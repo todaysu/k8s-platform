@@ -15,6 +15,8 @@ const keyOf = (pod: ClusterPod) => `${pod.namespace}/${pod.name}`
 export default function ArthasPodPicker({ disabled, loading, namespace, pods, value, onChange }: Props) {
   const id = useId()
   const root = useRef<HTMLDivElement | null>(null)
+  const popover = useRef<HTMLDivElement | null>(null)
+  const list = useRef<HTMLUListElement | null>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
   const search = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
@@ -29,9 +31,23 @@ export default function ArthasPodPicker({ disabled, loading, namespace, pods, va
     const close = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false)
     }
+    const panel = popover.current
+    const scrollList = (event: WheelEvent) => {
+      const options = list.current
+      if (!options) return
+      // Keep wheel gestures in the picker, including its search field and edges.
+      event.preventDefault()
+      const delta = event.deltaMode === 1 ? event.deltaY * 24 : event.deltaMode === 2 ? event.deltaY * options.clientHeight : event.deltaY
+      options.scrollTop += delta
+    }
+    panel?.addEventListener('wheel', scrollList, { passive: false })
     document.addEventListener('pointerdown', close)
-    window.setTimeout(() => search.current?.focus(), 0)
-    return () => document.removeEventListener('pointerdown', close)
+    const focusTimer = window.setTimeout(() => search.current?.focus({ preventScroll: true }), 0)
+    return () => {
+      window.clearTimeout(focusTimer)
+      panel?.removeEventListener('wheel', scrollList)
+      document.removeEventListener('pointerdown', close)
+    }
   }, [open])
 
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
@@ -63,7 +79,7 @@ export default function ArthasPodPicker({ disabled, loading, namespace, pods, va
       <span aria-hidden="true" className="ks-arthas-pod-chevron">⌄</span>
     </button>
 
-    {open && <div className="ks-arthas-pod-popover">
+    {open && <div className="ks-arthas-pod-popover" ref={popover}>
       <div className="ks-arthas-pod-search">
         <input
           aria-label="搜索 Pod"
@@ -81,7 +97,7 @@ export default function ArthasPodPicker({ disabled, loading, namespace, pods, va
         />
         <span>{matches.length} 个</span>
       </div>
-      <ul aria-label="选择 Arthas Pod" id={`${id}-options`} role="listbox">
+      <ul ref={list} aria-label="选择 Arthas Pod" id={`${id}-options`} role="listbox">
         {visible.map((pod, index) => <li
           aria-selected={keyOf(pod) === value}
           className={index === active ? 'is-active' : ''}

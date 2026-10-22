@@ -17,6 +17,8 @@ import (
 	"example.com/k8s-platform/internal/httpapi"
 	"example.com/k8s-platform/internal/leadership"
 	"example.com/k8s-platform/internal/metrics"
+	"example.com/k8s-platform/internal/platformsettings"
+	"example.com/k8s-platform/internal/runtimecontrol"
 	"example.com/k8s-platform/internal/setup"
 	"example.com/k8s-platform/internal/store"
 )
@@ -42,16 +44,31 @@ func main() {
 		log.Fatal(err)
 	}
 	defer func() { _ = database.Close() }()
+	settingsContext, cancelSettings := context.WithTimeout(context.Background(), 5*time.Second)
+	storedSettings, settingsErr := platformsettings.Load(settingsContext, database)
+	cancelSettings()
+	if settingsErr != nil {
+		log.Printf("platform settings: using environment defaults because persisted settings could not be loaded: %v", settingsErr)
+		storedSettings = platformsettings.Defaults()
+	} else {
+		cfg = applySavedPlatformSettings(cfg, storedSettings)
+	}
 	cipher, err := cluster.NewAESGCMCipher(cfg.CredentialEncryptionKey)
 	if err != nil {
 		log.Fatal(err)
 	}
+	connector := cluster.NewKubernetesConnectorWithInstanceSource(20*time.Second, cfg.HealthInstanceSource)
+	connector.ConfigureHostSecurityScanner(cfg.KubeBenchImage, cfg.KubeBenchImageAMD64, cfg.KubeBenchImageARM64, cfg.SecurityScannerNamespace, cfg.SecurityScannerPullSecret, cfg.SecurityHostScanWorkers)
+	connector.SetSecurityPodStartupTimeout(cfg.SecurityPodStartupTimeout)
 	manager := cluster.NewOnboardingService(
-		cluster.NewKubernetesConnectorWithInstanceSource(20*time.Second, cfg.HealthInstanceSource),
+		connector,
 		cipher,
 		database,
 	)
 	manager.SetSystemNamespaces(cfg.SystemNamespaces)
+	manager.SetSecurityScanWorkers(cfg.SecurityScanWorkers)
+	manager.SetSecurityScanTimeout(cfg.SecurityScanTimeout)
+	manager.EnableQueuedSecurityScans()
 	var eventRepository cluster.EventRepository = database
 	var closeEvents func() error
 	if cfg.PlatformDatabaseDSN == "" && cfg.EventDatabaseDSN != "" {
@@ -67,44 +84,86 @@ func main() {
 	}
 	manager.SetEventRepository(eventRepository)
 
-	authentication, err := auth.NewWithDB(database.SQLDB(), cfg.BootstrapTokenPath, cfg.AdminUsername, cfg.AdminPasswordHash, cfg.SecureCookies, cfg.SessionTTL)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer authentication.Close()
 	applicationContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go leadership.Run(applicationContext, leadership.Config{
-		Enabled: cfg.LeaderElectionEnabled, Namespace: cfg.LeaderElectionNamespace,
-		Name: cfg.LeaderElectionName, Identity: os.Getenv("POD_NAME"),
-	}, func(leaderContext context.Context) {
-		var collectors sync.WaitGroup
-		collectors.Add(4)
-		go func() {
-			defer collectors.Done()
-			cluster.NewHealthCollector(manager, cfg.HealthCollectionInterval, cfg.HealthCollectionWorkers, cfg.HealthCollectionTimeout).Run(leaderContext)
-		}()
-		go func() {
-			defer collectors.Done()
-			cluster.NewCapacityCollector(manager, cfg.CapacityCollectionInterval, cfg.CapacityCollectionWorkers, cfg.CapacityCollectionTimeout).Run(leaderContext)
-		}()
-		go func() {
-			defer collectors.Done()
-			cluster.NewEventCollector(manager, eventRepository).Run(leaderContext)
-		}()
-		go func() {
-			defer collectors.Done()
-			cluster.NewResourceIndexCollector(manager, database, cfg.ResourceIndexInterval, cfg.ResourceIndexWorkers, cfg.ResourceIndexTimeout).Run(leaderContext)
-		}()
-		collectors.Wait()
-	})
-	apiHandler := metrics.Middleware(authentication.Wrap(httpapi.NewRouterWithOptions(
-		platformVersion,
-		httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled},
-		manager,
-	)))
+	if cfg.RunsWorker() {
+		go manager.RunSecurityWorker(applicationContext, os.Getenv("POD_NAME"))
+	}
+	if cfg.Collects() {
+		check, cancel := context.WithTimeout(applicationContext, 5*time.Second)
+		err := database.VerifyCollectionMode(check, cfg.CollectionShards)
+		cancel()
+		if err != nil {
+			log.Fatalf("collector mode check failed: %v", err)
+		}
+		runCollectors := func(leaderContext context.Context) {
+			var collectors sync.WaitGroup
+			collectors.Add(4)
+			go func() {
+				defer collectors.Done()
+				cluster.NewHealthCollector(manager, cfg.HealthCollectionInterval, cfg.HealthCollectionWorkers, cfg.HealthCollectionTimeout).Run(leaderContext)
+			}()
+			go func() {
+				defer collectors.Done()
+				cluster.NewCapacityCollector(manager, cfg.CapacityCollectionInterval, cfg.CapacityCollectionWorkers, cfg.CapacityCollectionTimeout).Run(leaderContext)
+			}()
+			go func() {
+				defer collectors.Done()
+				eventCollector := cluster.NewEventCollector(manager, eventRepository)
+				if storedSettings.UpdatedAt[platformsettings.SectionEvents] != "" {
+					eventCollector.ConfigureRetention(
+						time.Duration(storedSettings.Events.NormalRetentionDays)*24*time.Hour,
+						time.Duration(storedSettings.Events.WarningRetentionDays)*24*time.Hour,
+						time.Duration(storedSettings.Events.RollupRetentionDays)*24*time.Hour,
+						time.Duration(storedSettings.Events.DailyRetentionDays)*24*time.Hour,
+						storedSettings.Events.CleanupBatchSize,
+					)
+				}
+				eventCollector.Run(leaderContext)
+			}()
+			go func() {
+				defer collectors.Done()
+				cluster.NewResourceIndexCollector(manager, database, cfg.ResourceIndexInterval, cfg.ResourceIndexWorkers, cfg.ResourceIndexTimeout).Run(leaderContext)
+			}()
+			collectors.Wait()
+		}
+		if cfg.CollectionShards > 0 {
+			go cluster.RunCollectionShards(applicationContext, database, cfg.CollectionShards, runCollectors)
+		} else {
+			go leadership.Run(applicationContext, leadership.Config{Enabled: cfg.LeaderElectionEnabled, Namespace: cfg.LeaderElectionNamespace, Name: cfg.LeaderElectionName, Identity: os.Getenv("POD_NAME")}, runCollectors)
+		}
+	}
+
+	var apiHandler http.Handler
+	if cfg.ServesAPI() {
+		authentication, err := auth.NewWithDB(database.SQLDB(), cfg.BootstrapTokenPath, cfg.AdminUsername, cfg.AdminPasswordHash, cfg.SecureCookies, cfg.SessionTTL)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer authentication.Close()
+		// Only trust X-Forwarded-For when the deployment puts a proxy in front;
+		// otherwise any client could forge it and defeat login throttling.
+		authentication.TrustProxyHeaders(cfg.TrustProxyHeaders)
+		// The loopback WebSocket origin exception is for local SPA development
+		// and must stay disabled in deployed environments.
+		httpapi.SetLoopbackWebSocketOrigin(cfg.AllowLoopbackWSOrigin)
+		restarter, restartErr := runtimecontrol.NewInCluster(cfg.LeaderElectionNamespace)
+		if restartErr != nil {
+			log.Printf("platform settings: automatic Kubernetes restart disabled: %v", restartErr)
+		}
+		routerOptions := httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled, Authenticator: authentication, SettingsRepository: database, Admission: httpapi.AdmissionLimits{Queries: cfg.HTTPQueryConcurrency, Realtime: cfg.HTTPRealtimeConcurrency, Monitoring: cfg.HTTPMonitoringConcurrency, Sessions: cfg.HTTPSessionConcurrency, PerCluster: cfg.HTTPClusterConcurrency}}
+		if restartErr == nil {
+			routerOptions.SettingsRestarter = restarter
+		}
+		if quotas, ok := database.(cluster.RequestQuotaRepository); ok {
+			routerOptions.QuotaRepository = quotas
+		}
+		apiHandler = metrics.Middleware(authentication.Wrap(httpapi.NewRouterWithOptions(platformVersion, routerOptions, manager)))
+	} else {
+		apiHandler = collectorHealth(database.SQLDB())
+	}
 	var handler http.Handler = apiHandler
-	if cfg.WebDistDir != "" {
+	if cfg.ServesAPI() && cfg.WebDistDir != "" {
 		mux := http.NewServeMux()
 		mux.Handle("/api/", apiHandler)
 		mux.Handle("/", httpapi.NewSPAHandler(cfg.WebDistDir))

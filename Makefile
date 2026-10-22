@@ -7,7 +7,8 @@ test:
 	cd web && npm test -- --run
 
 dev-backend:
-	ENABLE_POD_EXEC=$${ENABLE_POD_EXEC:-true} $(GO) run ./cmd/platform
+	@set -a; if [ -f .env ]; then . ./.env; fi; set +a; \
+		ENABLE_POD_EXEC=$${ENABLE_POD_EXEC:-true} $(GO) run ./cmd/platform
 
 dev-frontend:
 	cd web && npm run dev

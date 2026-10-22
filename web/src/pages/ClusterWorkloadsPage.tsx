@@ -474,7 +474,6 @@ export default function ClusterWorkloadsPage({ clusterId }: Props) {
           <Button isInline onClick={closePodDetail} variant="link">Pods</Button>
           <AngleRightIcon />
           <span>{podDetailRoute.name}</span>
-          <Button icon={<SyncAltIcon />} isLoading={isLoading} onClick={() => void loadPodDetail(podDetailRoute)} variant="secondary">刷新</Button>
         </div>
         {error && <Alert actionLinks={<Button isInline onClick={() => void loadPodDetail(podDetailRoute)} variant="link">重新读取</Button>} isInline title="Pod 详情读取失败" variant="danger">{error}</Alert>}
         {isLoading && !podDetail ? <div className="ks-workloads-loading"><Spinner aria-label="正在读取 Pod 详情" /><span>正在读取 Pod 详情…</span></div> : podDetail && <>

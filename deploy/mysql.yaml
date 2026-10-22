@@ -1,3 +1,4 @@
+# 单副本 MySQL，适用于开发、测试或可接受短时中断的小规模场景。
 apiVersion: v1
 kind: Secret
 metadata:
@@ -40,8 +41,21 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: mysql
+          # 镜像地址：替换为企业镜像仓库地址。
+          # 多架构集群请推送 manifest list，StatefulSet 按节点架构自动选择。
+          # 生产高可用请改用 deploy/mysql-ha.yaml。
           image: mysql:8.4
-          args: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+          imagePullPolicy: IfNotPresent
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_0900_ai_ci
+            # 平台 DSN 使用 charset=utf8mb4 / parseTime=true / loc=UTC，
+            # 字符集与时区必须与这里一致。
+            - --default-time-zone=+00:00
+            # 事件表按 100 次/秒写入，连接池上限需大于平台侧 20。
+            - --max-connections=500
+            - --innodb_buffer_pool_size=2G
+            - --max_allowed_packet=64M
           env:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom: { secretKeyRef: { name: platform-mysql, key: root-password } }
@@ -61,7 +75,7 @@ spec:
             exec: { command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"] }
             periodSeconds: 10
           resources:
-            requests: { cpu: 500m, memory: 1Gi }
+            requests: { cpu: "1", memory: 2Gi }
             limits: { cpu: "4", memory: 4Gi }
           volumeMounts:
             - { name: data, mountPath: /var/lib/mysql }

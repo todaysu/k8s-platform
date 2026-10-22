@@ -1,0 +1,17 @@
+# Strategic merge patch: kubectl patch deployment ftc-platform -n ftc-platform --type strategic --patch-file deploy/platform-api.patch.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: platform
+          env:
+            - { name: PLATFORM_ROLE, value: api }
+          resources:
+            requests: { cpu: '1', memory: 1Gi }
+            limits: { cpu: '2', memory: 2Gi }

@@ -19,6 +19,15 @@ func (store *SQLite) UpsertEvents(ctx context.Context, events []cluster.ClusterE
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	defer func() { _ = tx.Rollback() }()
+	ids := map[string]bool{}
+	for _, event := range events {
+		if !ids[event.ClusterID] {
+			if err := checkCollectionLease(ctx, tx, true, event.ClusterID); err != nil {
+				return err
+			}
+			ids[event.ClusterID] = true
+		}
+	}
 	previousCounts := make(map[string]int64, len(events))
 	for _, event := range events {
 		var previous int64
@@ -67,7 +76,7 @@ VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(bucket_start,cluster_id,fingerprint) DO UP
 	if err = upsertEventDailyTx(ctx, tx, cluster.BuildEventDailyRows(events, previousCounts), true); err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitCollectionTx(ctx, tx, true); err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	return nil
@@ -92,9 +101,9 @@ func eventWhere(clusterID string, query cluster.EventQuery, includeCursor bool) 
 		conditions = append(conditions, "(regarding_kind = 'Node' OR regarding_namespace = 'kube-system' OR regarding_namespace LIKE 'openshift-%')")
 	}
 	if query.Search != "" {
-		pattern := "%" + query.Search + "%"
-		conditions = append(conditions, "(reason LIKE ? OR message LIKE ? OR regarding_name LIKE ? OR reporting_controller LIKE ?)")
-		args = append(args, pattern, pattern, pattern, pattern)
+		columns := []string{"reason", "message", "regarding_name", "reporting_controller"}
+		conditions = append(conditions, likeContainsClause(columns))
+		args = append(args, likeContainsArgs(columns, query.Search)...)
 	}
 	if includeCursor && query.CursorTime != nil {
 		conditions = append(conditions, "(last_observed_at < ? OR (last_observed_at = ? AND event_uid < ?))")
@@ -275,7 +284,7 @@ func (store *SQLite) SetEventCollectorStatus(ctx context.Context, status cluster
 	if status.LastSuccessAt != nil {
 		last = status.LastSuccessAt.UTC().Format(timeLayout)
 	}
-	_, err := store.db.ExecContext(ctx, `INSERT INTO event_collector_checkpoints(cluster_id,state,resource_version,last_success_at,last_error,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cluster_id) DO UPDATE SET state=excluded.state,resource_version=excluded.resource_version,last_success_at=COALESCE(excluded.last_success_at,event_collector_checkpoints.last_success_at),last_error=excluded.last_error,updated_at=excluded.updated_at`, status.ClusterID, status.State, status.ResourceVersion, last, status.LastError, status.UpdatedAt.UTC().Format(timeLayout))
+	_, err := collectionExec(ctx, store.db, true, status.ClusterID, `INSERT INTO event_collector_checkpoints(cluster_id,state,resource_version,last_success_at,last_error,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cluster_id) DO UPDATE SET state=excluded.state,resource_version=excluded.resource_version,last_success_at=COALESCE(excluded.last_success_at,event_collector_checkpoints.last_success_at),last_error=excluded.last_error,updated_at=excluded.updated_at`, status.ClusterID, status.State, status.ResourceVersion, last, status.LastError, status.UpdatedAt.UTC().Format(timeLayout))
 	if err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}

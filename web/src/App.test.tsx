@@ -430,14 +430,12 @@ describe('cluster management UI', () => {
   it('removes a managed cluster after confirmation', async () => {
     const user = userEvent.setup()
     window.history.replaceState(null, '', '/clusters')
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        json: async () => ({ data: realClusters, error: null }), ok: true,
-      })
-      .mockResolvedValueOnce({
-        json: async () => ({ data: realClusters[0], error: null }), ok: true,
-      })
-      .mockResolvedValueOnce({ ok: true })
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/clusters/cluster-a' && init?.method === 'DELETE') return { ok: true }
+      if (url === '/api/v1/clusters/cluster-a') return { ok: true, json: async () => ({ data: realClusters[0], error: null }) }
+      return { ok: true, json: async () => ({ data: realClusters, error: null }) }
+    })
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
@@ -521,6 +519,7 @@ describe('cluster management UI', () => {
         baselineLocked = true
         return { json: async () => ({ data: { id: 1, cluster_id: 'cluster-a' }, error: null }), ok: true, status: 201 }
       }
+      if (url.endsWith('/api/v1/capacity/classification')) return { json: async () => ({ data: capacityClassification, error: null }), ok: true }
       if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) {
         const baseline = baselineLocked ? { captured_at: '2026-10-17T10:00:00Z', cluster_id: 'cluster-a', cpu_allocatable_milli: 16000, id: 1, memory_allocatable_bytes: 68719476736, platform_cpu_limits_milli: 4000, platform_cpu_requests_milli: 2000, platform_memory_limits_bytes: 8589934592, platform_memory_requests_bytes: 4294967296, system_namespaces: ['kube-system', 'cmb-monitoring'], worker_nodes: 2 } : null
         return { json: async () => ({ data: { ...clusterCapacity, baseline, comparison: { ...clusterCapacity.comparison, status: baselineLocked ? 'stable' : 'not_set' } }, error: null }), ok: true }
@@ -542,13 +541,37 @@ describe('cluster management UI', () => {
 
     await user.click(screen.getByRole('button', { name: '锁定当前为基线' }))
     expect(screen.getByRole('heading', { name: /锁定当前容量基线/ })).toBeInTheDocument()
+    expect(await within(screen.getByRole('dialog')).findByText('app')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '确认锁定' }))
     expect((await screen.findAllByText('版本 1')).length).toBeGreaterThan(0)
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters/cluster-a/capacity/baselines', { method: 'POST' })
   })
 
-  it('opens a cluster capacity deep link after page reload', async () => {
+  it('prompts for business namespace configuration before locking a cluster baseline', async () => {
+    const user = userEvent.setup()
     window.history.replaceState(null, '', '/clusters/cluster-a/capacity')
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/capacity/classification')) return { json: async () => ({ data: { classification: { business_namespaces: [], note: '' }, discovered: [] }, error: null }), ok: true }
+      if (url.endsWith('/api/v1/capacity')) return { json: async () => ({ data: fleetCapacity, error: null }), ok: true }
+      if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: clusterCapacity, error: null }), ok: true }
+      if (url.endsWith('/clusters/cluster-a')) return { json: async () => ({ data: realClusters[0], error: null }), ok: true }
+      return { json: async () => ({ data: realClusters, error: null }), ok: true }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'CPU 容量' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '锁定当前为基线' }))
+    expect(await screen.findByText('尚未配置业务 Namespace')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '前往业务命名空间配置' }))
+
+    expect(window.location.pathname).toBe('/capacity')
+    expect(window.location.search).toBe('?classification=1')
+    expect(await screen.findByRole('heading', { name: '业务命名空间配置' })).toBeInTheDocument()
+  })
+
+  it('opens a cluster capacity deep link after page reload', async () => {    window.history.replaceState(null, '', '/clusters/cluster-a/capacity')
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.split('?')[0].endsWith('/clusters/cluster-a/capacity')) return { json: async () => ({ data: clusterCapacity, error: null }), ok: true }

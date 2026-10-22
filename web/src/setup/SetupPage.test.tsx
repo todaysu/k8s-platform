@@ -1,28 +1,55 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SetupPage from './SetupPage'
 
+const preflight = {
+  namespace: 'ftc-platform',
+  nodes: [
+    { name: 'node-a', arch: 'amd64', os: 'linux', cpu_millis: 8000, memory_bytes: 16 * 1024 * 1024 * 1024, internal_ips: ['10.0.0.11'], schedulable: true },
+    { name: 'node-b', arch: 'amd64', os: 'linux', cpu_millis: 8000, memory_bytes: 16 * 1024 * 1024 * 1024, internal_ips: ['10.0.0.12'], schedulable: true },
+    { name: 'node-c', arch: 'arm64', os: 'linux', cpu_millis: 8000, memory_bytes: 16 * 1024 * 1024 * 1024, internal_ips: ['10.0.0.13'], schedulable: true },
+  ],
+  storage_classes: [],
+  ingress_classes: [{ name: 'nginx', default: true, controller: 'k8s.io/ingress-nginx' }],
+  pxc_available: true,
+  runtime_secret_exists: false,
+  warnings: [],
+  errors: [],
+}
+
 afterEach(() => { vi.unstubAllGlobals() })
 
-describe('database setup page', () => {
-  it('loads in-cluster defaults and renders the setup form', async () => {
+describe('initialization wizard', () => {
+  it('runs preflight and advances to MySQL storage', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
-      json: async () => ({
-        data: {
-          setup_required: true,
-          default_host: 'platform-mysql.ftc-platform.svc',
-          default_database: 'ftc_platform',
-          default_port: '3306',
-          default_user: 'ftc',
-        },
-        error: null,
-      }),
+      json: async () => ({ data: preflight, error: null }),
     })))
+    const user = userEvent.setup()
     render(<SetupPage />)
-    expect(await screen.findByRole('heading', { name: '初始化平台数据库' })).toBeInTheDocument()
-    expect(await screen.findByDisplayValue('platform-mysql.ftc-platform.svc')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '初始化数据库' })).toBeInTheDocument()
+
+    expect(await screen.findByRole('heading', { name: '准备部署 FTC 集群运维平台' })).toBeInTheDocument()
+    await user.type(screen.getByLabelText('初始化凭证'), 'setup-token-value')
+    await user.click(screen.getByRole('button', { name: '检查环境' }))
+
+    expect(await screen.findByText('node-a')).toBeInTheDocument()
+    expect(screen.getByText('已安装')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下一步' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: '下一步' }))
+    expect(await screen.findByRole('heading', { name: '配置 MySQL 高可用' })).toBeInTheDocument()
+  })
+
+  it('blocks the next step when preflight reports errors', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ data: { ...preflight, pxc_available: false, errors: ['未检测到 PXC Operator CRD。'] }, error: null }),
+    })))
+    const user = userEvent.setup()
+    render(<SetupPage />)
+    await user.type(screen.getByLabelText('初始化凭证'), 'setup-token-value')
+    await user.click(screen.getByRole('button', { name: '检查环境' }))
+    expect(await screen.findByText('未检测到 PXC Operator CRD。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下一步' })).toBeDisabled()
   })
 })

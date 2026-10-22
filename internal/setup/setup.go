@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"example.com/k8s-platform/internal/auth"
@@ -23,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -43,7 +45,74 @@ type Config struct {
 type Server struct {
 	config  Config
 	client  kubernetes.Interface
+	dynamic dynamic.Interface
 	restart func()
+
+	mu       sync.Mutex
+	failures map[string]setupFailure
+	// startedAt bounds the lifetime of the failure table. Initialization is a
+	// one-shot flow, so the table is discarded when the server has been up long
+	// enough; a long-running instance must not accumulate caller addresses.
+	startedAt time.Time
+
+	installMu      sync.Mutex
+	install        InstallStatus
+	installRunning bool
+}
+
+type setupFailure struct {
+	count int
+	until time.Time
+}
+
+const (
+	setupFailureWindow     = 15 * time.Minute
+	setupFailuresPerSource = 20
+	// setupFailureTableTTL caps how long a caller address is remembered.
+	setupFailureTableTTL = 6 * time.Hour
+	maxSetupFailures     = 512
+)
+
+// limited throttles repeated setup-token guesses. Every rejected attempt is
+// recorded, so a distributed or flood attempt cannot escape accounting.
+func (server *Server) limited(request *http.Request) bool {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		host = request.RemoteAddr
+	}
+	now := time.Now()
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.failures == nil {
+		server.failures = map[string]setupFailure{}
+		server.startedAt = now
+	}
+	if now.Sub(server.startedAt) > setupFailureTableTTL {
+		server.failures = map[string]setupFailure{}
+		server.startedAt = now
+	}
+	for key, value := range server.failures {
+		if now.After(value.until) {
+			delete(server.failures, key)
+		}
+	}
+	entry := server.failures[host]
+	if entry.count == 0 || now.After(entry.until) {
+		entry = setupFailure{until: now.Add(setupFailureWindow)}
+	}
+	entry.count++
+	server.failures[host] = entry
+	if len(server.failures) > maxSetupFailures {
+		// Evict the oldest window instead of rejecting every later caller.
+		oldestKey, oldestUntil := "", time.Time{}
+		for key, value := range server.failures {
+			if oldestKey == "" || value.until.Before(oldestUntil) {
+				oldestKey, oldestUntil = key, value.until
+			}
+		}
+		delete(server.failures, oldestKey)
+	}
+	return entry.count > setupFailuresPerSource
 }
 
 type connectionRequest struct {
@@ -63,9 +132,32 @@ type initializeRequest struct {
 	AdminPassword string `json:"admin_password"`
 }
 
+// placeholderTokens are the values shipped in deploy manifests. Accepting them
+// would make the initialization token a publicly known string, letting anyone
+// create the first admin account.
+var placeholderTokens = []string{"REPLACE_WITH_SETUP_TOKEN", "CHANGE_ME", "changeme", "please-change-me"}
+
+const minSetupTokenLength = 16
+
+func validateSetupToken(token string) error {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return errors.New("setup token is required")
+	}
+	for _, placeholder := range placeholderTokens {
+		if strings.EqualFold(trimmed, placeholder) {
+			return errors.New("setup token still uses the example placeholder; replace it before deploying")
+		}
+	}
+	if len(trimmed) < minSetupTokenLength {
+		return fmt.Errorf("setup token must be at least %d characters", minSetupTokenLength)
+	}
+	return nil
+}
+
 func New(config Config) (*Server, error) {
-	if config.Token == "" {
-		return nil, errors.New("setup token is required")
+	if err := validateSetupToken(config.Token); err != nil {
+		return nil, err
 	}
 	if config.Namespace == "" {
 		config.Namespace = os.Getenv("POD_NAMESPACE")
@@ -87,6 +179,10 @@ func New(config Config) (*Server, error) {
 		return nil, fmt.Errorf("setup mode requires running inside Kubernetes: %w", err)
 	}
 	client, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, err
+	}
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +209,7 @@ func New(config Config) (*Server, error) {
 			}
 		}
 	}
-	return &Server{config: config, client: client, restart: restart}, nil
+	return &Server{config: config, client: client, dynamic: dynamicClient, restart: restart}, nil
 }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -122,6 +218,14 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/setup/status":
 		server.status(writer)
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/setup/preflight":
+		server.handlePreflight(writer, request)
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/setup/install":
+		server.handleInstall(writer, request)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/setup/install":
+		server.handleInstallStatus(writer, request)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/setup/ca":
+		server.handleCA(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/setup/test":
 		server.test(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/setup/initialize":
@@ -141,12 +245,25 @@ func (server *Server) status(writer http.ResponseWriter) {
 	})
 }
 
+func (server *Server) handlePreflight(writer http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if !decode(writer, request, &payload) {
+		return
+	}
+	if !server.validToken(writer, request, payload.Token) {
+		return
+	}
+	writeJSON(writer, http.StatusOK, server.preflightWithTimeout(request.Context()))
+}
+
 func (server *Server) test(writer http.ResponseWriter, request *http.Request) {
 	var payload connectionRequest
 	if !decode(writer, request, &payload) {
 		return
 	}
-	if !server.validToken(writer, payload.Token) {
+	if !server.validToken(writer, request, payload.Token) {
 		return
 	}
 	dsn, ok := server.connectionDSN(writer, payload)
@@ -165,7 +282,7 @@ func (server *Server) initialize(writer http.ResponseWriter, request *http.Reque
 	if !decode(writer, request, &payload) {
 		return
 	}
-	if !server.validToken(writer, payload.Token) {
+	if !server.validToken(writer, request, payload.Token) {
 		return
 	}
 	if !adminUsernamePattern.MatchString(payload.AdminUsername) || len(payload.AdminPassword) < 12 || len(payload.AdminPassword) > 72 {
@@ -231,8 +348,12 @@ func (server *Server) initialize(writer http.ResponseWriter, request *http.Reque
 	go server.restart()
 }
 
-func (server *Server) validToken(writer http.ResponseWriter, token string) bool {
+func (server *Server) validToken(writer http.ResponseWriter, request *http.Request, token string) bool {
 	if subtle.ConstantTimeCompare([]byte(token), []byte(server.config.Token)) != 1 {
+		if server.limited(request) {
+			writeError(writer, http.StatusTooManyRequests, "SETUP_RATE_LIMITED", "尝试过于频繁，请稍后再试。")
+			return false
+		}
 		writeError(writer, http.StatusForbidden, "SETUP_TOKEN_INVALID", "初始化凭证无效。")
 		return false
 	}
@@ -301,7 +422,7 @@ func pingDatabase(ctx context.Context, dsn string) error {
 func (server *Server) runtimeSecretExists(ctx context.Context) (bool, error) {
 	timeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, err := server.client.CoreV1().Secrets(server.config.Namespace).Get(timeout, server.config.RuntimeSecret, metav1.GetOptions{})
+	_, err := server.client.CoreV1().Secrets(server.config.Namespace).Get(timeout, server.runtimeSecret(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
@@ -320,10 +441,10 @@ func (server *Server) writeRuntimeSecret(ctx context.Context, dsn, username, has
 		"admin-password-hash": []byte(hash),
 	}
 	secrets := server.client.CoreV1().Secrets(server.config.Namespace)
-	secret, err := secrets.Get(timeout, server.config.RuntimeSecret, metav1.GetOptions{})
+	secret, err := secrets.Get(timeout, server.runtimeSecret(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: server.config.RuntimeSecret, Namespace: server.config.Namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: server.runtimeSecret(), Namespace: server.config.Namespace},
 			Type:       corev1.SecretTypeOpaque,
 			Data:       data,
 		}

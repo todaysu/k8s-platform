@@ -31,6 +31,7 @@ export default function GlobalResourceSearch({ onClose, onOpenResult, open }: Pr
   const [failedClusters, setFailedClusters] = useState<string[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [indexPending, setIndexPending] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -42,11 +43,12 @@ export default function GlobalResourceSearch({ onClose, onOpenResult, open }: Pr
       setLoading(true)
       setError('')
       try {
-        const response = await searchGlobalResources(normalized)
+        const response = await searchGlobalResources(normalized, controller.signal)
         if (controller.signal.aborted) return
         setResults(response.items)
         setFailedClusters(response.failed_clusters ?? [])
         setTruncated(response.truncated)
+        setIndexPending(response.index_pending ?? false)
       } catch (requestError) {
         if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : '跨集群搜索失败。')
       } finally {
@@ -65,6 +67,7 @@ export default function GlobalResourceSearch({ onClose, onOpenResult, open }: Pr
     setResults([])
     setFailedClusters([])
     setTruncated(false)
+    setIndexPending(false)
     setLoading(false)
     setError('')
   }
@@ -75,6 +78,7 @@ export default function GlobalResourceSearch({ onClose, onOpenResult, open }: Pr
     setError('')
     setFailedClusters([])
     setTruncated(false)
+    setIndexPending(false)
     setLoading(false)
     onClose()
   }, [onClose])
@@ -109,13 +113,13 @@ export default function GlobalResourceSearch({ onClose, onOpenResult, open }: Pr
         {failedClusters.length > 0 && <Alert isInline title="部分集群未完成搜索" variant="warning">未读取：{failedClusters.join('、')}。其他集群的结果仍可使用。</Alert>}
         {truncated && <Alert isInline title="结果过多" variant="info">当前只显示前 200 条，请使用更精确的关键词。</Alert>}
         {error && <Alert isInline title="搜索失败" variant="danger">{error}</Alert>}
-        {loading ? <div className="ks-global-search-state"><Spinner aria-label="正在跨集群搜索" /><span>正在查询各集群…</span></div> : query.trim().length < 2 ? (
+        {loading ? <div className="ks-global-search-state"><Spinner aria-label="正在跨集群搜索" /><span>正在查询资源索引…</span></div> : query.trim().length < 2 ? (
           <EmptyState icon={SearchIcon} titleText="输入至少 2 个字符" headingLevel="h2">
             <EmptyStateBody>建议使用业务名、命名空间、Pod 名或镜像名搜索。</EmptyStateBody>
           </EmptyState>
         ) : results.length === 0 && !error ? (
-          <EmptyState icon={CubesIcon} titleText="没有匹配的资源" headingLevel="h2">
-            <EmptyStateBody>请检查关键词，或者换用应用名、命名空间和镜像名。</EmptyStateBody>
+          <EmptyState icon={CubesIcon} titleText={indexPending ? "资源索引正在准备" : "没有匹配的资源"} headingLevel="h2">
+            <EmptyStateBody>{indexPending ? "后台采集完成后即可搜索，请稍后重试。" : "请检查关键词，或者换用应用名、命名空间和镜像名。"}</EmptyStateBody>
             <EmptyStateFooter><Button isInline onClick={() => updateQuery('')} variant="link">清除搜索</Button></EmptyStateFooter>
           </EmptyState>
         ) : !error && <div className="ks-global-search-results">

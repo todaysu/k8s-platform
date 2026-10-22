@@ -2,6 +2,7 @@ package cluster_test
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,8 +13,26 @@ import (
 
 type tenantCipher struct{}
 
-func (tenantCipher) Encrypt(value []byte) (string, error) { return string(value), nil }
-func (tenantCipher) Decrypt(value string) ([]byte, error) { return []byte(value), nil }
+func (tenantCipher) Encrypt(value []byte, clusterID string) (string, error) {
+	return "bound:" + clusterID + ":" + string(value), nil
+}
+
+func (tenantCipher) Decrypt(value, clusterID string) ([]byte, error) {
+	// Only values this double sealed carry the prefix. Tests also store
+	// plaintext credentials containing colons, so the prefix is required
+	// before the cluster id is read.
+	rest, ok := strings.CutPrefix(value, "bound:")
+	if !ok {
+		return []byte(value), nil
+	}
+	bound, payload, ok := strings.Cut(rest, ":")
+	if !ok || bound != clusterID {
+		return nil, &cluster.Error{Code: cluster.CodeEncryptionFailed}
+	}
+	return []byte(payload), nil
+}
+
+func (tenantCipher) NeedsRebind(string) bool { return false }
 
 type ownerConnector struct {
 	cluster.Connector

@@ -98,6 +98,17 @@ CREATE TABLE IF NOT EXISTS clusters (
 	if err := store.migrateResources(ctx); err != nil {
 		return err
 	}
+	if err := store.migrateSecurityBaselines(ctx); err != nil {
+		return err
+	}
+	if _, err := store.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS platform_settings (
+  section TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);`); err != nil {
+		return fmt.Errorf("migrate sqlite platform settings: %w", err)
+	}
 	if _, err := store.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS auth_users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,13 +274,7 @@ func (store *SQLite) LatestCapacityClassification(ctx context.Context) (*cluster
 }
 
 func (store *SQLite) ObserveNamespaces(ctx context.Context, values []cluster.NamespaceObservation) error {
-	for _, value := range values {
-		_, err := store.db.ExecContext(ctx, `INSERT INTO capacity_namespace_observations (technology_stack, namespace, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(technology_stack, namespace) DO UPDATE SET last_seen_at = excluded.last_seen_at`, value.TechnologyStack, value.Namespace, value.FirstSeenAt.UTC().Format(timeLayout), value.LastSeenAt.UTC().Format(timeLayout))
-		if err != nil {
-			return &cluster.Error{Code: cluster.CodePersistenceFailed}
-		}
-	}
-	return nil
+	return observeNamespaceBatch(ctx, store.db, true, values)
 }
 
 func (store *SQLite) ListNamespaceObservations(ctx context.Context) ([]cluster.NamespaceObservation, error) {
@@ -666,7 +671,7 @@ WHERE id = ?
 }
 
 func (store *SQLite) UpdateClusterHealth(ctx context.Context, value cluster.ManagedCluster) error {
-	result, err := store.db.ExecContext(ctx, `
+	result, err := collectionExec(ctx, store.db, true, value.ID, `
 UPDATE clusters SET
   connection_status = ?, last_checked_at = ?,
   nodes_ready = ?, nodes_total = ?, instances_ready = ?, instances_total = ?,
@@ -709,6 +714,13 @@ func (store *SQLite) Delete(ctx context.Context, id string) error {
 		return &cluster.Error{Code: cluster.CodeClusterNotFound}
 	}
 	return nil
+}
+
+// ReplaceEncryptedCredentials rewrites the stored credential ciphertext so a
+// record can be migrated to the AAD-bound format without re-enrolling.
+func (store *SQLite) ReplaceEncryptedCredentials(ctx context.Context, id, encrypted string) error {
+	result, err := store.db.ExecContext(ctx, `UPDATE clusters SET encrypted_credentials = ? WHERE id = ?`, encrypted, id)
+	return mysqlRequireRow(result, err)
 }
 
 func (store *SQLite) UpdateClusterClassification(ctx context.Context, id string, clusterType string, technologyStack string) error {

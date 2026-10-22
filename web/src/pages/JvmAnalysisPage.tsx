@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Alert, Button, Card, CardBody, Label, Title } from '@patternfly/react-core'
-import { AngleLeftIcon, CheckCircleIcon, ExclamationCircleIcon, ExclamationTriangleIcon } from '@patternfly/react-icons'
+import { CheckCircleIcon, ExclamationCircleIcon, ExclamationTriangleIcon } from '@patternfly/react-icons'
 import { analyzeJvm, jvmSample, type JvmInput, type JvmReport, type JvmSeverity } from '../tools/jvm'
 import './JvmAnalysisPage.css'
 
@@ -32,7 +32,7 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
   return <div className="ks-jvm-metric"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>
 }
 
-export default function JvmAnalysisPage({ onBack }: { onBack: () => void }) {
+export default function JvmAnalysisPage() {
   const [input, setInput] = useState<JvmInput>(emptyInput)
   const [report, setReport] = useState<JvmReport | null>(null)
   const [error, setError] = useState('')
@@ -56,8 +56,6 @@ export default function JvmAnalysisPage({ onBack }: { onBack: () => void }) {
     <div className="ks-jvm-page">
       <header className="ks-jvm-header">
         <div>
-          <Button icon={<AngleLeftIcon />} onClick={onBack} variant="link">返回运维工具</Button>
-          <Title headingLevel="h1" size="2xl">JVM 内存分析</Title>
           <p>导入 JVM 诊断输出，判断老年代增长、Full GC、对象滞留、Metaspace 和容器堆外内存风险。所有数据只在浏览器本地处理。</p>
         </div>
         <div className="ks-jvm-header-actions">

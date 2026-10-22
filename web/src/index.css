@@ -25,3 +25,27 @@ input,
 textarea {
   font: inherit;
 }
+
+/*
+ * Fullscreen terminals are fixed inside the PatternFly page main container. That
+ * container's backdrop-filter makes it the containing block for fixed children,
+ * and its low z-index keeps the overlay below the sidebar/masthead. While a
+ * terminal is fullscreen, neutralize both so the overlay really covers the
+ * viewport and cannot slide underneath the navigation.
+ */
+body.ks-terminal-fullscreen {
+  overscroll-behavior: none;
+}
+
+body.ks-terminal-fullscreen .pf-v6-c-page__main-container {
+  --pf-v6-c-page__main-container--BackdropFilter: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  position: relative;
+  z-index: 1000;
+}
+
+body.ks-terminal-fullscreen .pf-v6-c-page__main-container,
+body.ks-terminal-fullscreen .pf-v6-c-page__main {
+  overflow: hidden;
+}

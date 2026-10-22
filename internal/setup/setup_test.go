@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -42,16 +43,26 @@ func TestConnectionDSNRejectsMissingPasswordAndInvalidPort(t *testing.T) {
 func TestSetupTokenComparison(t *testing.T) {
 	server := &Server{config: Config{Token: "one-time-token"}}
 	recorder := httptest.NewRecorder()
-	if !server.validToken(recorder, "one-time-token") {
+	request := httptest.NewRequest("POST", "http://localhost/api/v1/setup/test", nil)
+	if !server.validToken(recorder, request, "one-time-token") {
 		t.Fatal("valid token rejected")
 	}
 	recorder = httptest.NewRecorder()
-	if server.validToken(recorder, "wrong-token") {
+	if server.validToken(recorder, request, "wrong-token") {
 		t.Fatal("invalid token accepted")
 	}
 	if recorder.Code != 403 {
 		t.Fatalf("expected 403, got %d", recorder.Code)
 	}
+	// Repeated wrong guesses must eventually be throttled.
+	for i := 0; i < setupFailuresPerSource+2; i++ {
+		guess := httptest.NewRecorder()
+		server.validToken(guess, request, "wrong-token")
+		if guess.Code == http.StatusTooManyRequests {
+			return
+		}
+	}
+	t.Fatal("setup token guessing was never throttled")
 }
 
 func TestWriteRuntimeSecretCreatesAndUpdates(t *testing.T) {

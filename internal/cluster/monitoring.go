@@ -162,11 +162,11 @@ func (service *OnboardingService) GetMonitoring(ctx context.Context, id string, 
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	connector := NewKubernetesConnector(10 * time.Second)
-	client, err := kubernetes.NewForConfig(connector.restConfig(parsed))
+	client, err := connector.listClientset(parsed)
 	if err != nil {
 		return MonitoringSnapshot{}, err
 	}
-	services, err := client.CoreV1().Services("").List(ctx, cachedListOptions)
+	services, err := boundedServices(ctx, client)
 	if err != nil {
 		return MonitoringSnapshot{}, monitoringConnectionError(err)
 	}

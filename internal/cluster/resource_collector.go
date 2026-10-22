@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"example.com/k8s-platform/internal/metrics"
@@ -45,12 +46,15 @@ func (collector *ResourceIndexCollector) Run(ctx context.Context) {
 		// Build the initial index without staggering so search stops falling
 		// back to live cluster calls as soon as possible. Later rounds are
 		// spread across the interval.
-		collector.collect(ctx, !first)
-		first = false
+		complete := collector.collect(ctx, !first)
+		first = !complete
 		if ctx.Err() != nil {
 			return
 		}
 		remaining := collector.interval - time.Since(startedAt)
+		if !complete {
+			remaining = 30 * time.Second
+		}
 		if remaining <= 0 {
 			continue
 		}
@@ -70,22 +74,25 @@ func (collector *ResourceIndexCollector) CollectOnce(ctx context.Context) {
 	collector.collect(ctx, false)
 }
 
-func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bool) {
+func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bool) bool {
+	var failed atomic.Bool
 	if collector == nil || collector.service == nil || collector.repository == nil {
-		return
+		return false
 	}
 	metrics.ResourceIndexRuns.Inc()
 	startedAt := time.Now()
 	defer func() { metrics.ResourceIndexDurationMS.Set(time.Since(startedAt).Milliseconds()) }()
-	records, err := collector.service.repository.ListRecords(ctx)
+	records, err := collector.service.collectionRecords(ctx)
 	if err != nil {
 		log.Printf("resource index: list managed clusters: %v", err)
-		return
+		return false
 	}
 	if len(records) == 0 {
-		return
+		return false
 	}
-	metrics.ClustersTotal.Set(int64(len(records)))
+	if _, scoped := CollectionLeaseFromContext(ctx); !scoped {
+		metrics.ClustersTotal.Set(int64(len(records)))
+	}
 	workers := collector.concurrency
 	if workers > len(records) {
 		workers = len(records)
@@ -97,20 +104,41 @@ func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bo
 		go func() {
 			defer waitGroup.Done()
 			for record := range jobs {
-				requestContext, cancel := context.WithTimeout(ctx, collector.timeout)
+				if ctx.Err() != nil {
+					return
+				}
+				queueContext, queueCancel := context.WithTimeout(ctx, 5*time.Minute)
+				budgetCtx, release, budgetErr := collector.service.collectionBudget(queueContext, ctx, record.ID, "collection_list", 4)
+				if budgetErr != nil {
+					failed.Store(true)
+					queueCancel()
+					if ctx.Err() == nil {
+						log.Printf("collection admission expired for cluster %s: %v", record.ID, budgetErr)
+					}
+					continue
+				}
+				queueCancel()
+				requestContext, cancel := context.WithTimeout(budgetCtx, collector.timeout)
+
 				snapshot, loadErr := collector.service.loadResources(requestContext, record)
 				if loadErr != nil {
+					failed.Store(true)
 					metrics.ResourceIndexErrors.Inc()
 					log.Printf("resource index: load cluster %s: %v", record.ID, loadErr)
+					release()
 					cancel()
+					queueCancel()
 					continue
 				}
 				resources := buildIndexedResources(record.ID, snapshot, collector.service.now().UTC())
 				if persistErr := collector.repository.ReplaceClusterResources(requestContext, record.ID, resources); persistErr != nil {
+					failed.Store(true)
 					metrics.ResourceIndexErrors.Inc()
 					log.Printf("resource index: persist cluster %s: %v", record.ID, persistErr)
 				}
+				release()
 				cancel()
+				queueCancel()
 			}
 		}()
 	}
@@ -123,7 +151,7 @@ func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bo
 		case <-ctx.Done():
 			close(jobs)
 			waitGroup.Wait()
-			return
+			return false
 		case jobs <- record:
 		}
 		if spacing > 0 && index < len(records)-1 {
@@ -135,13 +163,14 @@ func (collector *ResourceIndexCollector) collect(ctx context.Context, stagger bo
 				}
 				close(jobs)
 				waitGroup.Wait()
-				return
+				return false
 			case <-timer.C:
 			}
 		}
 	}
 	close(jobs)
 	waitGroup.Wait()
+	return !failed.Load() && ctx.Err() == nil
 }
 
 func buildIndexedResources(clusterID string, snapshot cachedResources, updatedAt time.Time) []IndexedResource {

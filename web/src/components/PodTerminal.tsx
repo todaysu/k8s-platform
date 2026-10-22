@@ -1,10 +1,11 @@
-import { Alert, Button, Card, CardBody, FormSelect, FormSelectOption, Label, Title } from '@patternfly/react-core'
+import { Alert, Button, Card, CardBody, FormSelect, FormSelectOption } from '@patternfly/react-core'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useEffect, useRef, useState } from 'react'
 
 import { fetchPlatformCapabilities } from '../api/clusters'
+import { useTerminalFullscreen } from './useTerminalFullscreen'
 import './PodTerminal.css'
 
 type Props = { clusterId: string; containers: string[]; namespace: string; podName: string; running: boolean }
@@ -14,7 +15,11 @@ export default function PodTerminal({ clusterId, containers, namespace, podName,
   const [container, setContainer] = useState(containers[0] ?? ''); const [shell, setShell] = useState('sh'); const [state, setState] = useState<'idle'|'connecting'|'connected'>('idle'); const [error, setError] = useState('')
   const [execAvailable, setExecAvailable] = useState<boolean | null>(null)
   const [capabilityError, setCapabilityError] = useState('')
+  const [fullscreen, setFullscreen] = useState(false)
   const selectedContainer = containers.includes(container) ? container : containers[0] ?? ''
+  const statusText = state==='connected'?'已连接':state==='connecting'?'连接中':execAvailable===false?'未启用':'未连接'
+
+  useTerminalFullscreen(fullscreen, () => setFullscreen(false))
 
   useEffect(() => {
     let active = true
@@ -74,16 +79,29 @@ export default function PodTerminal({ clusterId, containers, namespace, podName,
     next.onclose=()=>{input?.dispose();resize?.dispose();socket.current=null;setState('idle');terminal.current?.writeln('\r\n\x1b[33m终端连接已关闭。\x1b[0m')}
   }
 
-  return <Card className="ks-pod-terminal-card"><div className="ks-pod-terminal-header"><div><Title headingLevel="h2" size="lg">容器终端</Title></div><Label color={state==='connected'?'green':state==='connecting'?'orange':'grey'}>{state==='connected'?'已连接':state==='connecting'?'连接中':execAvailable===false?'未启用':'未连接'}</Label></div><CardBody>
-    <Alert isInline title="高权限操作" variant="warning">终端会直接在容器内执行命令。请先确认集群、命名空间、Pod 和容器均正确，不要粘贴未审查的命令。</Alert>
-    {execAvailable===false&&<Alert isInline title="平台未开启 Pod Exec" variant="danger">{capabilityError||'本地开发请重新执行 make dev-backend；Kubernetes 部署请设置 ENABLE_POD_EXEC=true 后重启平台。'}</Alert>}
-    {!running&&<Alert isInline title="Pod 不是 Running 状态" variant="danger">只有正在运行的 Pod 才能打开终端。</Alert>}{error&&<Alert isInline title="终端连接失败" variant="danger">{error}</Alert>}
+  return <Card className={`ks-pod-terminal-card${fullscreen ? ' is-fullscreen' : ''}`} role={fullscreen ? 'dialog' : undefined} aria-modal={fullscreen || undefined} aria-label={fullscreen ? `全屏容器终端 · ${namespace} / ${podName}` : undefined}>
     <div className="ks-pod-terminal-toolbar">
-      <div className="ks-pod-terminal-field"><FormSelect aria-label="选择终端容器" isDisabled={state!=='idle'||execAvailable!==true} onChange={(_,value)=>setContainer(value)} value={selectedContainer}>{containers.map(value=><FormSelectOption key={value} label={value} value={value}/>)}</FormSelect></div>
-      <div className="ks-pod-terminal-field"><FormSelect aria-label="选择 Shell" isDisabled={state!=='idle'||execAvailable!==true} onChange={(_,value)=>setShell(value)} value={shell}><FormSelectOption label="/bin/sh（推荐）" value="sh"/><FormSelectOption label="/bin/bash" value="bash"/></FormSelect></div>
-      {state==='idle'?<Button className="ks-pod-terminal-action" isDisabled={!running||!selectedContainer||execAvailable!==true} isLoading={execAvailable===null} onClick={connect}>连接终端</Button>:<Button className="ks-pod-terminal-action" onClick={disconnect} variant="danger">断开连接</Button>}
-      <span className="ks-pod-terminal-target" title={`${namespace} / ${podName}`}>{namespace} / {podName}</span>
+      <div className="ks-pod-terminal-identity">
+        <span aria-hidden="true" className="ks-pod-terminal-mark">›_</span>
+        <span className="ks-pod-terminal-context" title={`${namespace} / ${podName}`}>{namespace}</span>
+        <span className={`ks-pod-terminal-status ${state==='connected'?'is-connected':state==='connecting'?'is-connecting':''}`} role="status"><i aria-hidden="true"/>{statusText}</span>
+      </div>
+      <div className="ks-pod-terminal-controls">
+        <div className="ks-pod-terminal-field"><FormSelect aria-label="选择终端容器" isDisabled={state!=='idle'||execAvailable!==true} onChange={(_,value)=>setContainer(value)} value={selectedContainer}>{containers.map(value=><FormSelectOption key={value} label={value} value={value}/>)}</FormSelect></div>
+        <div className="ks-pod-terminal-field"><FormSelect aria-label="选择 Shell" isDisabled={state!=='idle'||execAvailable!==true} onChange={(_,value)=>setShell(value)} value={shell}><FormSelectOption label="/bin/sh" value="sh"/><FormSelectOption label="/bin/bash" value="bash"/></FormSelect></div>
+        <div className="ks-pod-terminal-actions">
+          {state==='idle'?<Button isDisabled={!running||!selectedContainer||execAvailable!==true} isLoading={execAvailable===null} onClick={connect} variant="primary">连接</Button>:<Button onClick={disconnect} variant="danger">断开</Button>}
+          {fullscreen
+            ? <Button aria-keyshortcuts="Escape" aria-label="退出全屏" onClick={()=>setFullscreen(false)} title="退出全屏（Esc）" variant="secondary">退出全屏<span aria-hidden="true" className="ks-pod-terminal-esc">Esc</span></Button>
+            : <Button onClick={()=>setFullscreen(true)} title="全屏显示容器终端" variant="secondary">全屏</Button>}
+        </div>
+      </div>
     </div>
-    <div aria-label="Pod 交互式终端" className="ks-pod-terminal" ref={host}/>
-  </CardBody></Card>
+    <CardBody>
+      {execAvailable===false&&<Alert isInline title="平台未开启 Pod Exec" variant="danger">{capabilityError||'本地开发请重新执行 make dev-backend；Kubernetes 部署请设置 ENABLE_POD_EXEC=true 后重启平台。'}</Alert>}
+      {!running&&<Alert isInline title="Pod 不是 Running 状态" variant="danger">只有正在运行的 Pod 才能打开终端。</Alert>}
+      {error&&<Alert isInline title="终端连接失败" variant="danger">{error}</Alert>}
+      <div aria-label="Pod 交互式终端" className="ks-pod-terminal" ref={host}/>
+    </CardBody>
+  </Card>
 }

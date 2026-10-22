@@ -19,6 +19,10 @@
 
 平台最终以 Web 服务形式部署到 Kubernetes，不开发桌面端，也不要求用户单独运行客户端程序。
 
+### 手动安全扫描
+
+管理员可在一级“安全扫描”页面选择一套或多套集群手动执行完整扫描：节点侧 kube-bench 临时 Job + 集群侧只读 API 检查（Pod 安全上下文、RBAC、Service 暴露面、NetworkPolicy）。平台结束后回收 Job 并持久化报告；同一集群再次扫描时，页面对比最近两次成功结果，标注整改成功、未整改和新增风险；不合规项可按集群加入带原因的白名单，豁免项不再计入失败和得分。详见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md#手动安全扫描与权限)。
+
 ### 跨集群资源索引
 
 平台在自身数据库中维护 `cluster_resources` 摘要表，由 Leader 每 10 分钟刷新一套集群。浏览器搜索只查询该索引，不再访问目标集群；索引完全为空时才回退到一次受控的实时加载。可通过 `RESOURCE_INDEX_INTERVAL`、`RESOURCE_INDEX_TIMEOUT` 和 `RESOURCE_INDEX_WORKERS` 调整刷新周期、单集群超时和并发。
@@ -32,6 +36,8 @@
 集群概览与容量默认读取采集快照，只有显式刷新才实时访问目标集群；节点、工作负载、Pod 日志和 Exec 仍按需实时访问。跨集群事件的问题与对象视图在数据库内完成聚合，只有单个资源的证据查询才读取原始 Event。跨集群搜索读取平台持久化资源索引，由 Leader 每 10 分钟刷新一轮，浏览器搜索不再访问目标集群；索引为空时回退到受控的实时加载。
 
 当前 SQLite 方案面向单副本第一阶段；生产多副本前需迁移到共享 MySQL，并为后台采集器增加 Leader Election。详细决策见 [`docs/adr/0002-cache-fleet-health-snapshots.md`](docs/adr/0002-cache-fleet-health-snapshots.md)。
+
+面向 100 套集群与 10 人并发运维的承载架构（资源隔离、采集分片、实时操作预算、压测与验收口径）见 [`docs/adr/0009-fleet-collection-architecture-at-scale.md`](docs/adr/0009-fleet-collection-architecture-at-scale.md)。
 
 ## 本地工具
 
@@ -85,3 +91,15 @@ make dev-frontend
 Kubernetes 内部署 MySQL、平台数据库接入和 Pod Exec 开启方法见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
 
 设置 `METRICS_ADDR`（例如 `:9090`）后，平台在独立端口暴露 Prometheus 文本指标：采集轮次/错误/耗时、事件 List/Watch 重连、API 请求量与 5xx、托管集群数。该端口不经过登录认证，生产环境只应通过内网 Service 或 NetworkPolicy 暴露。
+
+### Arthas 离线诊断
+
+Arthas 4.3.5 完整发行包随平台二进制内置，经 Kubernetes Exec 传入目标容器，不依赖容器出网或新增 Service。支持 Linux x86_64 / ARM64；目标需 JDK8+、sh、tar、可写 `/tmp`，并与 JVM 同用户运行。详细来源与校验信息见 `internal/arthasdist/README.md`。
+
+运维工具中先选集群、命名空间、Pod 和容器，再启动会话。故障向导默认折叠，内置社区用户排障案例。test01 的 myapp 已部署 arthas-demo，构建与复现方式见 `deploy/examples/arthas-demo/README.md`。
+
+## 集群规模与验证
+
+100 集群／10 用户承载改造采用 API、Collector、Worker 角色隔离，共享数据库分片租约与写入 fencing，分页采集与跨副本有界配额。启用配置和迁移约束见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)。
+
+`cmd/fleetscale` 可运行独立 TLS endpoint 的大对象量模拟。已实施范围、短时实测与未验收项见 [`docs/performance/2026-10-21-fleet-100-synthetic.md`](docs/performance/2026-10-21-fleet-100-synthetic.md)。模拟结果不等同于真实 100 集群／24 小时生产验收。

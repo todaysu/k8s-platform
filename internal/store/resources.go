@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	mysql "github.com/go-sql-driver/mysql"
 	"strings"
 	"time"
 
@@ -30,14 +32,47 @@ func (store *MySQL) ReplaceClusterResources(ctx context.Context, clusterID strin
 	return replaceClusterResources(ctx, store.db, clusterID, resources, false)
 }
 
+// READ COMMITTED avoids empty-range gap locks on concurrent first builds.
+// Deadlock retries are bounded and repeat only this idempotent whole transaction.
 func replaceClusterResources(ctx context.Context, db *sql.DB, clusterID string, resources []cluster.IndexedResource, sqlite bool) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := replaceClusterResourcesTx(ctx, db, clusterID, resources, sqlite)
+		if err == nil {
+			return nil
+		}
+		var sqlErr *mysql.MySQLError
+		if !sqlite && errors.As(err, &sqlErr) && (sqlErr.Number == 1213 || sqlErr.Number == 1205) && attempt < 2 {
+			timer := time.NewTimer(time.Duration(attempt+1) * 50 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			continue
+		}
+		if errors.Is(err, cluster.ErrCollectionLeaseLost) || ctx.Err() != nil {
+			return err
+		}
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
+	return &cluster.Error{Code: cluster.CodePersistenceFailed}
+}
+func replaceClusterResourcesTx(ctx context.Context, db *sql.DB, clusterID string, resources []cluster.IndexedResource, sqlite bool) error {
+	options := &sql.TxOptions{}
+	if !sqlite {
+		options.Isolation = sql.LevelReadCommitted
+	}
+	tx, err := db.BeginTx(ctx, options)
+	if err != nil {
+		return err
+	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkCollectionLease(ctx, tx, sqlite, clusterID); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM cluster_resources WHERE cluster_id=?`, clusterID); err != nil {
-		return &cluster.Error{Code: cluster.CodePersistenceFailed}
+		return err
 	}
 	batchSize := resourceMySQLBatch
 	if sqlite {
@@ -47,11 +82,11 @@ func replaceClusterResources(ctx context.Context, db *sql.DB, clusterID string, 
 		end := min(start+batchSize, len(resources))
 		query, args := resourceInsertStatement(resources[start:end], sqlite)
 		if _, err = tx.ExecContext(ctx, query, args...); err != nil {
-			return &cluster.Error{Code: cluster.CodePersistenceFailed}
+			return err
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return &cluster.Error{Code: cluster.CodePersistenceFailed}
+	if err = commitCollectionTx(ctx, tx, sqlite); err != nil {
+		return err
 	}
 	return nil
 }
@@ -95,7 +130,26 @@ func (store *SQLite) SearchClusterResources(ctx context.Context, query string, l
 }
 
 func (store *MySQL) SearchClusterResources(ctx context.Context, query string, limit int) ([]cluster.GlobalResourceResult, error) {
-	rows, err := store.db.QueryContext(ctx, resourceSearchQuery(), resourceSearchArgs(query, limit)...)
+	// Kubernetes resource names are lowercase. Prioritize the indexed name
+	// prefix before scanning namespace/owner/image substrings. If this already
+	// fills the candidate budget, lower-ranked substring matches cannot improve it.
+	if limit <= 0 || limit > 2000 {
+		limit = 800
+	}
+	_, prefix := resourceSearchPatterns(strings.ToLower(strings.TrimSpace(query)))
+	indexed := strings.Replace(resourceSelectPrefix, "cluster_resources r JOIN", "cluster_resources r FORCE INDEX (idx_resources_name) STRAIGHT_JOIN", 1)
+	rows, err := store.db.QueryContext(ctx, indexed+`r.name LIKE ? ESCAPE '!' ORDER BY r.name LIMIT ?`, prefix, limit)
+	if err != nil {
+		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	candidates, err := scanClusterResources(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) >= limit {
+		return candidates, nil
+	}
+	rows, err = store.db.QueryContext(ctx, resourceSearchQuery(), resourceSearchArgs(query, limit)...)
 	if err != nil {
 		return nil, &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
@@ -177,4 +231,19 @@ func (store *MySQL) DeleteClusterResources(ctx context.Context, clusterID string
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	return nil
+}
+
+// HasClusterResources avoids a full COUNT over hundreds of thousands of rows on each search.
+func (store *SQLite) HasClusterResources(ctx context.Context) (bool, error) {
+	return hasClusterResources(ctx, store.db)
+}
+func (store *MySQL) HasClusterResources(ctx context.Context) (bool, error) {
+	return hasClusterResources(ctx, store.db)
+}
+func hasClusterResources(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM cluster_resources r JOIN clusters c ON c.id=r.cluster_id LIMIT 1)`).Scan(&exists); err != nil {
+		return false, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	return exists, nil
 }

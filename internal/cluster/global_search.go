@@ -28,7 +28,7 @@ type cachedResources struct {
 
 func (service *OnboardingService) SearchResources(ctx context.Context, rawQuery string) (GlobalResourceSearch, error) {
 	if repository, ok := service.repository.(ResourceIndexRepository); ok {
-		return service.searchResourceIndex(ctx, repository, rawQuery)
+		return service.cachedIndexSearch(ctx, repository, rawQuery)
 	}
 	return service.searchResourcesLive(ctx, rawQuery)
 }
@@ -40,14 +40,23 @@ func (service *OnboardingService) searchResourceIndex(ctx context.Context, repos
 	if len([]rune(query)) < 2 {
 		return GlobalResourceSearch{}, newError(CodeSearchQueryInvalid)
 	}
-	count, err := repository.CountClusterResources(ctx)
+	var populated bool
+	var err error
+	if reader, ok := repository.(interface {
+		HasClusterResources(context.Context) (bool, error)
+	}); ok {
+		populated, err = reader.HasClusterResources(ctx)
+	} else {
+		var count int64
+		count, err = repository.CountClusterResources(ctx)
+		populated = count > 0
+	}
 	if err != nil {
 		return GlobalResourceSearch{}, err
 	}
-	if count == 0 {
-		// The first index build can take a few minutes; keep search usable
-		// during that window, then never fan out again.
-		return service.searchResourcesLive(ctx, rawQuery)
+	if !populated {
+		// Cold starts must not turn ten browser searches into fleet-wide Lists.
+		return GlobalResourceSearch{Items: []GlobalResourceResult{}, FailedClusters: []string{}, IndexPending: true}, nil
 	}
 	items, err := repository.SearchClusterResources(ctx, query, 800)
 	if err != nil {
@@ -182,6 +191,11 @@ func (service *OnboardingService) loadResources(ctx context.Context, record Clus
 	if err != nil {
 		return cachedResources{}, err
 	}
+	if summary, ok := service.connector.(IndexResourceConnector); ok {
+		workloads, pods, err := summary.IndexResources(ctx, parsed)
+		return cachedResources{workloads: workloads, pods: pods, loadedAt: service.now()}, err
+	}
+
 	type workloadResult struct {
 		items []ClusterWorkload
 		err   error

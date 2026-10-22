@@ -9,6 +9,16 @@ metadata:
   name: ftc-platform
   namespace: ftc-platform
 ---
+# Setup-only identity. It may read and write the runtime Secret and restart the
+# platform Pods, and nothing else. No long-running role is bound to it, so the
+# database DSN and the credential encryption key are never exposed through the
+# API to a process that outlives initialization.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -18,9 +28,26 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Only the legacy single-Leader collector mode restarts Pods. Reads are served
+  # from the platform database, and no long-running role needs Secret access:
+  # every credential is injected through env/envFrom when the Pod starts.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  # 参数配置保存后，通过更新 Pod template annotation 触发对应实例滚动重启。
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "create", "update", "patch"]
+    verbs: ["get", "create", "update", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
@@ -39,6 +66,20 @@ roleRef:
   kind: Role
   name: ftc-platform-leader-election
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform-setup
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ftc-platform-setup
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -53,8 +94,40 @@ data:
   SETUP_RUNTIME_SECRET: ftc-platform-runtime
   WEB_DIST_DIR: /app/web
   SECURE_COOKIES: "true"
+  # WebSocket 跨端口 loopback 例外仅供本地前端联调，生产必须保持 "false"。
+  ALLOW_LOOPBACK_WS_ORIGIN: "false"
+  # 仅当平台位于可信 Ingress / 负载均衡之后且该头由代理写入时设为 "true"，
+  # 否则登录限流可被伪造的 X-Forwarded-For 绕过。
+  TRUST_PROXY_HEADERS: "false"
   SESSION_TTL: 8h
   ENABLE_POD_EXEC: "false"
+
+  # ---------------------------------------------------------------------
+  # 安全扫描镜像（kube-bench CIS 节点基线）
+  # ---------------------------------------------------------------------
+  # 平台会按被扫节点的架构选择镜像：amd64/arm64 各用一个。
+  # 留空表示回退到 SECURITY_KUBE_BENCH_IMAGE，因此只有单架构集群时
+  # 只需填第一项。
+  #
+  # 生产建议：把 kube-bench 镜像同步到企业镜像仓库（多架构 manifest），
+  # 再分别填入下面两项，避免被纳管集群现场拉取外网镜像失败。
+  #
+  #   SECURITY_KUBE_BENCH_IMAGE        通用镜像（单架构集群 / 回退用）
+  #   SECURITY_KUBE_BENCH_IMAGE_AMD64  x86_64 节点专用
+  #   SECURITY_KUBE_BENCH_IMAGE_ARM64  aarch64 节点专用
+  SECURITY_KUBE_BENCH_IMAGE: docker.io/aquasec/kube-bench:v0.16.0
+  SECURITY_KUBE_BENCH_IMAGE_AMD64: ""
+  SECURITY_KUBE_BENCH_IMAGE_ARM64: ""
+  SECURITY_SCAN_WORKERS: "2"
+  SECURITY_SCAN_TIMEOUT: 30m
+  SECURITY_POD_STARTUP_TIMEOUT: 5m
+  SECURITY_HOST_SCAN_WORKERS: "5"
+  # 扫描 Job 建立在被纳管集群的哪个 namespace（该 namespace 需要允许建 Job）。
+  SECURITY_SCANNER_NAMESPACE: kube-system
+  # 私有仓库拉取凭据：填写被纳管集群中已存在的 imagePullSecret 名称。
+  # 留空表示使用各节点的默认凭据（仅公共仓库可用）。
+  SECURITY_SCANNER_IMAGE_PULL_SECRET: ""
+
   LEADER_ELECTION_ENABLED: "true"
   LEADER_ELECTION_NAME: ftc-platform-collectors
   HEALTH_COLLECTION_INTERVAL: 1m
@@ -101,6 +174,8 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: platform
+          # 平台自身镜像：替换为企业镜像仓库地址。
+          # 多架构集群请推送 manifest list，平台按节点架构自动选择。
           image: your-registry.example.com/ftc-platform:0.1.0
           imagePullPolicy: IfNotPresent
           envFrom:

@@ -351,13 +351,33 @@ func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q Fle
 	types, namespaces, kinds := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var total, affectedObjects int64
 	affectedClusters := 0
+	var batch map[string][]EventGroupAggregate
+	if repo, ok := service.eventRepository.(interface {
+		AggregateFleetEventGroups(context.Context, []string, EventQuery, bool) (map[string][]EventGroupAggregate, error)
+	}); ok {
+		ids := []string{}
+		for _, record := range records {
+			if fleetRecordMatches(record, q) {
+				ids = append(ids, record.ID)
+			}
+		}
+		var err error
+		batch, err = repo.AggregateFleetEventGroups(ctx, ids, fleetScanQuery(q, classification), useDaily)
+		if err != nil {
+			return FleetEventOverview{}, err
+		}
+	}
 	for _, record := range records {
 		if !fleetRecordMatches(record, q) {
 			continue
 		}
 		result.Summary.TotalClusters++
 		scanQuery := fleetScanQuery(q, classification)
-		groups, err := service.aggregateEventGroups(ctx, record.ID, scanQuery, useDaily)
+		groups := batch[record.ID]
+		var err error
+		if batch == nil {
+			groups, err = service.aggregateEventGroups(ctx, record.ID, scanQuery, useDaily)
+		}
 		if err != nil {
 			appendFleetFailure(&result, record, err)
 			continue

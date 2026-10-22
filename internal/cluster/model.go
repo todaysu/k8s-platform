@@ -11,12 +11,15 @@ type TerminalSize struct {
 	Height uint16
 }
 type PodExecOptions struct {
-	Container string
-	Shell     string
-	Stdin     io.Reader
-	Stdout    io.Writer
-	Stderr    io.Writer
-	Sizes     <-chan TerminalSize
+	DisableTTY bool // Binary file transfer must bypass terminal transformations.
+	Container  string
+	Shell      string
+	Prompt     string
+	Command    []string
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+	Sizes      <-chan TerminalSize
 }
 
 type ManagedCluster struct {
@@ -467,6 +470,7 @@ type GlobalResourceResult struct {
 	Images          []string `json:"images,omitempty"`
 }
 type GlobalResourceSearch struct {
+	IndexPending   bool                   `json:"index_pending,omitempty"`
 	Items          []GlobalResourceResult `json:"items"`
 	FailedClusters []string               `json:"failed_clusters"`
 	Truncated      bool                   `json:"truncated"`
@@ -495,6 +499,77 @@ type ResourceIndexRepository interface {
 	DeleteClusterResources(context.Context, string) error
 }
 
+type SecurityBaselineRecord struct {
+	ID         int64                  `json:"id,omitempty"`
+	ClusterID  string                 `json:"cluster_id"`
+	Status     string                 `json:"status"`
+	Scanner    string                 `json:"scanner"`
+	Framework  string                 `json:"framework"`
+	StartedAt  time.Time              `json:"started_at"`
+	FinishedAt *time.Time             `json:"finished_at,omitempty"`
+	Report     SecurityBaselineReport `json:"report"`
+	Error      string                 `json:"error,omitempty"`
+}
+
+type SecurityBaselineChange struct {
+	ControlID      string `json:"control_id"`
+	Title          string `json:"title"`
+	PreviousStatus string `json:"previous_status,omitempty"`
+	CurrentStatus  string `json:"current_status,omitempty"`
+}
+
+type SecurityBaselineRemediation struct {
+	ControlID      string `json:"control_id"`
+	Title          string `json:"title"`
+	PreviousStatus string `json:"previous_status,omitempty"`
+	CurrentStatus  string `json:"current_status,omitempty"`
+	Result         string `json:"result"`
+}
+
+type SecurityBaselineComparison struct {
+	PreviousScanID int64                         `json:"previous_scan_id,omitempty"`
+	CurrentScanID  int64                         `json:"current_scan_id,omitempty"`
+	NewRisks       []SecurityBaselineChange      `json:"new_risks"`
+	Resolved       []SecurityBaselineChange      `json:"resolved"`
+	Changed        []SecurityBaselineChange      `json:"changed"`
+	Remediation    []SecurityBaselineRemediation `json:"remediation"`
+}
+
+type SecurityWhitelistEntry struct {
+	ClusterID string    `json:"cluster_id"`
+	ControlID string    `json:"control_id"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type SecurityBaselineHistory struct {
+	Records    []SecurityBaselineRecord   `json:"records"`
+	Comparison SecurityBaselineComparison `json:"comparison"`
+}
+
+type FleetSecurityBaseline struct {
+	Clusters []ClusterSecurityBaseline `json:"clusters"`
+}
+
+type ClusterSecurityBaseline struct {
+	ClusterID       string                  `json:"cluster_id"`
+	ClusterName     string                  `json:"cluster_name"`
+	Environment     string                  `json:"environment"`
+	TechnologyStack string                  `json:"technology_stack"`
+	Scan            *SecurityBaselineRecord `json:"scan,omitempty"`
+}
+
+type SecurityBaselineRepository interface {
+	SaveSecurityBaseline(context.Context, SecurityBaselineRecord) error
+	AppendSecurityBaselineHistory(context.Context, SecurityBaselineRecord) error
+	GetSecurityBaseline(context.Context, string) (*SecurityBaselineRecord, error)
+	ListSecurityBaselines(context.Context) (map[string]SecurityBaselineRecord, error)
+	ListSecurityBaselineHistory(context.Context, string, int) ([]SecurityBaselineRecord, error)
+	ListSecurityWhitelist(context.Context, string) ([]SecurityWhitelistEntry, error)
+	AddSecurityWhitelist(context.Context, SecurityWhitelistEntry) error
+	DeleteSecurityWhitelist(context.Context, string, string) error
+}
+
 type ClusterRecord struct {
 	ManagedCluster
 	EncryptedCredentials string
@@ -506,6 +581,13 @@ type ClusterRepository interface {
 	Delete(context.Context, string) error
 	GetRecord(context.Context, string) (ClusterRecord, error)
 	ListRecords(context.Context) ([]ClusterRecord, error)
+}
+
+// CredentialRebindRepository rewrites a stored credential ciphertext in place.
+// It is optional: platforms that never migrate legacy rows simply do not
+// implement it, and the credentials keep working without additional data.
+type CredentialRebindRepository interface {
+	ReplaceEncryptedCredentials(context.Context, string, string) error
 }
 
 // ClusterHealthRepository stores the latest fleet health snapshot. It is kept
@@ -589,6 +671,11 @@ type EventRepository interface {
 type CapacityRepository interface {
 	CreateCapacityBaseline(context.Context, CapacityBaseline) (CapacityBaseline, error)
 	LatestCapacityBaseline(context.Context, string) (*CapacityBaseline, error)
+}
+
+// CapacitySnapshotReader reads one cluster without decoding the entire fleet.
+type CapacitySnapshotReader interface {
+	GetCapacitySnapshot(context.Context, string) (ClusterCapacity, error)
 }
 
 type FleetCapacityRepository interface {

@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arthas-demo
+  namespace: myapp
+  labels: {app: arthas-demo}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: arthas-demo}
+  template:
+    metadata:
+      labels: {app: arthas-demo}
+    spec:
+      containers:
+        - name: java
+          image: ftc-arthas-demo:3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {containerPort: 8080}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 5000
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 15
+            periodSeconds: 10

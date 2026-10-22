@@ -15,29 +15,43 @@ import (
 const defaultSessionTTL = 8 * time.Hour
 
 type Config struct {
-	ListenAddr                 string
-	MetricsAddr                string
-	DatabasePath               string
-	PlatformDatabaseDSN        string
-	DatabaseHost               string
-	DatabasePort               string
-	DatabaseUser               string
-	DatabasePassword           string
-	DatabaseName               string
-	DatabaseTLS                string
-	SetupMode                  bool
-	SetupToken                 string
-	SetupRuntimeSecret         string
-	SetupDefaultDBHost         string
-	SetupDefaultDBName         string
-	EventDatabaseDSN           string
-	BootstrapTokenPath         string
-	WebDistDir                 string
-	PodExecEnabled             bool
-	AdminUsername              string
-	AdminPasswordHash          string
-	CredentialEncryptionKey    string
-	SecureCookies              bool
+	CollectionShards          int
+	HTTPQueryConcurrency      int
+	HTTPRealtimeConcurrency   int
+	HTTPMonitoringConcurrency int
+	HTTPSessionConcurrency    int
+	HTTPClusterConcurrency    int
+	RuntimeRole               string
+	ListenAddr                string
+	MetricsAddr               string
+	DatabasePath              string
+	PlatformDatabaseDSN       string
+	DatabaseHost              string
+	DatabasePort              string
+	DatabaseUser              string
+	DatabasePassword          string
+	DatabaseName              string
+	DatabaseTLS               string
+	SetupMode                 bool
+	SetupToken                string
+	SetupRuntimeSecret        string
+	SetupDefaultDBHost        string
+	SetupDefaultDBName        string
+	EventDatabaseDSN          string
+	BootstrapTokenPath        string
+	WebDistDir                string
+	PodExecEnabled            bool
+	AdminUsername             string
+	AdminPasswordHash         string
+	CredentialEncryptionKey   string
+	SecureCookies             bool
+	// AllowLoopbackWSOrigin re-enables cross-port loopback WebSocket origins
+	// for local development. It must stay false outside a developer machine:
+	// WebSocket handshakes are not covered by the same-origin policy, so an
+	// allowed origin can drive Pod Exec and kubectl TTY on behalf of a session.
+	AllowLoopbackWSOrigin bool
+	// TrustProxyHeaders enables X-Forwarded-For parsing for login throttling.
+	TrustProxyHeaders          bool
 	SessionTTL                 time.Duration
 	SystemNamespaces           []string
 	HealthCollectionInterval   time.Duration
@@ -53,9 +67,58 @@ type Config struct {
 	LeaderElectionEnabled      bool
 	LeaderElectionNamespace    string
 	LeaderElectionName         string
+	SecurityScannerNamespace   string
+	SecurityScannerPullSecret  string
+	SecurityScanWorkers        int
+	SecurityScanTimeout        time.Duration
+	SecurityPodStartupTimeout  time.Duration
+	KubeBenchImage             string
+	KubeBenchImageAMD64        string
+	KubeBenchImageARM64        string
+	SecurityHostScanWorkers    int
+}
+
+// ServesAPI and Collects keep runtime role decisions in one place.
+func (cfg Config) ServesAPI() bool {
+	return cfg.RuntimeRole == "" || cfg.RuntimeRole == "all" || cfg.RuntimeRole == "api"
+}
+func (cfg Config) Collects() bool {
+	return cfg.RuntimeRole == "" || cfg.RuntimeRole == "all" || cfg.RuntimeRole == "collector"
+}
+func (cfg Config) RunsWorker() bool {
+	return cfg.RuntimeRole == "" || cfg.RuntimeRole == "all" || cfg.RuntimeRole == "worker"
 }
 
 func Load() (Config, error) {
+	role := strings.ToLower(strings.TrimSpace(envOrDefault("PLATFORM_ROLE", "all")))
+	if role != "all" && role != "api" && role != "collector" && role != "worker" {
+		return Config{}, errors.New("PLATFORM_ROLE must be all, api, collector or worker")
+	}
+
+	querySlots, err := envPositiveInt("HTTP_QUERY_CONCURRENCY", 64)
+	if err != nil {
+		return Config{}, err
+	}
+	realtimeSlots, err := envPositiveInt("HTTP_REALTIME_CONCURRENCY", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	monitoringSlots, err := envPositiveInt("HTTP_MONITORING_CONCURRENCY", 8)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionSlots, err := envPositiveInt("HTTP_SESSION_CONCURRENCY", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	clusterSlots, err := envPositiveInt("HTTP_CLUSTER_CONCURRENCY", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	shardCount, err := strconv.Atoi(envOrDefault("COLLECTION_SHARDS", "0"))
+	if err != nil || shardCount < 0 || shardCount > 64 {
+		return Config{}, errors.New("COLLECTION_SHARDS must be 0 (legacy) or 1..64")
+	}
 	secureCookies, err := envBool("SECURE_COOKIES", true)
 	if err != nil {
 		return Config{}, err
@@ -64,7 +127,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-
+	allowLoopbackWSOrigin, err := envBool("ALLOW_LOOPBACK_WS_ORIGIN", false)
+	if err != nil {
+		return Config{}, err
+	}
+	trustProxyHeaders, err := envBool("TRUST_PROXY_HEADERS", false)
+	if err != nil {
+		return Config{}, err
+	}
 	sessionTTL, err := envDuration("SESSION_TTL", defaultSessionTTL)
 	if err != nil {
 		return Config{}, err
@@ -109,6 +179,22 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	securityScanWorkers, err := envPositiveInt("SECURITY_SCAN_WORKERS", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	securityHostScanWorkers, err := envPositiveInt("SECURITY_HOST_SCAN_WORKERS", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	securityScanTimeout, err := envDuration("SECURITY_SCAN_TIMEOUT", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	securityPodStartupTimeout, err := envDuration("SECURITY_POD_STARTUP_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 	leaderElectionEnabled, err := envBool("LEADER_ELECTION_ENABLED", true)
 	if err != nil {
 		return Config{}, err
@@ -123,6 +209,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
+		CollectionShards:     shardCount,
+		HTTPQueryConcurrency: querySlots, HTTPRealtimeConcurrency: realtimeSlots, HTTPMonitoringConcurrency: monitoringSlots, HTTPSessionConcurrency: sessionSlots, HTTPClusterConcurrency: clusterSlots,
+		RuntimeRole:                role,
 		ListenAddr:                 envOrDefault("LISTEN_ADDR", ":8080"),
 		MetricsAddr:                os.Getenv("METRICS_ADDR"),
 		DatabasePath:               envOrDefault("DATABASE_PATH", "./data/platform.db"),
@@ -146,6 +235,8 @@ func Load() (Config, error) {
 		AdminPasswordHash:          os.Getenv("ADMIN_PASSWORD_HASH"),
 		CredentialEncryptionKey:    os.Getenv("CREDENTIAL_ENCRYPTION_KEY"),
 		SecureCookies:              secureCookies,
+		AllowLoopbackWSOrigin:      allowLoopbackWSOrigin,
+		TrustProxyHeaders:          trustProxyHeaders,
 		SessionTTL:                 sessionTTL,
 		SystemNamespaces:           csvList(envOrDefault("SYSTEM_NAMESPACES", "kube-system,cmb-monitoring")),
 		HealthCollectionInterval:   healthInterval,
@@ -161,6 +252,15 @@ func Load() (Config, error) {
 		LeaderElectionEnabled:      leaderElectionEnabled,
 		LeaderElectionNamespace:    envOrDefault("POD_NAMESPACE", "kubescope"),
 		LeaderElectionName:         envOrDefault("LEADER_ELECTION_NAME", "ftc-platform-collectors"),
+		SecurityScannerNamespace:   envOrDefault("SECURITY_SCANNER_NAMESPACE", "kube-system"),
+		SecurityScannerPullSecret:  strings.TrimSpace(os.Getenv("SECURITY_SCANNER_IMAGE_PULL_SECRET")),
+		SecurityScanWorkers:        securityScanWorkers,
+		SecurityScanTimeout:        securityScanTimeout,
+		SecurityPodStartupTimeout:  securityPodStartupTimeout,
+		KubeBenchImage:             envOrDefault("SECURITY_KUBE_BENCH_IMAGE", "docker.io/aquasec/kube-bench:v0.16.0"),
+		KubeBenchImageAMD64:        strings.TrimSpace(os.Getenv("SECURITY_KUBE_BENCH_IMAGE_AMD64")),
+		KubeBenchImageARM64:        strings.TrimSpace(os.Getenv("SECURITY_KUBE_BENCH_IMAGE_ARM64")),
+		SecurityHostScanWorkers:    securityHostScanWorkers,
 	}
 
 	if cfg.PlatformDatabaseDSN == "" && cfg.DatabaseHost != "" {
@@ -182,11 +282,20 @@ func Load() (Config, error) {
 		cfg.PlatformDatabaseDSN = mysqlConfig.FormatDSN()
 	}
 
+	if cfg.Collects() && cfg.CollectionShards > 0 && cfg.PlatformDatabaseDSN == "" {
+		return Config{}, errors.New("sharded collection requires shared MySQL")
+	}
+	if cfg.Collects() && cfg.CollectionShards > 0 && cfg.HealthInstanceSource != "workloads" {
+		return Config{}, errors.New("sharded collection requires HEALTH_INSTANCE_SOURCE=workloads")
+	}
 	setupWithoutDatabase := cfg.SetupMode && cfg.PlatformDatabaseDSN == ""
 	if setupWithoutDatabase && cfg.SetupToken == "" {
 		return Config{}, errors.New("SETUP_TOKEN is required when SETUP_MODE is enabled without a database")
 	}
-	if cfg.AdminPasswordHash == "" && !setupWithoutDatabase {
+	if cfg.RuntimeRole != "all" && cfg.PlatformDatabaseDSN == "" && !(cfg.RuntimeRole == "api" && setupWithoutDatabase) {
+		return Config{}, errors.New("split roles require PLATFORM_DATABASE_DSN or PLATFORM_DB_HOST")
+	}
+	if cfg.AdminPasswordHash == "" && cfg.ServesAPI() && !setupWithoutDatabase {
 		return Config{}, errors.New("ADMIN_PASSWORD_HASH is required")
 	}
 	if cfg.CredentialEncryptionKey == "" {

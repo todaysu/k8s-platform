@@ -503,3 +503,22 @@ func TestKubernetesConnectorUsesWorkloadInstanceSource(t *testing.T) {
 		t.Fatalf("unexpected core component counts: %#v", snapshot)
 	}
 }
+
+func TestPodShellCommandUsesPodPrompt(t *testing.T) {
+	command := podShellCommand("sh", "web-0 $ ")
+	if len(command) != 3 || command[0] != "/bin/sh" || command[2] != "export PS1='web-0 $ '; exec /bin/sh" {
+		t.Fatalf("unexpected sh command: %#v", command)
+	}
+	bash := podShellCommand("bash", "web-0 $ ")
+	if len(bash) != 3 || bash[0] != "/bin/bash" || !strings.Contains(bash[2], "--noprofile --norc") {
+		t.Fatalf("unexpected bash command: %#v", bash)
+	}
+	plain := podShellCommand("sh", "")
+	if len(plain) != 1 || plain[0] != "/bin/sh" {
+		t.Fatalf("unexpected plain command: %#v", plain)
+	}
+	quoted := podShellCommand("sh", "a'b $ ")
+	if !strings.Contains(quoted[2], `'\''`) {
+		t.Fatalf("prompt was not shell-quoted: %#v", quoted)
+	}
+}

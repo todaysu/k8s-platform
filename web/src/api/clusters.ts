@@ -28,6 +28,104 @@ export type ManagedCluster = ClusterValidationPreview & {
   worker_nodes: number | null
 }
 
+export type SecurityBaselineFinding = {
+  control_id: string
+  status: 'PASS' | 'FAIL' | 'WARN' | 'WHITELISTED'
+  severity: 'critical' | 'high' | 'medium' | 'low'
+  category: string
+  title: string
+  affected: number
+  resources: string[]
+  evidence: string
+  remediation: string
+  whitelist_reason?: string
+}
+
+export type SecurityBenchmark = {
+  id: string
+  name: string
+  cis_version: string
+  group: string
+}
+
+export type SecurityBaselineReport = {
+  mode: string
+  benchmark?: string
+  scanned_at: string
+  namespaces: number
+  pods: number
+  truncated_samples: boolean
+  summary: { controls: number; passed: number; failed: number; warnings: number; whitelisted: number; score: number }
+  coverage: { included: string[]; not_covered: string[] }
+  findings: SecurityBaselineFinding[]
+  progress?: {
+    phase: 'queued' | 'connecting' | 'discovering_nodes' | 'creating_jobs' | 'scanning_nodes' | 'collecting_report' | 'completed' | 'failed'
+    failed_phase?: string
+    message: string
+    completed_nodes: number
+    total_nodes: number
+    updated_at: string
+  }
+}
+
+export type SecurityBaselineRecord = {
+  id?: number
+  cluster_id: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  scanner: string
+  framework: string
+  started_at: string
+  finished_at?: string
+  report: SecurityBaselineReport
+  error?: string
+}
+
+export type ClusterSecurityBaseline = {
+  cluster_id: string
+  cluster_name: string
+  environment: string
+  technology_stack: string
+  scan?: SecurityBaselineRecord
+}
+
+export type FleetSecurityBaseline = {
+  clusters: ClusterSecurityBaseline[]
+}
+
+export type SecurityBaselineChange = {
+  control_id: string
+  title: string
+  previous_status?: string
+  current_status?: string
+}
+
+export type SecurityBaselineHistory = {
+  records: SecurityBaselineRecord[]
+  comparison: {
+    previous_scan_id?: number
+    current_scan_id?: number
+    new_risks: SecurityBaselineChange[]
+    resolved: SecurityBaselineChange[]
+    changed: SecurityBaselineChange[]
+    remediation: SecurityBaselineRemediation[]
+  }
+}
+
+export type SecurityBaselineRemediation = {
+  control_id: string
+  title: string
+  previous_status?: string
+  current_status?: string
+  result: 'remediated' | 'not_remediated' | 'new_risk' | 'whitelisted' | 'not_run' | string
+}
+
+export type SecurityWhitelistEntry = {
+  cluster_id: string
+  control_id: string
+  reason: string
+  created_at: string
+}
+
 export type ClusterNode = {
   cpu_cores: number
   created_at: string
@@ -254,6 +352,7 @@ export type GlobalResourceResult = {
 }
 
 export type GlobalResourceSearch = {
+  index_pending?: boolean
   failed_clusters: string[]
   items: GlobalResourceResult[]
   truncated: boolean
@@ -727,8 +826,116 @@ export async function fetchClusterWorkloadYAML(
   return payload.data
 }
 
-export async function searchGlobalResources(query: string): Promise<GlobalResourceSearch> {
-  const response = await fetch(`/api/v1/search/resources?q=${encodeURIComponent(query)}`)
+export async function scanClusterSecurityBaseline(
+  id: string,
+  benchmark?: string,
+): Promise<SecurityBaselineRecord> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/security-baseline/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'full', benchmark: benchmark ?? '' }),
+  })
+  let payload: ApiResponse<SecurityBaselineRecord>
+  try {
+    payload = await response.json() as ApiResponse<SecurityBaselineRecord>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的扫描任务响应，请确认后端已更新并重启。')
+  }
+  if (!response.ok || payload.error || !payload.data) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '提交安全扫描任务失败。')
+  }
+  return payload.data
+}
+
+export async function fetchSecurityBaselineHistory(id: string): Promise<SecurityBaselineHistory> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/security-baseline/history`)
+  let payload: ApiResponse<SecurityBaselineHistory>
+  try {
+    payload = await response.json() as ApiResponse<SecurityBaselineHistory>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的扫描历史响应。')
+  }
+  if (!response.ok || payload.error || !payload.data) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '读取扫描历史失败。')
+  }
+  return payload.data
+}
+
+export async function fetchSecurityBenchmarks(): Promise<SecurityBenchmark[]> {
+  const response = await fetch('/api/v1/security-baseline/benchmarks')
+  let payload: ApiResponse<SecurityBenchmark[]>
+  try {
+    payload = await response.json() as ApiResponse<SecurityBenchmark[]>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的扫描标准版本列表。')
+  }
+  if (!response.ok || payload.error || !payload.data) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '读取扫描标准版本失败。')
+  }
+  return payload.data
+}
+
+export async function fetchSecurityWhitelist(id: string): Promise<SecurityWhitelistEntry[]> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/security-baseline/whitelist`)
+  let payload: ApiResponse<SecurityWhitelistEntry[]>
+  try {
+    payload = await response.json() as ApiResponse<SecurityWhitelistEntry[]>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的白名单响应。')
+  }
+  if (!response.ok || payload.error || !payload.data) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '读取白名单失败。')
+  }
+  return payload.data
+}
+
+export async function addSecurityWhitelist(id: string, controlID: string, reason: string): Promise<SecurityWhitelistEntry> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/security-baseline/whitelist`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ control_id: controlID, reason }),
+  })
+  let payload: ApiResponse<SecurityWhitelistEntry>
+  try {
+    payload = await response.json() as ApiResponse<SecurityWhitelistEntry>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的白名单响应。')
+  }
+  if (!response.ok || payload.error || !payload.data) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '加入白名单失败。')
+  }
+  return payload.data
+}
+
+export async function deleteSecurityWhitelist(id: string, controlID: string): Promise<void> {
+  const response = await fetch(`/api/v1/clusters/${encodeURIComponent(id)}/security-baseline/whitelist/${encodeURIComponent(controlID)}`, { method: 'DELETE' })
+  let payload: ApiResponse<boolean>
+  try {
+    payload = await response.json() as ApiResponse<boolean>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的白名单响应。')
+  }
+  if (!response.ok || payload.error) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '移除白名单失败。')
+  }
+}
+
+export async function fetchFleetSecurityBaselines(): Promise<FleetSecurityBaseline> {
+  const response = await fetch('/api/v1/security-baselines')
+  let payload: ApiResponse<FleetSecurityBaseline>
+  try {
+    payload = await response.json() as ApiResponse<FleetSecurityBaseline>
+  } catch {
+    throw new ClusterApiError('INVALID_RESPONSE', '平台返回了无法识别的安全扫描响应，请确认后端已更新并重启。')
+  }
+  if (!response.ok || payload.error || !payload.data) {
+    throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '读取安全扫描结果失败。')
+  }
+  return payload.data
+}
+
+export async function searchGlobalResources(query: string, signal?: AbortSignal): Promise<GlobalResourceSearch> {
+  const response = await fetch(`/api/v1/search/resources?q=${encodeURIComponent(query)}`, {signal})
   const payload = await response.json() as ApiResponse<GlobalResourceSearch>
   if (!response.ok || payload.error || !payload.data) {
     throw new ClusterApiError(payload.error?.code ?? 'REQUEST_FAILED', payload.error?.message ?? '跨集群搜索失败。')

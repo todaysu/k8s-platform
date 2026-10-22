@@ -16,23 +16,36 @@ import (
 )
 
 type OnboardingService struct {
-	validator          *ValidationService
-	connector          Connector
-	cipher             CredentialCipher
-	repository         ClusterRepository
-	eventRepository    EventRepository
-	capacityRepo       CapacityRepository
-	classificationRepo CapacityClassificationRepository
-	systemNamespaces   []string
-	resourceCacheMu    sync.Mutex
-	resourceCache      map[string]cachedResources
-	resourceLoads      map[string]*resourceLoad
-	ownerCacheMu       sync.Mutex
-	ownerCache         map[string]cachedOwners
-	storageStatsMu     sync.Mutex
-	storageStatsAt     time.Time
-	storageStats       EventStorageStats
-	now                func() time.Time
+	collectionAdmissionMu sync.Mutex
+	collectionAdmissions  map[string]chan struct{}
+	validator             *ValidationService
+	connector             Connector
+	cipher                CredentialCipher
+	repository            ClusterRepository
+	eventRepository       EventRepository
+	capacityRepo          CapacityRepository
+	classificationRepo    CapacityClassificationRepository
+	securityRepo          SecurityBaselineRepository
+	securityQueued        bool
+	securityMu            sync.Mutex
+	securitySlots         chan struct{}
+	securityActive        map[string]struct{}
+	securityWorkers       int
+	securityTimeout       time.Duration
+	securityScans         sync.WaitGroup
+	systemNamespaces      []string
+	searchMu              sync.Mutex
+	searchEntries         map[string]*searchCacheEntry
+	searchSlots           chan struct{}
+	resourceCacheMu       sync.Mutex
+	resourceCache         map[string]cachedResources
+	resourceLoads         map[string]*resourceLoad
+	ownerCacheMu          sync.Mutex
+	ownerCache            map[string]cachedOwners
+	storageStatsMu        sync.Mutex
+	storageStatsAt        time.Time
+	storageStats          EventStorageStats
+	now                   func() time.Time
 }
 
 type credentialEnvelope struct {
@@ -52,6 +65,10 @@ func NewOnboardingService(connector Connector, cipher CredentialCipher, reposito
 		resourceCache:    make(map[string]cachedResources),
 		resourceLoads:    make(map[string]*resourceLoad),
 		ownerCache:       make(map[string]cachedOwners),
+		securityActive:   make(map[string]struct{}),
+		securitySlots:    make(chan struct{}, defaultSecurityScanWorkers),
+		securityWorkers:  defaultSecurityScanWorkers,
+		securityTimeout:  defaultSecurityScanTimeout,
 		systemNamespaces: []string{"kube-system", "cmb-monitoring"},
 	}
 	if capacityRepo, ok := repository.(CapacityRepository); ok {
@@ -59,6 +76,9 @@ func NewOnboardingService(connector Connector, cipher CredentialCipher, reposito
 	}
 	if classificationRepo, ok := repository.(CapacityClassificationRepository); ok {
 		service.classificationRepo = classificationRepo
+	}
+	if securityRepo, ok := repository.(SecurityBaselineRepository); ok {
+		service.securityRepo = securityRepo
 	}
 	return service
 }
@@ -454,15 +474,18 @@ func (service *OnboardingService) Onboard(ctx context.Context, name string, envi
 	if err != nil {
 		return ManagedCluster{}, newError(CodeEncryptionFailed)
 	}
-	encryptedCredentials, err := service.cipher.Encrypt(credentialJSON)
-	if err != nil {
-		return ManagedCluster{}, newError(CodeEncryptionFailed)
-	}
 
 	id, err := randomID()
 	if err != nil {
 		return ManagedCluster{}, newError(CodePersistenceFailed)
 	}
+	// The credential is sealed with the cluster id as additional authenticated
+	// data, so the row can never be replayed against a different cluster.
+	encryptedCredentials, err := service.cipher.Encrypt(credentialJSON, id)
+	if err != nil {
+		return ManagedCluster{}, newError(CodeEncryptionFailed)
+	}
+
 	now := service.now().UTC()
 	managedCluster := ManagedCluster{
 		ID:                 id,
@@ -579,40 +602,25 @@ func (service *OnboardingService) Refresh(ctx context.Context, id string) (Manag
 	return value, nil
 }
 
-// GetCachedCapacity returns the collector's capacity snapshot. It falls back
-// to a live collection when the cluster has no snapshot yet or when a new
-// delivery baseline has been created since the snapshot was taken.
+// GetCachedCapacity never performs remote I/O on a browser's polling path.
 func (service *OnboardingService) GetCachedCapacity(ctx context.Context, id string) (ClusterCapacity, error) {
-	repository, ok := service.repository.(FleetCapacityRepository)
-	if !ok {
-		return service.RefreshCapacity(ctx, id)
+	if _, err := service.repository.GetRecord(ctx, id); err != nil {
+		return ClusterCapacity{}, err
 	}
-	fleet, err := repository.ListFleetCapacitySnapshots(ctx)
+	repository, ok := service.repository.(CapacitySnapshotReader)
+	if !ok {
+		return ClusterCapacity{}, newError(CodeCapacityPending)
+	}
+	value, err := repository.GetCapacitySnapshot(ctx, id)
 	if err != nil {
 		return ClusterCapacity{}, err
 	}
-	for _, item := range fleet.Items {
-		if item.ClusterID != id {
-			continue
-		}
-		if service.capacityBaselineChanged(ctx, id, item.Capacity) {
-			return service.RefreshCapacity(ctx, id)
-		}
-		return item.Capacity, nil
+	if service.capacityBaselineChanged(ctx, id, value) {
+		return ClusterCapacity{}, newError(CodeCapacityPending)
 	}
-	for _, failure := range fleet.Failures {
-		if failure.ClusterID == id {
-			if failure.Code == CodeCapacityPending {
-				return service.RefreshCapacity(ctx, id)
-			}
-			return ClusterCapacity{}, newError(failure.Code)
-		}
-	}
-	return service.RefreshCapacity(ctx, id)
+	return value, nil
 }
 
-// RefreshCapacity computes a live capacity snapshot and persists it so the
-// next snapshot read (and the fleet page) sees the same baseline immediately.
 func (service *OnboardingService) RefreshCapacity(ctx context.Context, id string) (ClusterCapacity, error) {
 	value, err := service.GetCapacity(ctx, id)
 	if err != nil {
@@ -753,9 +761,15 @@ func (service *OnboardingService) GetWorkloadYAML(ctx context.Context, id, kind,
 }
 
 func (service *OnboardingService) parsedCredentials(record ClusterRecord) (ParsedKubeconfig, error) {
-	credentialJSON, err := service.cipher.Decrypt(record.EncryptedCredentials)
+	credentialJSON, err := service.cipher.Decrypt(record.EncryptedCredentials, record.ID)
 	if err != nil {
 		return ParsedKubeconfig{}, newError(CodeEncryptionFailed)
+	}
+	// Credentials stored before AAD binding are still readable. Rebind them on
+	// first successful use so the upgrade does not require re-enrolling any
+	// cluster, while still converging on the protected format.
+	if service.cipher.NeedsRebind(record.EncryptedCredentials) {
+		service.rebindCredentials(record, credentialJSON)
 	}
 	var credentials credentialEnvelope
 	if err := json.Unmarshal(credentialJSON, &credentials); err != nil {
@@ -768,6 +782,22 @@ func (service *OnboardingService) parsedCredentials(record ClusterRecord) (Parse
 		ClientCertificateData: credentials.ClientCertificateData,
 		ClientKeyData:         credentials.ClientKeyData,
 	}, nil
+}
+
+// rebindCredentials rewrites a legacy credential row with AAD binding. Failures
+// are non-fatal: the plaintext is already usable, and the next use retries.
+func (service *OnboardingService) rebindCredentials(record ClusterRecord, credentialJSON []byte) {
+	sealed, err := service.cipher.Encrypt(credentialJSON, record.ID)
+	if err != nil {
+		return
+	}
+	repository, ok := service.repository.(CredentialRebindRepository)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = repository.ReplaceEncryptedCredentials(ctx, record.ID, sealed)
 }
 
 func (service *OnboardingService) inspectRecord(ctx context.Context, record ClusterRecord) ManagedCluster {

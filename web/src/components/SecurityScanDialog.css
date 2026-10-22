@@ -1,0 +1,14 @@
+.ks-scan-clusters{border:1px solid #d2d9df;border-radius:4px;overflow:hidden}
+.ks-scan-clusters__toolbar{align-items:center;background:#f7f9fb;border-bottom:1px solid #dce3e9;display:flex;gap:14px;justify-content:space-between;padding:10px 12px}
+.ks-scan-clusters__toolbar .pf-v6-c-search-input{flex:1;max-width:360px}
+.ks-scan-clusters__list{display:flex;flex-direction:column;max-height:304px;overflow-y:auto;padding:8px}
+.ks-scan-clusters__list .pf-v6-c-check{align-items:start;border:1px solid transparent;border-radius:4px;box-sizing:border-box;column-gap:12px;display:grid;grid-template-columns:auto minmax(0,1fr);margin:0;min-height:62px;padding:11px 14px;transition:background-color .12s ease,border-color .12s ease}
+.ks-scan-clusters__list .pf-v6-c-check+.pf-v6-c-check{margin-top:4px}
+.ks-scan-clusters__list .pf-v6-c-check:hover{background:#f4f8fb;border-color:#dce7f0}
+.ks-scan-clusters__list .pf-v6-c-check:has(.pf-v6-c-check__input:checked){background:#eef6fc;border-color:#73a9d4}
+.ks-scan-clusters__list .pf-v6-c-check__input{margin-top:3px}
+.ks-scan-clusters__list .pf-v6-c-check__label{min-width:0;width:100%}
+.ks-scan-cluster{display:flex;flex-direction:column;gap:4px;line-height:1.35}
+.ks-scan-cluster strong{color:#151515;font-size:14px;font-weight:600}
+.ks-scan-cluster small{color:#66788b;font-size:12px;line-height:1.4}
+.ks-scan-clusters__empty{color:#66788b;font-size:13px;padding:28px 14px;text-align:center}

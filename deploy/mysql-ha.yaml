@@ -1,0 +1,243 @@
+# DEPRECATED：这是早期主从实验清单，不是自动高可用实现。
+# 它没有自动 failover，且 Service 标签/主从复制初始化不完整。
+# 交付版请使用 deploy/install.yaml（PXC Operator 三节点高可用）。
+# 仅保留作历史参考，不要用于生产。
+
+# 生产级 MySQL 8.4 单主高可用方案（集群内）
+#
+# 与 deploy/mysql.yaml（开发/测试用单副本）的区别：
+#   - 主从双副本 + 读 Service，主库故障时可人工或自动切换
+#   - 独立 PV、StorageClass 可配置
+#   - 慢查询日志、额外连接参数、binlog 保留周期
+#   - 备份 CronJob 指向主库
+#
+# 使用前必改（清单内已用 REPLACE_WITH_* 标出）：
+#   1. 镜像地址（多架构集群请推送 manifest list）
+#   2. root 密码与应用账号密码
+#   3. StorageClass 名称（需支持 ReadWriteOnce）
+#   4. 备份 PVC 容量
+#
+# 重要：平台使用 DSN 参数 charset=utf8mb4、parseTime=true、loc=UTC，
+#      因此 MySQL 必须使用 utf8mb4 字符集与 utf8mb4_0900_ai_ci 排序规则。
+apiVersion: v1
+kind: Secret
+metadata:
+  name: platform-mysql
+  namespace: ftc-platform
+type: Opaque
+stringData:
+  # REPLACE_WITH_ROOT_PASSWORD
+  root-password: REPLACE_WITH_ROOT_PASSWORD
+  username: ftc
+  # REPLACE_WITH_PASSWORD
+  password: REPLACE_WITH_PASSWORD
+  database: ftc_platform
+  # 复制账号：由主库创建，用于从库同步
+  replication-user: repl
+  # REPLACE_WITH_REPLICATION_PASSWORD
+  replication-password: REPLACE_WITH_REPLICATION_PASSWORD
+---
+# 只读 Service：负载均衡到主库和从库，用于备份与只读查询。
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-mysql
+  namespace: ftc-platform
+  labels:
+    app.kubernetes.io/name: platform-mysql
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: platform-mysql
+  ports:
+    - { name: mysql, port: 3306, targetPort: mysql }
+---
+# 主库专用 Service：始终指向主库，平台 DSN 使用这个地址。
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-mysql-primary
+  namespace: ftc-platform
+  labels:
+    app.kubernetes.io/name: platform-mysql
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: platform-mysql
+    role: primary
+  ports:
+    - { name: mysql, port: 3306, targetPort: mysql }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: platform-mysql
+  namespace: ftc-platform
+spec:
+  serviceName: platform-mysql
+  # 主从各一实例。序号 0 为主库，序号 1 为从库。
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-mysql
+    spec:
+      terminationGracePeriodSeconds: 120
+      affinity:
+        podAntiAffinity:
+          # 主从必须落在不同节点，否则节点故障会同时打掉两个副本。
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: platform-mysql
+      containers:
+        - name: mysql
+          # 镜像地址：替换为企业镜像仓库地址。
+          # 多架构集群请推送 manifest list，StatefulSet 按节点架构自动选择。
+          image: mysql:8.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_0900_ai_ci
+            # 事件表写入频繁，开启 binlog 以便做主从复制与时间点恢复。
+            - --server-id=1
+            - --log-bin=mysql-bin
+            - --binlog-format=ROW
+            - --binlog-expire-logs-seconds=604800
+            # 平台连接池 20 连接、5 分钟生命周期，这里留足余量。
+            - --max-connections=500
+            - --innodb_buffer_pool_size=4G
+            - --innodb_flush_log_at_trx_commit=1
+            - --innodb_file_per_table=1
+            # 慢查询：事件批量写入若变慢，这里是第一个排查点。
+            - --slow_query_log=1
+            - --long_query_time=1
+            - --max_allowed_packet=64M
+            - --default-time-zone=+00:00
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: root-password } }
+            - name: MYSQL_DATABASE
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: database } }
+            - name: MYSQL_USER
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: username } }
+            - name: MYSQL_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: password } }
+            - name: TZ
+              value: UTC
+          ports:
+            - { name: mysql, containerPort: 3306 }
+          startupProbe:
+            exec: { command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"] }
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            exec: { command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"] }
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"] }
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests: { cpu: "2", memory: 8Gi }
+            limits: { cpu: "4", memory: 12Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mysql }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        # REPLACE_WITH_STORAGE_CLASS
+        storageClassName: REPLACE_WITH_STORAGE_CLASS
+        resources:
+          requests:
+            # 事件表按 100 次/秒 × 30 天估算，100GiB 是起点而非上限。
+            storage: 200Gi
+---
+# 从库：主从复制。首次部署需要在主库上执行一次复制初始化，
+# 详见 docs/deployment/production-deployment.md 第 6 节。
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: platform-mysql-replica
+  namespace: ftc-platform
+spec:
+  serviceName: platform-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-mysql-replica
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-mysql-replica
+    spec:
+      terminationGracePeriodSeconds: 120
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: platform-mysql
+      containers:
+        - name: mysql
+          # 与主库使用同一镜像，保证版本一致。
+          image: mysql:8.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_0900_ai_ci
+            - --server-id=2
+            - --relay-log=relay-bin
+            - --log-bin=mysql-bin
+            - --binlog-format=ROW
+            - --binlog-expire-logs-seconds=604800
+            - --read-only=ON
+            - --max-connections=500
+            - --innodb_buffer_pool_size=4G
+            - --default-time-zone=+00:00
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: root-password } }
+            - name: MYSQL_DATABASE
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: database } }
+            - name: MYSQL_USER
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: username } }
+            - name: MYSQL_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-mysql, key: password } }
+            - name: TZ
+              value: UTC
+          ports:
+            - { name: mysql, containerPort: 3306 }
+          startupProbe:
+            exec: { command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"] }
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            exec: { command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"] }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "2", memory: 8Gi }
+            limits: { cpu: "4", memory: 12Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mysql }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        # REPLACE_WITH_STORAGE_CLASS
+        storageClassName: REPLACE_WITH_STORAGE_CLASS
+        resources:
+          requests:
+            storage: 200Gi

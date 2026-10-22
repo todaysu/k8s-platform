@@ -102,6 +102,15 @@ func (store *MySQLEvents) UpsertEvents(ctx context.Context, events []cluster.Clu
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	ids := map[string]bool{}
+	for _, event := range events {
+		if !ids[event.ClusterID] {
+			if err := checkCollectionLease(ctx, tx, false, event.ClusterID); err != nil {
+				return err
+			}
+			ids[event.ClusterID] = true
+		}
+	}
 
 	previousCounts, err := loadPreviousEventCounts(ctx, tx, events)
 	if err != nil {
@@ -125,7 +134,7 @@ func (store *MySQLEvents) UpsertEvents(ctx context.Context, events []cluster.Clu
 	if err = upsertEventDailyTx(ctx, tx, cluster.BuildEventDailyRows(events, previousCounts), false); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitCollectionTx(ctx, tx, false)
 }
 
 // latestEventVersions collapses repeated watch updates for the same event so
@@ -288,9 +297,9 @@ func mysqlEventWhere(clusterID string, q cluster.EventQuery, cursor bool) (strin
 		conditions = append(conditions, "(regarding_kind='Node' OR regarding_namespace='kube-system' OR regarding_namespace LIKE 'openshift-%')")
 	}
 	if q.Search != "" {
-		p := "%" + q.Search + "%"
-		conditions = append(conditions, "(reason LIKE ? OR message LIKE ? OR regarding_name LIKE ? OR reporting_controller LIKE ?)")
-		args = append(args, p, p, p, p)
+		columns := []string{"reason", "message", "regarding_name", "reporting_controller"}
+		conditions = append(conditions, likeContainsClause(columns))
+		args = append(args, likeContainsArgs(columns, q.Search)...)
 	}
 	if cursor && q.CursorTime != nil {
 		conditions = append(conditions, "(last_observed_at<? OR (last_observed_at=? AND event_uid<?))")
@@ -453,7 +462,7 @@ func (store *MySQLEvents) EventFacets(ctx context.Context, clusterID string, sin
 	return result, nil
 }
 func (store *MySQLEvents) SetEventCollectorStatus(ctx context.Context, s cluster.EventCollectorStatus) error {
-	_, err := store.db.ExecContext(ctx, `INSERT INTO event_collector_checkpoints(cluster_id,state,resource_version,last_success_at,last_error,updated_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE state=VALUES(state),resource_version=VALUES(resource_version),last_success_at=COALESCE(VALUES(last_success_at),last_success_at),last_error=VALUES(last_error),updated_at=VALUES(updated_at)`, s.ClusterID, s.State, s.ResourceVersion, s.LastSuccessAt, s.LastError, s.UpdatedAt.UTC())
+	_, err := collectionExec(ctx, store.db, false, s.ClusterID, `INSERT INTO event_collector_checkpoints(cluster_id,state,resource_version,last_success_at,last_error,updated_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE state=VALUES(state),resource_version=VALUES(resource_version),last_success_at=COALESCE(VALUES(last_success_at),last_success_at),last_error=VALUES(last_error),updated_at=VALUES(updated_at)`, s.ClusterID, s.State, s.ResourceVersion, s.LastSuccessAt, s.LastError, s.UpdatedAt.UTC())
 	return err
 }
 func (store *MySQLEvents) ListEventCollectorStatuses(ctx context.Context) ([]cluster.EventCollectorStatus, error) {

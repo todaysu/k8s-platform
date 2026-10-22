@@ -8,6 +8,15 @@
   width: 100%;
 }
 
+.ks-workload-detail {
+  gap: 12px;
+  margin-block-start: 12px;
+}
+
+.ks-page .ks-workload-detail .ks-workload-detail-toolbar {
+  padding: 0;
+}
+
 .ks-workloads-page > .pf-v6-c-alert {
   margin-block-end: var(--pf-t--global--spacer--lg);
 }
@@ -48,10 +57,11 @@
 }
 
 .ks-pod-detail-tabs {
-  background: var(--pf-t--global--background--color--primary--default);
-  border: 1px solid var(--pf-t--global--border--color--default);
-  border-radius: var(--pf-t--global--border--radius--medium);
-  padding-inline: var(--pf-t--global--spacer--lg);
+  background: transparent;
+  border: 0;
+  border-block-end: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 0;
+  padding-inline: 0;
 }
 
 .ks-pod-logs-card .pf-v6-c-card__title > span {

@@ -1,0 +1,72 @@
+{
+  "accelerated_initial_sweep": false,
+  "api_database_pools_independent": true,
+  "authenticated_users": 10,
+  "clusters": 100,
+  "database": "mysql",
+  "deployments_per_cluster": 1000,
+  "gomaxprocs": 8,
+  "graceful_takeover": true,
+  "host_logical_cpus": 8,
+  "initial_index_resources": 700000,
+  "list_objects": 2395821,
+  "list_requests": 8082,
+  "load_duration": "1m0s",
+  "monitoring_distribution": "one cluster per user (modulo cluster count); same-cluster overload is a separate scenario",
+  "nodes_per_cluster": 200,
+  "not_verified": [
+    "24h stability",
+    "abrupt process kill/real network partition",
+    "event storm",
+    "10 simultaneous real terminal sessions",
+    "real 200-node Kubernetes API and real Prometheus",
+    "browser rendering"
+  ],
+  "peak_inflight_cluster_wide_pod_lists": 3,
+  "pods_per_cluster": 6000,
+  "scope": "synthetic Kubernetes/Prometheus endpoints; two logical API and collector instances in one Go process, not independent production Pods; no etcd/Prometheus TSDB or browser rendering certification",
+  "steady_load": {
+    "peak_go_heap_alloc_bytes": 168249112,
+    "peak_goroutines": 1533,
+    "routes": {
+      "capacity": {
+        "p50_ms": 113.683,
+        "p95_ms": 548.78,
+        "p99_ms": 2039.607,
+        "samples": 190
+      },
+      "clusters": {
+        "p50_ms": 9.086,
+        "p95_ms": 127.744,
+        "p99_ms": 1178.348,
+        "samples": 191
+      },
+      "events": {
+        "p50_ms": 30.046,
+        "p95_ms": 287.915,
+        "p99_ms": 928.343,
+        "samples": 194
+      },
+      "monitoring": {
+        "p50_ms": 55.769,
+        "p95_ms": 932.334,
+        "p99_ms": 1834.902,
+        "samples": 195
+      },
+      "search": {
+        "p50_ms": 5.302,
+        "p95_ms": 64.471,
+        "p99_ms": 625.112,
+        "samples": 192
+      }
+    },
+    "status_counts": {
+      "200": 962
+    }
+  },
+  "synthetic_check_failures": [],
+  "synthetic_checks_passed": true,
+  "synthetic_response_bytes": 1081574162,
+  "takeover_ms": 304,
+  "warmup_ms": 280944
+}

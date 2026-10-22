@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,8 +48,25 @@ func (indexConnector) Pods(context.Context, cluster.ParsedKubeconfig) ([]cluster
 
 type indexCipher struct{}
 
-func (indexCipher) Encrypt(value []byte) (string, error) { return string(value), nil }
-func (indexCipher) Decrypt(value string) ([]byte, error) { return []byte(value), nil }
+func (indexCipher) Encrypt(value []byte, clusterID string) (string, error) {
+	return "bound:" + clusterID + ":" + string(value), nil
+}
+
+func (indexCipher) Decrypt(value, clusterID string) ([]byte, error) {
+	// Only values this double sealed carry the prefix; tests also store
+	// plaintext credentials directly, which stay readable.
+	rest, ok := strings.CutPrefix(value, "bound:")
+	if !ok {
+		return []byte(value), nil
+	}
+	bound, payload, ok := strings.Cut(rest, ":")
+	if !ok || bound != clusterID {
+		return nil, &cluster.Error{Code: cluster.CodeEncryptionFailed}
+	}
+	return []byte(payload), nil
+}
+
+func (indexCipher) NeedsRebind(string) bool { return false }
 
 func TestResourceIndexCollectorBuildsSearchableRows(t *testing.T) {
 	ctx := context.Background()

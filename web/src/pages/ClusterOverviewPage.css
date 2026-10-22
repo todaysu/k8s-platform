@@ -46,7 +46,7 @@
 }
 
 .ks-cluster-detail-tabs {
-  margin-block-end: calc(var(--pf-t--global--spacer--lg) * -1);
+  margin-block-end: calc(var(--pf-t--global--spacer--md) * -1);
   margin-block-start: var(--pf-t--global--spacer--lg);
 }
 

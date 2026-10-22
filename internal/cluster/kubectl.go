@@ -3,12 +3,14 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	clientcmd "k8s.io/client-go/tools/clientcmd"
 	clientapi "k8s.io/client-go/tools/clientcmd/api"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -128,7 +130,14 @@ func executeKubectl(ctx context.Context, parsed ParsedKubeconfig, args []string,
 	if err != nil {
 		return KubectlResult{}, err
 	}
+	// RemoveAll is skipped when the process is killed, so the decrypted
+	// kubeconfig is unlinked as soon as kubectl has finished with it.
 	defer os.RemoveAll(dir)
+	configPath := filepath.Join(dir, "config")
+	defer func() {
+		_ = os.Remove(configPath)
+	}()
+	_ = os.Chmod(dir, 0o700)
 	cfg := clientapi.NewConfig()
 	cfg.Clusters["target"] = &clientapi.Cluster{Server: parsed.APIServer, CertificateAuthorityData: parsed.CAData}
 	cfg.AuthInfos["session"] = &clientapi.AuthInfo{Token: parsed.Token, ClientCertificateData: parsed.ClientCertificateData, ClientKeyData: parsed.ClientKeyData}
@@ -165,10 +174,17 @@ func executeKubectl(ctx context.Context, parsed ParsedKubeconfig, args []string,
 		io.WriteString(output, "\nCommand stopped or exceeded 60 seconds.\n")
 	}
 	text := output.buf.String()
-	// kubectl output can include a temporary config path, but never expose credentials.
+	// kubectl output can echo the temporary config path or credential material
+	// on errors, so both the token and the client key/certificate payloads are
+	// removed before the text reaches the API response.
 	text = strings.ReplaceAll(text, dir, "[session]")
-	if parsed.Token != "" {
-		text = strings.ReplaceAll(text, parsed.Token, "[redacted]")
+	for _, secret := range []string{parsed.Token, string(parsed.ClientKeyData), string(parsed.ClientCertificateData), string(parsed.CAData)} {
+		if len(secret) >= 8 {
+			text = strings.ReplaceAll(text, secret, "[redacted]")
+			if encoded := base64.StdEncoding.EncodeToString([]byte(secret)); len(encoded) >= 8 {
+				text = strings.ReplaceAll(text, encoded, "[redacted]")
+			}
+		}
 	}
 	return KubectlResult{Output: text, ExitCode: code, Truncated: output.truncated}, nil
 }

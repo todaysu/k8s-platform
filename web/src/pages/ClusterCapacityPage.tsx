@@ -13,6 +13,7 @@ import {
   ModalBody,
   ModalFooter,
   ModalHeader,
+  Popover,
   Spinner,
   TextArea,
   Title,
@@ -22,6 +23,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table'
 import { useCallback, useEffect, useState } from 'react'
 
 import {
+  fetchCapacityClassification,
   fetchClusterCapacity,
   keepCapacityBaseline,
   lockClusterCapacityBaseline,
@@ -135,6 +137,9 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
   const [isKeeping, setIsKeeping] = useState(false)
   const [keepReason, setKeepReason] = useState('')
   const [reasonError, setReasonError] = useState('')
+  const [businessConfig, setBusinessConfig] = useState<{ configured: boolean; namespaces: string[] } | null>(null)
+  const [businessConfigError, setBusinessConfigError] = useState('')
+  const [businessConfigLoading, setBusinessConfigLoading] = useState(false)
 
   const load = useCallback(async (refresh = false) => {
     setError('')
@@ -152,6 +157,35 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
     const interval = window.setInterval(() => { if (!document.hidden) void load() }, 60_000)
     return () => { window.clearTimeout(timeout); window.clearInterval(interval) }
   }, [load])
+
+  const loadBusinessConfig = async () => {
+    setBusinessConfigLoading(true)
+    setBusinessConfig(null)
+    setBusinessConfigError('')
+    try {
+      const result = await fetchCapacityClassification()
+      setBusinessConfig({
+        configured: Boolean(result.classification.id),
+        namespaces: result.classification.business_namespaces ?? [],
+      })
+    } catch (requestError) {
+      setBusinessConfig(null)
+      setBusinessConfigError(requestError instanceof Error ? requestError.message : '读取业务 Namespace 配置失败。')
+    } finally {
+      setBusinessConfigLoading(false)
+    }
+  }
+
+  const openBaselineModal = () => {
+    setIsBaselineOpen(true)
+    void loadBusinessConfig()
+  }
+
+  const goToBusinessConfig = () => {
+    setIsBaselineOpen(false)
+    window.history.pushState({ section: 'capacity' }, '', '/capacity?classification=1')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
 
   const lockBaseline = async () => {
     setIsLocking(true)
@@ -183,10 +217,14 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
   if (!capacity) return <Alert actionLinks={<Button isInline onClick={() => void load(true)} variant="link">重新读取</Button>} isInline title="容量数据读取失败" variant="danger">{error}</Alert>
 
   const meta = baselineMeta[capacity.comparison.status]
+  const businessNamespaces = [...new Set(capacity.namespaces.filter((item) => item.class === 'business').map((item) => item.namespace))].sort()
+  const businessLabel = businessNamespaces.length === 0 ? '未配置'
+    : businessNamespaces.length <= 2 ? businessNamespaces.join('、')
+      : `${businessNamespaces.slice(0, 2).join('、')} +${businessNamespaces.length - 2}`
   return (
     <div className="ks-capacity-page">
       {error && <Alert isInline title="刷新失败，当前显示上一次成功数据" variant="warning">{error}</Alert>}
-      {capacity.baseline_review.status === 'pending' && <Alert actionLinks={<><Button isDisabled={!canConfigure} isInline onClick={() => setIsBaselineOpen(true)} variant="link">生成新基线</Button><Button isDisabled={!canConfigure} isInline onClick={() => setIsDecisionOpen(true)} variant="link">暂不更新</Button></>} isInline title="平台组件范围已变化，需要确认交付基线" variant="warning">当前平台组件 Namespace 与交付基线不同。请确认新范围后生成基线；若暂时沿用旧基线，需要记录原因。</Alert>}
+      {capacity.baseline_review.status === 'pending' && <Alert actionLinks={<><Button isDisabled={!canConfigure} isInline onClick={openBaselineModal} variant="link">生成新基线</Button><Button isDisabled={!canConfigure} isInline onClick={() => setIsDecisionOpen(true)} variant="link">暂不更新</Button></>} isInline title="平台组件范围已变化，需要确认交付基线" variant="warning">当前平台组件 Namespace 与交付基线不同。请确认新范围后生成基线；若暂时沿用旧基线，需要记录原因。</Alert>}
       {capacity.baseline_review.status === 'kept' && <Alert isInline title="本规则版本暂时沿用旧基线" variant="info">记录原因：{capacity.baseline_review.reason || '未填写'}</Alert>}
       <Card className="ks-capacity-baseline-card">
         <CardBody>
@@ -196,12 +234,24 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
           </div>
           <div className="ks-capacity-baseline-actions">
             <span>{capacity.baseline ? `最近锁定：${formatTime(capacity.baseline.captured_at)}` : `当前采集：${formatTime(capacity.collected_at)}`}</span>
-            <Button isDisabled={!canConfigure} icon={<SyncAltIcon />} onClick={() => setIsBaselineOpen(true)} variant={capacity.baseline ? 'secondary' : 'primary'}>{capacity.baseline ? '生成新基线' : '锁定当前为基线'}</Button>
+            <Button isDisabled={!canConfigure} icon={<SyncAltIcon />} onClick={openBaselineModal} variant={capacity.baseline ? 'secondary' : 'primary'}>{capacity.baseline ? '生成新基线' : '锁定当前为基线'}</Button>
           </div>
         </CardBody>
       </Card>
 
-      <div className="ks-capacity-context"><span><strong>{capacity.worker_nodes}</strong> 个可调度节点</span><span>平台组件 Namespace：<strong>{capacity.system_namespaces.join('、') || '未配置'}</strong></span><span>分类规则：<strong>{capacity.classification_version_id ? `版本 ${capacity.classification_version_id}` : '默认规则'}</strong></span><span>安全预留：<strong>{capacity.safety_reserve_percent}%</strong></span></div>
+      <div className="ks-capacity-context">
+        <span className="ks-capacity-context-item"><strong>{capacity.worker_nodes}</strong> 个可调度节点</span>
+        <span className="ks-capacity-context-item" title={businessNamespaces.length ? businessNamespaces.join('、') : '未配置'}>业务 Namespace：<strong>{businessLabel}</strong></span>
+        <Popover
+          bodyContent={<div className="ks-capacity-ns-popover">{capacity.system_namespaces.length ? capacity.system_namespaces.map((name) => <Label color="blue" isCompact key={name}>{name}</Label>) : <span>未配置</span>}</div>}
+          headerContent="平台组件 Namespace"
+          position="bottom"
+        >
+          <Button className="ks-capacity-context-trigger" isInline variant="link">平台组件 Namespace：{capacity.system_namespaces.length} 个</Button>
+        </Popover>
+        <span className="ks-capacity-context-item">分类规则：<strong>{capacity.classification_version_id ? `版本 ${capacity.classification_version_id}` : '默认规则'}</strong></span>
+        <span className="ks-capacity-context-item">安全预留：<strong>{capacity.safety_reserve_percent}%</strong></span>
+      </div>
 
       {!capacity.metrics_available && <Alert isInline title="实际使用数据不可用" variant="info">Requests、Limits 和剩余容量仍来自 Kubernetes API，可正常用于调度容量判断；请检查集群 Prometheus 的 Service 与查询权限。</Alert>}
       {((capacity.business.pods_without_cpu_requests ?? 0) > 0 || (capacity.business.pods_without_memory_requests ?? 0) > 0) && (
@@ -238,8 +288,19 @@ export default function ClusterCapacityPage({ clusterId }: Props) {
 
       <Modal aria-labelledby="capacity-baseline-title" isOpen={isBaselineOpen} onClose={() => { if (!isLocking) setIsBaselineOpen(false) }} variant="small">
         <ModalHeader description="基线版本不可变，建立新版本不会删除历史记录。" labelId="capacity-baseline-title" title={capacity.baseline ? '生成新的容量基线' : '锁定当前容量基线'} titleIconVariant="warning" />
-        <ModalBody><p>将记录当前可调度容量、系统命名空间，以及平台组件的 CPU/内存 Requests 和 Limits。请确认当前集群处于交付稳态。</p></ModalBody>
-        <ModalFooter><Button isLoading={isLocking} onClick={() => void lockBaseline()} variant="primary">确认锁定</Button><Button isDisabled={isLocking} onClick={() => setIsBaselineOpen(false)} variant="link">取消</Button></ModalFooter>
+        <ModalBody>
+          <p>将记录当前可调度容量、系统命名空间，以及平台组件的 CPU/内存 Requests 和 Limits。请确认当前集群处于交付稳态。</p>
+          <div className="ks-capacity-business-check">
+            <strong>业务 Namespace</strong>
+            {businessConfigLoading ? <div className="ks-capacity-business-loading"><Spinner size="sm" /> <span>正在读取业务 Namespace 配置…</span></div>
+              : businessConfigError ? <Alert isInline title="读取业务 Namespace 配置失败" variant="danger">{businessConfigError}<Button isInline onClick={() => void loadBusinessConfig()} variant="link">重试</Button></Alert>
+              : businessConfig && !businessConfig.configured ? <Alert isInline title="尚未配置业务 Namespace" variant="warning">当前所有 Namespace 都会计入平台组件，锁定后的基线无法区分业务与平台开销。建议先完成配置再锁定基线。<Button isInline onClick={goToBusinessConfig} variant="link">前往业务命名空间配置</Button></Alert>
+              : businessConfig && businessConfig.namespaces.length === 0 ? <p>已保存为空：所有 Namespace 均按平台组件统计。</p>
+              : businessConfig ? <div className="ks-capacity-business-labels">{businessConfig.namespaces.map((name) => <Label color="purple" key={name}>{name}</Label>)}</div>
+              : null}
+          </div>
+        </ModalBody>
+        <ModalFooter><Button isDisabled={businessConfigLoading} isLoading={isLocking} onClick={() => void lockBaseline()} variant="primary">确认锁定</Button><Button isDisabled={isLocking} onClick={() => setIsBaselineOpen(false)} variant="link">取消</Button></ModalFooter>
       </Modal>
       <Modal aria-labelledby="capacity-baseline-decision-title" isOpen={isDecisionOpen} onClose={() => { if (!isKeeping) setIsDecisionOpen(false) }} variant="small">
         <ModalHeader description="该记录只保存在运维平台，不会修改集群资源。" labelId="capacity-baseline-decision-title" title="暂不更新容量基线" titleIconVariant="warning" />

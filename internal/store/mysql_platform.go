@@ -59,6 +59,10 @@ KEY idx_clusters_environment_type(environment,cluster_type),KEY idx_clusters_sta
 		`CREATE TABLE IF NOT EXISTS auth_users(id BIGINT AUTO_INCREMENT PRIMARY KEY,username VARCHAR(64) NOT NULL UNIQUE,password_hash VARCHAR(255) NOT NULL,role VARCHAR(32) NOT NULL,disabled BOOLEAN NOT NULL DEFAULT FALSE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS auth_sessions(token_hash CHAR(64) PRIMARY KEY,user_id BIGINT NOT NULL,expires_at BIGINT NOT NULL,KEY idx_auth_sessions_expiry(expires_at),CONSTRAINT fk_session_user FOREIGN KEY(user_id) REFERENCES auth_users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS cluster_resources(cluster_id VARCHAR(64) NOT NULL,kind VARCHAR(64) NOT NULL,namespace VARCHAR(253) NOT NULL DEFAULT '',name VARCHAR(253) NOT NULL,uid VARCHAR(128) NOT NULL DEFAULT '',status VARCHAR(64) NOT NULL DEFAULT '',owner_kind VARCHAR(64) NOT NULL DEFAULT '',owner_name VARCHAR(253) NOT NULL DEFAULT '',node_name VARCHAR(253) NOT NULL DEFAULT '',images TEXT NOT NULL,updated_at DATETIME(6) NOT NULL,PRIMARY KEY(cluster_id,kind,namespace,uid,name),KEY idx_resources_name(name),KEY idx_resources_updated(updated_at),CONSTRAINT fk_resources_cluster FOREIGN KEY(cluster_id) REFERENCES clusters(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS security_baseline_results(cluster_id VARCHAR(64) PRIMARY KEY,status VARCHAR(32) NOT NULL,scanner VARCHAR(64) NOT NULL,framework VARCHAR(64) NOT NULL,started_at DATETIME(6) NOT NULL,finished_at DATETIME(6) NULL,report_json MEDIUMTEXT NOT NULL,error_message TEXT NOT NULL,CONSTRAINT fk_security_baseline_cluster FOREIGN KEY(cluster_id) REFERENCES clusters(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS security_baseline_whitelist(cluster_id VARCHAR(64) NOT NULL,control_id VARCHAR(64) NOT NULL,reason VARCHAR(512) NOT NULL,created_at DATETIME(6) NOT NULL,PRIMARY KEY(cluster_id,control_id),CONSTRAINT fk_security_whitelist_cluster FOREIGN KEY(cluster_id) REFERENCES clusters(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS security_baseline_history(id BIGINT AUTO_INCREMENT PRIMARY KEY,cluster_id VARCHAR(64) NOT NULL,status VARCHAR(32) NOT NULL,scanner VARCHAR(64) NOT NULL,framework VARCHAR(64) NOT NULL,started_at DATETIME(6) NOT NULL,finished_at DATETIME(6) NULL,report_json MEDIUMTEXT NOT NULL,error_message TEXT NOT NULL,UNIQUE KEY uq_security_history_cluster_started(cluster_id,started_at),KEY idx_security_history_cluster_time(cluster_id,started_at DESC,id DESC),CONSTRAINT fk_security_history_cluster FOREIGN KEY(cluster_id) REFERENCES clusters(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS platform_settings(section VARCHAR(64) PRIMARY KEY,payload JSON NOT NULL,updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
@@ -67,6 +71,13 @@ KEY idx_clusters_environment_type(environment,cluster_type),KEY idx_clusters_sta
 	}
 	if err := store.MySQLEvents.migrate(ctx); err != nil {
 		return err
+	}
+	if err := migrateSecurityJobs(ctx, store.db, false); err != nil {
+		return err
+	}
+
+	if _, err := store.db.ExecContext(ctx, `INSERT IGNORE INTO security_baseline_history(cluster_id,status,scanner,framework,started_at,finished_at,report_json,error_message) SELECT cluster_id,status,scanner,framework,started_at,finished_at,report_json,error_message FROM security_baseline_results WHERE status IN ('completed','failed')`); err != nil {
+		return fmt.Errorf("migrate mysql security history: %w", err)
 	}
 	_, err := store.db.ExecContext(ctx, `INSERT IGNORE INTO schema_migrations(version,applied_at) VALUES(1,UTC_TIMESTAMP(6))`)
 	return err
@@ -132,12 +143,19 @@ func (store *MySQL) GetRecord(ctx context.Context, id string) (cluster.ClusterRe
 }
 
 func (store *MySQL) UpdateClusterHealth(ctx context.Context, value cluster.ManagedCluster) error {
-	result, err := store.db.ExecContext(ctx, `UPDATE clusters SET connection_status=?,last_checked_at=?,nodes_ready=?,nodes_total=?,instances_ready=?,instances_total=?,core_components_ready=?,core_components_total=?,worker_nodes=?,worker_cores=?,api_latency_ms=?,cpu_utilization=?,memory_utilization=?,metrics_available=? WHERE id=?`, value.ConnectionStatus, value.LastCheckedAt.UTC(), value.NodesReady, value.NodesTotal, value.InstancesReady, value.InstancesTotal, value.CoreComponentsReady, value.CoreComponentsTotal, value.WorkerNodes, value.WorkerCores, value.APILatencyMS, value.CPUUtilization, value.MemoryUtilization, value.MetricsAvailable, value.ID)
+	result, err := collectionExec(ctx, store.db, false, value.ID, `UPDATE clusters SET connection_status=?,last_checked_at=?,nodes_ready=?,nodes_total=?,instances_ready=?,instances_total=?,core_components_ready=?,core_components_total=?,worker_nodes=?,worker_cores=?,api_latency_ms=?,cpu_utilization=?,memory_utilization=?,metrics_available=? WHERE id=?`, value.ConnectionStatus, value.LastCheckedAt.UTC(), value.NodesReady, value.NodesTotal, value.InstancesReady, value.InstancesTotal, value.CoreComponentsReady, value.CoreComponentsTotal, value.WorkerNodes, value.WorkerCores, value.APILatencyMS, value.CPUUtilization, value.MemoryUtilization, value.MetricsAvailable, value.ID)
 	return mysqlRequireRow(result, err)
 }
 
 func (store *MySQL) Delete(ctx context.Context, id string) error {
 	result, err := store.db.ExecContext(ctx, `DELETE FROM clusters WHERE id=?`, id)
+	return mysqlRequireRow(result, err)
+}
+
+// ReplaceEncryptedCredentials rewrites the stored credential ciphertext so a
+// record can be migrated to the AAD-bound format without re-enrolling.
+func (store *MySQL) ReplaceEncryptedCredentials(ctx context.Context, id, encrypted string) error {
+	result, err := store.db.ExecContext(ctx, `UPDATE clusters SET encrypted_credentials=? WHERE id=?`, encrypted, id)
 	return mysqlRequireRow(result, err)
 }
 
@@ -209,13 +227,7 @@ func (store *MySQL) LatestCapacityClassification(ctx context.Context) (*cluster.
 }
 
 func (store *MySQL) ObserveNamespaces(ctx context.Context, values []cluster.NamespaceObservation) error {
-	for _, value := range values {
-		_, err := store.db.ExecContext(ctx, `INSERT INTO capacity_namespace_observations(technology_stack,namespace,first_seen_at,last_seen_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE last_seen_at=VALUES(last_seen_at)`, value.TechnologyStack, value.Namespace, value.FirstSeenAt.UTC(), value.LastSeenAt.UTC())
-		if err != nil {
-			return &cluster.Error{Code: cluster.CodePersistenceFailed}
-		}
-	}
-	return nil
+	return observeNamespaceBatch(ctx, store.db, false, values)
 }
 
 func (store *MySQL) ListNamespaceObservations(ctx context.Context) ([]cluster.NamespaceObservation, error) {

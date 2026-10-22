@@ -7,3 +7,7 @@ data/
 coverage/
 web/dist/
 web/node_modules/
+.env.*
+!.env.example
+platform
+.workbuddy/

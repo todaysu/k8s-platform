@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -135,12 +136,30 @@ func TestLoginRateLimitAndExpiry(t *testing.T) {
 	defer s.Close()
 	r := httptest.NewRequest("POST", "http://localhost", nil)
 	for i := 0; i < 20; i++ {
-		if s.limited(r) {
+		if s.limited(r, "") {
 			t.Fatal("limited too early")
 		}
 	}
-	if !s.limited(r) {
+	if !s.limited(r, "") {
 		t.Fatal("no rate limit")
+	}
+	// A different source must not inherit the previous source's budget.
+	other := httptest.NewRequest("POST", "http://localhost", nil)
+	other.RemoteAddr = "203.0.113.9:1234"
+	if s.limited(other, "") {
+		t.Fatal("unrelated source was limited")
+	}
+	// The per-account budget must apply across differing source addresses.
+	distributed := httptest.NewRequest("POST", "http://localhost", nil)
+	for i := 0; i < maxAttemptsPerUser+1; i++ {
+		distributed.RemoteAddr = fmt.Sprintf("198.51.100.%d:9000", i)
+		blocked := s.limited(distributed, "root")
+		if i < maxAttemptsPerUser && blocked {
+			t.Fatalf("account limited too early at %d", i)
+		}
+		if i == maxAttemptsPerUser && !blocked {
+			t.Fatal("account brute force across rotating addresses was not limited")
+		}
 	}
 	w := httptest.NewRecorder()
 	if err = s.issue(w, User{ID: 1}); err != nil {

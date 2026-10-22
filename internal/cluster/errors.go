@@ -3,6 +3,7 @@ package cluster
 import "errors"
 
 const (
+	CodeCollectionLimitExceeded  = "COLLECTION_LIMIT_EXCEEDED"
 	CodeNameRequired             = "NAME_REQUIRED"
 	CodeEnvironmentRequired      = "ENVIRONMENT_REQUIRED"
 	CodeClusterTypeRequired      = "CLUSTER_TYPE_REQUIRED"
@@ -47,6 +48,12 @@ const (
 	CodeCapacityRulesInvalid     = "CAPACITY_RULES_INVALID"
 	CodeCapacityPending          = "CAPACITY_PENDING"
 	CodeBaselineReasonRequired   = "BASELINE_REASON_REQUIRED"
+	CodeSecurityBenchmarkInvalid = "SECURITY_BENCHMARK_INVALID"
+	CodeSecurityWhitelistInvalid = "SECURITY_WHITELIST_INVALID"
+	CodeSecurityScanModeInvalid  = "SECURITY_SCAN_MODE_INVALID"
+	CodeSecurityScanQueueFull    = "SECURITY_SCAN_QUEUE_FULL"
+	CodeSecurityScanInProgress   = "SECURITY_SCAN_IN_PROGRESS"
+	CodeSecurityScanUnavailable  = "SECURITY_SCAN_UNAVAILABLE"
 )
 
 type Error struct {

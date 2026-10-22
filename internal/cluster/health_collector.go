@@ -76,7 +76,7 @@ func (collector *HealthCollector) collect(ctx context.Context, stagger bool) {
 	if _, ok := collector.service.repository.(ClusterHealthRepository); !ok {
 		return
 	}
-	records, err := collector.service.repository.ListRecords(ctx)
+	records, err := collector.service.collectionRecords(ctx)
 	if err != nil {
 		log.Printf("health collector: list managed clusters: %v", err)
 		return
@@ -84,7 +84,9 @@ func (collector *HealthCollector) collect(ctx context.Context, stagger bool) {
 	if len(records) == 0 {
 		return
 	}
-	metrics.ClustersTotal.Set(int64(len(records)))
+	if _, scoped := CollectionLeaseFromContext(ctx); !scoped {
+		metrics.ClustersTotal.Set(int64(len(records)))
+	}
 
 	jobs := make(chan ClusterRecord)
 	workers := collector.concurrency
@@ -97,12 +99,28 @@ func (collector *HealthCollector) collect(ctx context.Context, stagger bool) {
 		go func() {
 			defer waitGroup.Done()
 			for record := range jobs {
-				requestContext, cancel := context.WithTimeout(ctx, collector.timeout)
+				if ctx.Err() != nil {
+					return
+				}
+				queueContext, queueCancel := context.WithTimeout(ctx, 5*time.Minute)
+				budgetCtx, release, budgetErr := collector.service.collectionBudget(queueContext, ctx, record.ID, "collection_health", 12)
+				if budgetErr != nil {
+					queueCancel()
+					if ctx.Err() == nil {
+						log.Printf("collection admission expired for cluster %s: %v", record.ID, budgetErr)
+					}
+					continue
+				}
+				queueCancel()
+				requestContext, cancel := context.WithTimeout(budgetCtx, collector.timeout)
+
 				if err := collector.service.refreshHealth(requestContext, record); err != nil {
 					metrics.HealthCollectorErrors.Inc()
 					log.Printf("health collector: persist cluster %s snapshot: %v", record.ID, err)
 				}
+				release()
 				cancel()
+				queueCancel()
 			}
 		}()
 	}

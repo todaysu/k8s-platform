@@ -1,0 +1,326 @@
+# FTC 平台交付版引导清单（第一阶段）
+#
+# 这一份只创建初始化入口：
+#   - 命名空间、运行/初始化 ServiceAccount 与最小权限；
+#   - 自动生成 setup token 与凭据加密密钥；
+#   - setup Deployment/Service，不连接数据库、不创建 MySQL/Ingress/运行时。
+#
+# 使用前只需要替换两处 REPLACE_WITH_PLATFORM_IMAGE（引导 Job 与 setup Pod）。
+# 然后：
+#   kubectl apply -f deploy/install-bootstrap.yaml
+#   kubectl -n ftc-platform rollout status deployment/ftc-platform-setup
+#   kubectl -n ftc-platform logs job/ftc-platform-bootstrap   # 读取 setup token
+#   kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80
+#   浏览器打开 http://127.0.0.1:8080
+#
+# MySQL HA、本地 PV/SC、Ingress、自签 CA、正式运行 Deployment 由 setup 控制器
+# 在后续阶段创建；本阶段先把初始化入口和安全边界跑通。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ftc-platform
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ftc-platform
+  namespace: ftc-platform
+---
+# 初始化专用身份：只在 setup 模式使用，初始化完成后应删除对应 RoleBinding。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ftc-platform-bootstrap
+  namespace: ftc-platform
+---
+# 运行期身份：只保留 Lease、Pod 回收和参数保存触发的 Deployment 滚动重启。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ftc-platform-runtime
+  namespace: ftc-platform
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ftc-platform-runtime
+  namespace: ftc-platform
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ftc-platform-runtime
+---
+# 引导 Job 只需要写一次 bootstrap Secret。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ftc-platform-bootstrap
+  namespace: ftc-platform
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ftc-platform-bootstrap
+  namespace: ftc-platform
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform-bootstrap
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ftc-platform-bootstrap
+---
+# 初始化身份：命名空间内的编排权限。集群级权限单独放在 ClusterRole 中。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services", "pods", "pods/log", "persistentvolumeclaims", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform-setup
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ftc-platform-setup
+---
+# 集群级：节点/本地 PV/SC/IngressClass/PXC CR。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ftc-platform-setup
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]
+    verbs: ["get", "delete"]
+  - apiGroups: ["pxc.percona.com"]
+    resources: ["perconaxtradbclusters"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ftc-platform-setup
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform-setup
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ftc-platform-setup
+---
+# 向导默认值。镜像地址由初始化页面覆盖，不在这里写死成公开仓库。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ftc-platform-install
+  namespace: ftc-platform
+data:
+  PLATFORM_IMAGE: REPLACE_WITH_PLATFORM_IMAGE
+  MYSQL_OPERATOR_IMAGE: ""
+  MYSQL_IMAGE: ""
+  MYSQL_PROXY_IMAGE: ""
+  MYSQL_BACKUP_IMAGE: ""
+  MYSQL_REPLICAS: "3"
+  MYSQL_STORAGE_SIZE: "200Gi"
+  MYSQL_STORAGE_CLASS: "ftc-platform-local"
+  INGRESS_CLASS: "nginx"
+  INGRESS_HOST: ""
+  SETUP_RUNTIME_SECRET: "ftc-platform-runtime"
+---
+# 首次启动生成 setup token 和 32 字节加密密钥；重复执行不会覆盖。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ftc-platform-bootstrap
+  namespace: ftc-platform
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ftc-platform-bootstrap
+    spec:
+      serviceAccountName: ftc-platform-bootstrap
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: bootstrap
+          image: REPLACE_WITH_PLATFORM_IMAGE
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if kubectl -n ftc-platform get secret ftc-platform-bootstrap >/dev/null 2>&1; then
+                echo "bootstrap secret already exists"
+                echo "setup token: $(kubectl -n ftc-platform get secret ftc-platform-bootstrap -o jsonpath='{.data.setup-token}' | base64 -d)"
+                exit 0
+              fi
+              token="$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | cut -c1-32)"
+              key="$(head -c 32 /dev/urandom | base64)"
+              kubectl -n ftc-platform create secret generic ftc-platform-bootstrap \
+                --from-literal=setup-token="$token" \
+                --from-literal=encryption-key="$key"
+              echo "setup token: $token"
+              echo "encryption key: $key"
+              echo "请立即备份 encryption key；丢失后已纳管集群的 Kubeconfig 将无法解密。"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          env:
+            - { name: HOME, value: "/tmp" }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ftc-platform-setup
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ftc-platform-setup
+    spec:
+      serviceAccountName: ftc-platform-setup
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: setup
+          image: REPLACE_WITH_PLATFORM_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: SETUP_MODE, value: "true" }
+            - { name: LISTEN_ADDR, value: ":8080" }
+            - { name: WEB_DIST_DIR, value: "/app/web" }
+            - { name: SECURE_COOKIES, value: "true" }
+            - { name: TRUST_PROXY_HEADERS, value: "true" }
+            - { name: SETUP_DEFAULT_DB_HOST, value: "platform-mysql-haproxy.ftc-platform.svc" }
+            - { name: SETUP_DEFAULT_DB_NAME, value: "ftc_platform" }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: SETUP_TOKEN
+              valueFrom: { secretKeyRef: { name: ftc-platform-bootstrap, key: setup-token } }
+            - name: CREDENTIAL_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: ftc-platform-bootstrap, key: encryption-key } }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ftc-platform-setup
+  namespace: ftc-platform
+spec:
+  selector:
+    app.kubernetes.io/name: ftc-platform-setup
+  ports:
+    - { name: http, port: 80, targetPort: http }

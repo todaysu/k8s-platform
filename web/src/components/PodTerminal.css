@@ -1,61 +1,137 @@
-.ks-pod-terminal-card {
+.ks-pod-terminal-card.pf-v6-c-card {
+  background: #17222d;
+  border: 1px solid #31414f;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px #12202d0a;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   overflow: hidden;
   width: 100%;
 }
 
-.ks-pod-terminal-header {
-  align-items: center;
-  border-bottom: 1px solid var(--pf-t--global--border--color--default);
-  display: flex;
-  gap: var(--pf-t--global--spacer--md);
-  justify-content: space-between;
-  padding: 1.25rem 1.5rem;
-}
-
-.ks-pod-terminal-header > div {
-  min-width: 0;
-}
-
-.ks-pod-terminal-header span {
-  color: var(--pf-t--global--text--color--subtle);
-  display: block;
-  margin-top: .3rem;
-}
-
-.ks-pod-terminal-card .pf-v6-c-card__body {
-  display: grid;
-  gap: 1rem;
-  min-width: 0;
-  overflow: hidden;
-}
-
 .ks-pod-terminal-toolbar {
   align-items: center;
-  display: grid;
-  gap: var(--pf-t--global--spacer--sm);
-  grid-template-columns: minmax(12rem, 18rem) minmax(10rem, 14rem) auto minmax(0, 1fr);
+  background: #202e3b;
+  border-bottom: 1px solid #344352;
+  color: #e9eff5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 8px 12px;
+}
+
+.ks-page .ks-pod-terminal-card .ks-pod-terminal-toolbar {
+  gap: 8px 12px;
+  padding: 8px 12px;
+}
+
+.ks-pod-terminal-identity {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ks-pod-terminal-mark {
+  color: #90bde1;
+  font: 600 20px/1 Menlo, monospace;
+}
+
+.ks-pod-terminal-context {
+  background: #2b3d4e;
+  border: 1px solid #40566a;
+  border-radius: 4px;
+  color: #b8cbdd;
+  display: inline-block;
+  font-size: 12px;
+  max-width: 16rem;
+  overflow: hidden;
+  padding: 2px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ks-pod-terminal-status {
+  align-items: center;
+  color: #a9b6c3;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.ks-pod-terminal-status i {
+  background: #8394a5;
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+
+.ks-pod-terminal-status.is-connected {
+  color: #a3dbb8;
+}
+
+.ks-pod-terminal-status.is-connected i {
+  background: #6bc58e;
+}
+
+.ks-pod-terminal-status.is-connecting i {
+  background: #ecc66b;
+}
+
+.ks-pod-terminal-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
 }
 
 .ks-pod-terminal-field,
 .ks-pod-terminal-field .pf-v6-c-form-control {
   min-width: 0;
-  width: 100%;
+  width: 10.5rem;
 }
 
-.ks-pod-terminal-action {
-  min-width: 7rem;
+.ks-pod-terminal-field .pf-v6-c-form-control > select {
+  font-size: 12px;
+}
+
+.ks-pod-terminal-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ks-pod-terminal-actions .pf-v6-c-button {
   white-space: nowrap;
 }
 
-.ks-pod-terminal-target {
-  color: var(--pf-t--global--text--color--subtle);
+.ks-pod-terminal-esc {
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font: 11px/1.4 Menlo, monospace;
+  margin-left: 8px;
+  opacity: .75;
+  padding: 1px 5px;
+}
+
+.ks-pod-terminal-card .pf-v6-c-card__body {
+  background: #17222d;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-width: 0;
   overflow: hidden;
-  text-align: end;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 16px 18px 18px;
+}
+
+.ks-pod-terminal-card .pf-v6-c-alert {
+  margin: 0;
 }
 
 .ks-pod-terminal {
@@ -81,35 +157,82 @@
   max-width: 100%;
 }
 
-@media (max-width: 64rem) {
-  .ks-pod-terminal-toolbar {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  }
+.ks-pod-terminal-card.is-fullscreen {
+  background: #17222d;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  inset: 0;
+  max-height: 100dvh;
+  overscroll-behavior: contain;
+  position: fixed;
+  width: auto;
+  z-index: 1001;
+}
 
-  .ks-pod-terminal-target {
-    grid-column: 1 / -1;
-    text-align: start;
+.ks-pod-terminal-card.is-fullscreen .ks-pod-terminal-toolbar {
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.ks-pod-terminal-card.is-fullscreen .pf-v6-c-card__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ks-pod-terminal-card.is-fullscreen .ks-pod-terminal {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.ks-pod-terminal-card.is-fullscreen .pf-v6-c-alert {
+  flex-shrink: 0;
+}
+
+@media (max-width: 64rem) {
+  .ks-pod-terminal-field,
+  .ks-pod-terminal-field .pf-v6-c-form-control {
+    width: 9.5rem;
   }
 }
 
 @media (max-width: 48rem) {
-  .ks-pod-terminal-header {
-    align-items: flex-start;
-  }
-
   .ks-pod-terminal-toolbar {
     align-items: stretch;
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    padding: 12px;
   }
 
-  .ks-pod-terminal-action,
-  .ks-pod-terminal-target {
-    grid-column: 1;
+  .ks-pod-terminal-identity {
+    flex-wrap: wrap;
+  }
+
+  .ks-pod-terminal-controls {
     width: 100%;
   }
 
-  .ks-pod-terminal-target {
-    white-space: normal;
+  .ks-pod-terminal-field,
+  .ks-pod-terminal-field .pf-v6-c-form-control {
+    flex: 1;
+    width: auto;
+  }
+
+  .ks-pod-terminal-actions {
+    width: 100%;
+  }
+
+  .ks-pod-terminal-actions .pf-v6-c-button {
+    flex: 1;
+  }
+
+  .ks-pod-terminal-card .pf-v6-c-card__body {
+    padding: 12px;
   }
 
   .ks-pod-terminal {

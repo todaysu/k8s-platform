@@ -82,7 +82,7 @@ func TestCapacityComparesPlatformRequestsWithDeliveryBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestFleetCapacityReturnsSuccessfulSnapshotsAndIsolatesFailures(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestCapacityClassificationOnlyUsesGlobalBusinessNamespaces(t *testing.T) {
 
 func TestCapacityReportsNewEmptyPlatformNamespaceWithoutChangingBaseline(t *testing.T) {
 	cipher, _ := NewAESGCMCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	delivered := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	baseline := &CapacityBaseline{ID: 1, ClusterID: "cluster-1", CapturedAt: delivered, SystemNamespaces: []string{"kube-system"}, CPUAllocatableMilli: 8000}
 	repository := &capturingRepository{record: ClusterRecord{ManagedCluster: ManagedCluster{ID: "cluster-1"}, EncryptedCredentials: encrypted}, baseline: baseline}
@@ -186,10 +186,13 @@ func TestCapacityReportsNewEmptyPlatformNamespaceWithoutChangingBaseline(t *test
 
 func TestCapacityDiscoveryMergesNamespacesAcrossTechnologyStacks(t *testing.T) {
 	cipher, _ := NewAESGCMCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	// Each cluster needs its own ciphertext: credentials are bound to the
+	// cluster id, so one sealed value cannot be shared by two records.
+	encryptedA, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "a")
+	encryptedB, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "b")
 	repo := &multiRecordRepository{records: []ClusterRecord{
-		{ManagedCluster: ManagedCluster{ID: "a", TechnologyStack: "TCS"}, EncryptedCredentials: encrypted},
-		{ManagedCluster: ManagedCluster{ID: "b", TechnologyStack: "OCP"}, EncryptedCredentials: encrypted},
+		{ManagedCluster: ManagedCluster{ID: "a", TechnologyStack: "TCS"}, EncryptedCredentials: encryptedA},
+		{ManagedCluster: ManagedCluster{ID: "b", TechnologyStack: "OCP"}, EncryptedCredentials: encryptedB},
 	}}
 	service := NewOnboardingService(fakeConnector{capacity: ClusterCapacity{Namespaces: []NamespaceCapacity{{Namespace: "myapp", Class: "business", Pods: 1, CapacityValues: CapacityValues{CPURequestsMilli: 10}}}}}, cipher, repo)
 	overview, err := service.GetCapacityClassification(context.Background())
@@ -253,7 +256,7 @@ func TestListReturnsStoredClusterHealthWithoutLiveCollection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +285,7 @@ func TestGetNodesUsesStoredClusterCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +310,7 @@ func TestGetWorkloadsUsesStoredClusterCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, err := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,11 +368,16 @@ contexts:
 	if strings.Contains(repository.record.EncryptedCredentials, "super-secret-token") {
 		t.Fatal("stored credentials contain plaintext token")
 	}
-	decrypted, err := cipher.Decrypt(repository.record.EncryptedCredentials)
+	// The ciphertext is bound to the generated cluster id, so decryption must
+	// present that same id; any other id must fail authentication.
+	decrypted, err := cipher.Decrypt(repository.record.EncryptedCredentials, managed.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(decrypted), "super-secret-token") {
 		t.Fatal("encrypted credential envelope is missing token")
+	}
+	if _, err = cipher.Decrypt(repository.record.EncryptedCredentials, "another-cluster"); err == nil {
+		t.Fatal("credential must not open under a different cluster id")
 	}
 }

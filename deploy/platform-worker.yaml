@@ -1,0 +1,56 @@
+# Optional persistent security scan Worker; apply after shared MySQL initialization.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ftc-platform-worker
+  namespace: ftc-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: ftc-platform-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ftc-platform-worker }
+    spec:
+      serviceAccountName: ftc-platform
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: worker
+          # 平台自身镜像：替换为企业镜像仓库地址。
+          # 多架构集群请推送 manifest list，平台按节点架构自动选择。
+          image: your-registry.example.com/ftc-platform:0.1.0
+          envFrom:
+            - configMapRef: { name: ftc-platform }
+          env:
+            - { name: PLATFORM_ROLE, value: worker }
+            - { name: SETUP_MODE, value: 'false' }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: PLATFORM_DATABASE_DSN
+              valueFrom: { secretKeyRef: { name: ftc-platform-runtime, key: dsn } }
+            - name: CREDENTIAL_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: ftc-platform, key: encryption-key } }
+          ports:
+            - { name: health, containerPort: 8080 }
+            - { name: metrics, containerPort: 9090 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+          resources:
+            requests: { cpu: '1', memory: 1Gi }
+            limits: { cpu: '2', memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ['ALL'] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

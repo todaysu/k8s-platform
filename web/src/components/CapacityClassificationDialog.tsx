@@ -73,6 +73,7 @@ export default function CapacityClassificationDialog({ onClose, onSaved, open }:
       {error && <Alert isInline title="业务命名空间操作失败" variant="danger">{error}{!data && <Button onClick={() => void load()} variant="link">重新读取</Button>}</Alert>}
       {loading ? <div className="ks-classification-loading"><Spinner /><span>正在读取业务清单和集群 Namespace…</span></div> : data && <>
         <div className="ks-business-rule-summary"><span>当前规则：{data.classification.id ? `版本 ${data.classification.id}` : '尚未保存'}</span><span>业务 Namespace：{business.length}</span><span>集群已发现：{discovered.length}</span></div>
+        <span className="ks-classification-view-hint">业务 Namespace 为全局规则，保存后对所有纳管集群生效。</span>
         <FormGroup fieldId="business-namespaces" label="业务 Namespace">
           <TextArea id="business-namespaces" aria-describedby="business-namespaces-help" isDisabled={saving} onChange={(_, value) => setText(value)} placeholder={'myapp\norders\npayments'} resizeOrientation="vertical" rows={4} value={text} validated={invalid.length ? 'error' : 'default'} />
           <span id="business-namespaces-help" className="ks-classification-view-hint">每行一个 Namespace，或用逗号分隔。</span>

@@ -14,12 +14,12 @@ func (store *SQLite) SaveFleetCapacitySuccess(ctx context.Context, item cluster.
 	if err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
-	_, err = store.db.ExecContext(ctx, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,?,?,?, '') ON CONFLICT(cluster_id) DO UPDATE SET captured_at=excluded.captured_at,last_attempt_at=excluded.last_attempt_at,payload=excluded.payload,failure_code=''`, item.ClusterID, at.UTC().Format(timeLayout), at.UTC().Format(timeLayout), string(payload))
+	_, err = collectionExec(ctx, store.db, true, item.ClusterID, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,?,?,?, '') ON CONFLICT(cluster_id) DO UPDATE SET captured_at=excluded.captured_at,last_attempt_at=excluded.last_attempt_at,payload=excluded.payload,failure_code=''`, item.ClusterID, at.UTC().Format(timeLayout), at.UTC().Format(timeLayout), string(payload))
 	return capacityPersistenceError(err)
 }
 
 func (store *SQLite) SaveFleetCapacityFailure(ctx context.Context, item cluster.FleetCapacityFailure, at time.Time) error {
-	_, err := store.db.ExecContext(ctx, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,NULL,?,NULL,?) ON CONFLICT(cluster_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,failure_code=excluded.failure_code`, item.ClusterID, at.UTC().Format(timeLayout), item.Code)
+	_, err := collectionExec(ctx, store.db, true, item.ClusterID, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,NULL,?,NULL,?) ON CONFLICT(cluster_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,failure_code=excluded.failure_code`, item.ClusterID, at.UTC().Format(timeLayout), item.Code)
 	return capacityPersistenceError(err)
 }
 
@@ -70,12 +70,12 @@ func (store *MySQL) SaveFleetCapacitySuccess(ctx context.Context, item cluster.F
 	if err != nil {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
-	_, err = store.db.ExecContext(ctx, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,?,?,?, '') ON DUPLICATE KEY UPDATE captured_at=VALUES(captured_at),last_attempt_at=VALUES(last_attempt_at),payload=VALUES(payload),failure_code=''`, item.ClusterID, at.UTC(), at.UTC(), payload)
+	_, err = collectionExec(ctx, store.db, false, item.ClusterID, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,?,?,?, '') ON DUPLICATE KEY UPDATE captured_at=VALUES(captured_at),last_attempt_at=VALUES(last_attempt_at),payload=VALUES(payload),failure_code=''`, item.ClusterID, at.UTC(), at.UTC(), payload)
 	return capacityPersistenceError(err)
 }
 
 func (store *MySQL) SaveFleetCapacityFailure(ctx context.Context, item cluster.FleetCapacityFailure, at time.Time) error {
-	_, err := store.db.ExecContext(ctx, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,NULL,?,NULL,?) ON DUPLICATE KEY UPDATE last_attempt_at=VALUES(last_attempt_at),failure_code=VALUES(failure_code)`, item.ClusterID, at.UTC(), item.Code)
+	_, err := collectionExec(ctx, store.db, false, item.ClusterID, `INSERT INTO fleet_capacity_snapshots(cluster_id,captured_at,last_attempt_at,payload,failure_code) VALUES(?,NULL,?,NULL,?) ON DUPLICATE KEY UPDATE last_attempt_at=VALUES(last_attempt_at),failure_code=VALUES(failure_code)`, item.ClusterID, at.UTC(), item.Code)
 	return capacityPersistenceError(err)
 }
 
@@ -137,4 +137,34 @@ func capacityPersistenceError(err error) error {
 		return &cluster.Error{Code: cluster.CodePersistenceFailed}
 	}
 	return nil
+}
+
+// GetCapacitySnapshot does a primary-key read; missing snapshots never trigger remote collection.
+func (store *SQLite) GetCapacitySnapshot(ctx context.Context, id string) (cluster.ClusterCapacity, error) {
+	return readCapacitySnapshot(ctx, store.db, id)
+}
+func (store *MySQL) GetCapacitySnapshot(ctx context.Context, id string) (cluster.ClusterCapacity, error) {
+	return readCapacitySnapshot(ctx, store.db, id)
+}
+func readCapacitySnapshot(ctx context.Context, db *sql.DB, id string) (cluster.ClusterCapacity, error) {
+	var payload sql.NullString
+	var failure string
+	err := db.QueryRowContext(ctx, `SELECT payload,failure_code FROM fleet_capacity_snapshots WHERE cluster_id=?`, id).Scan(&payload, &failure)
+	if err == sql.ErrNoRows {
+		return cluster.ClusterCapacity{}, &cluster.Error{Code: cluster.CodeCapacityPending}
+	}
+	if err != nil {
+		return cluster.ClusterCapacity{}, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	if !payload.Valid || payload.String == "" {
+		if failure == "" {
+			failure = cluster.CodeCapacityPending
+		}
+		return cluster.ClusterCapacity{}, &cluster.Error{Code: failure}
+	}
+	var result cluster.ClusterCapacity
+	if json.Unmarshal([]byte(payload.String), &result) != nil {
+		return result, &cluster.Error{Code: cluster.CodePersistenceFailed}
+	}
+	return result, nil
 }

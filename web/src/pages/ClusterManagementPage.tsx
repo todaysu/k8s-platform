@@ -1,6 +1,7 @@
 import OperationsToolsPage from './OperationsToolsPage'
 import FleetMonitoringPage from './FleetMonitoringPage'
 import PlatformAccessPage from './PlatformAccessPage'
+import SecurityBaselinePage from './SecurityBaselinePage'
 import { usePermission } from '../auth/context'
 import { AccountMenu } from '../auth/Auth'
 import {
@@ -48,7 +49,8 @@ import {
   AngleRightIcon,
   BellIcon,
   BarsIcon,
-  ChartBarIcon,
+  ChartLineIcon,
+  ChartPieIcon,
   CheckCircleIcon,
   CubesIcon,
   ExclamationCircleIcon,
@@ -56,6 +58,7 @@ import {
   PlusIcon,
   SearchIcon,
   ServerIcon,
+  ShieldAltIcon,
   SyncAltIcon,
   TachometerAltIcon,
 } from '@patternfly/react-icons'
@@ -63,6 +66,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchClusters, fetchFleetCapacity, type FleetCapacity, type GlobalResourceResult, type ManagedCluster } from '../api/clusters'
+import { fetchPlatformSettings, type PlatformSettings } from '../api/settings'
 import AddClusterDialog from '../components/AddClusterDialog'
 import GlobalResourceSearch from '../components/GlobalResourceSearch'
 import { PlatformBrand, PLATFORM_FULL_NAME } from '../components/PlatformBrand'
@@ -155,15 +159,16 @@ const statusMeta: Record<ClusterStatus, {
   unreachable: { icon: ExclamationCircleIcon, label: '连接失败', status: 'danger' },
 }
 
-type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'inspections' | 'access' | 'tools' | 'monitoring'
+type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'inspections' | 'security' | 'access' | 'tools' | 'monitoring'
 
 const navItems = [
   { icon: TachometerAltIcon, id: 'overview' as const, label: '概览' },
   { icon: ServerIcon, id: 'clusters' as const, label: '集群' },
-  { icon: ChartBarIcon, id: 'monitoring' as const, label: '监控' },
-  { icon: ChartBarIcon, id: 'capacity' as const, label: '容量' },
+  { icon: ChartLineIcon, id: 'monitoring' as const, label: '监控' },
+  { icon: ChartPieIcon, id: 'capacity' as const, label: '容量' },
   { icon: BellIcon, id: 'events' as const, label: '跨集群事件' },
   { icon: SearchIcon, id: 'inspections' as const, label: '巡检分析' },
+  { icon: ShieldAltIcon, id: 'security' as const, label: '安全扫描' },
   { icon: CubesIcon, id: 'tools' as const, label: '运维工具' },
 ]
 
@@ -477,9 +482,10 @@ function clusterIDFromPath() {
 }
 
 function navigationSectionFromLocation(): NavigationSection {
+ if (window.location.pathname === '/security' || window.location.pathname === '/tools/security-baseline') return 'security'
  if (window.location.pathname === '/tools' || window.location.pathname.startsWith('/tools/')) return 'tools'
  if (window.location.pathname === '/monitoring') return 'monitoring'
-  if (window.location.pathname === '/settings/access') return 'access'
+  if (window.location.pathname === '/settings' || window.location.pathname.startsWith('/settings/')) return 'access'
   if (window.location.pathname === '/capacity') return 'capacity'
   if (window.location.pathname === '/events') return 'events'
   if (window.location.pathname === '/inspections') return 'inspections'
@@ -491,6 +497,7 @@ function ClusterManagementPage() {
 
   const loadingRef = useRef(false)
   const [activeClusterID, setActiveClusterID] = useState<string | null>(() => clusterIDFromPath())
+  const [toolTitle, setToolTitle] = useState('运维工具')
   const [activeSection, setActiveSection] = useState<NavigationSection>(() => navigationSectionFromLocation())
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [fleetCapacity, setFleetCapacity] = useState<FleetCapacity | null>(null)
@@ -507,6 +514,8 @@ function ClusterManagementPage() {
   const [perPage, setPerPage] = useState(20)
   const [query, setQuery] = useState('')
   const [refreshedAt, setRefreshedAt] = useState('—')
+  const [clusterRefreshSeconds, setClusterRefreshSeconds] = useState(30)
+
   const [status, setStatus] = useState<'ALL' | ClusterStatus>('ALL')
   const [technologyStack, setTechnologyStack] = useState('ALL')
   const [successNotice, setSuccessNotice] = useState<{ message: string; title: string } | null>(null)
@@ -540,13 +549,21 @@ function ClusterManagementPage() {
   }, [])
 
   useEffect(() => {
+    let mounted = true
+    void fetchPlatformSettings().then((value) => { if (mounted) setClusterRefreshSeconds(value.runtime.auto_refresh_seconds) }).catch(() => undefined)
+    const onSettingsSaved = (event: Event) => setClusterRefreshSeconds((event as CustomEvent<PlatformSettings>).detail.runtime.auto_refresh_seconds)
+    window.addEventListener('platform-settings-saved', onSettingsSaved)
+    return () => { mounted = false; window.removeEventListener('platform-settings-saved', onSettingsSaved) }
+  }, [])
+
+  useEffect(() => {
     const timeoutId = window.setTimeout(() => void loadClusters(), 0)
-    const intervalId = window.setInterval(() => { if (!document.hidden) void loadClusters() }, 30_000)
+    const intervalId = window.setInterval(() => { if (!document.hidden) void loadClusters() }, clusterRefreshSeconds * 1000)
     return () => {
       window.clearTimeout(timeoutId)
       window.clearInterval(intervalId)
     }
-  }, [loadClusters])
+  }, [clusterRefreshSeconds, loadClusters])
 
   useEffect(() => {
     if (activeSection !== 'overview' && activeSection !== 'inspections') return undefined
@@ -651,7 +668,7 @@ function ClusterManagementPage() {
   }
 
   const navigateFromSidebar = (section: NavigationSection) => {
- if (section === 'tools' || section === 'monitoring') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
+ if (section === 'tools' || section === 'monitoring' || section === 'security') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
     if (section === 'access') { window.history.pushState({ section }, '', '/settings/access'); setActiveClusterID(null); setActiveSection('access'); return }
     if (section === 'clusters') {
       showClusterList('ALL')
@@ -720,7 +737,7 @@ function ClusterManagementPage() {
               <div className="ks-title-row">
                 <div>
                   <Title headingLevel="h1" size="2xl">
-                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? '运维工具' : activeSection === 'monitoring' ? '监控' : '集群'}
+                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'security' ? '安全扫描' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? toolTitle : activeSection === 'monitoring' ? '监控' : '集群'}
                   </Title>
 
                 </div>
@@ -736,8 +753,8 @@ function ClusterManagementPage() {
             </PageSection>
 
             <PageSection className="ks-content-section">
-              {activeSection !== 'access' && activeSection !== 'tools' && loadError && <Alert isInline title="集群列表读取失败" variant="danger">{loadError}</Alert>}
-              {activeSection !== 'access' && activeSection !== 'tools' && unreachableCount > 0 && (
+              {activeSection !== 'access' && activeSection !== 'tools' && activeSection !== 'security' && loadError && <Alert isInline title="集群列表读取失败" variant="danger">{loadError}</Alert>}
+              {activeSection !== 'access' && activeSection !== 'tools' && activeSection !== 'security' && unreachableCount > 0 && (
                 <Alert
                   actionLinks={<AlertActionLink onClick={() => showClusterList('unreachable')}>查看异常集群</AlertActionLink>}
                   isInline
@@ -779,7 +796,9 @@ function ClusterManagementPage() {
               </div> : activeSection === 'capacity' ? (
                 <FleetCapacityPage onOpenCluster={openClusterCapacity} />
               ) : activeSection === 'tools' ? (
- <OperationsToolsPage clusters={clusters}/>
+ <OperationsToolsPage onTitleChange={setToolTitle} clusters={clusters}/>
+ ) : activeSection === 'security' ? (
+ <SecurityBaselinePage />
  ) : activeSection === 'monitoring' ? (
  <FleetMonitoringPage clusters={clusters} onOpenCluster={openCluster} onRefresh={()=>void loadClusters()}/>
  ) : activeSection === 'access' ? (
@@ -863,7 +882,7 @@ function ClusterManagementPage() {
                       {(query || environment !== 'ALL' || clusterType !== 'ALL' || status !== 'ALL' || technologyStack !== 'ALL') && (
                         <Button isInline onClick={clearFilters} variant="link">清除筛选</Button>
                       )}
-                      <span className="ks-auto-refresh"><SyncAltIcon /> 每 30 秒刷新</span>
+                      <span className="ks-auto-refresh"><SyncAltIcon /> 每 {clusterRefreshSeconds} 秒刷新</span>
                     </ToolbarItem>
                   </ToolbarContent>
                 </Toolbar>

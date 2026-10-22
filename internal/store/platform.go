@@ -4,6 +4,7 @@ import (
 	"database/sql"
 
 	"example.com/k8s-platform/internal/cluster"
+	"example.com/k8s-platform/internal/platformsettings"
 )
 
 // PlatformStore is the complete persistent boundary used by the platform.
@@ -18,6 +19,11 @@ type PlatformStore interface {
 	cluster.FleetCapacityRepository
 	cluster.EventRepository
 	cluster.ResourceIndexRepository
+	cluster.SecurityBaselineRepository
+	cluster.SecurityJobRepository
+	cluster.RequestQuotaRepository
+	cluster.CollectionShardRepository
+	platformsettings.Repository
 	SQLDB() *sql.DB
 	Close() error
 }

@@ -869,3 +869,117 @@
 .ks-arthas-card > .pf-v6-c-card__body {
   overflow: visible;
 }
+
+/* A single border per surface; PatternFly's wrapper owns select outlines. */
+.ks-arthas-page .ks-arthas-card,
+.ks-arthas-side .ks-arthas-playbook { --pf-v6-c-card--BorderWidth:0px; --pf-v6-c-card--BoxShadow:none; border:1px solid #dce3eb; border-radius:8px; box-shadow:none; }
+.ks-arthas-page .ks-arthas-card::before,
+.ks-arthas-page .ks-arthas-card::after { border:0; box-shadow:none; }
+.ks-page .ks-arthas-card > .pf-v6-c-card__body { padding:20px; }
+.ks-arthas-form .pf-v6-c-form-control { border-radius:6px; padding:0; }
+.ks-arthas-form .pf-v6-c-form-control::before,
+.ks-arthas-form .pf-v6-c-form-control::after { border:0; box-shadow:none; }
+.ks-arthas-form .pf-v6-c-form-control > select { height:38px; border:0; border-radius:5px; padding:0 10px; background:transparent; box-shadow:none; }
+.ks-arthas-form .pf-v6-c-form-control.pf-m-disabled { background:#f1f3f6; }
+.ks-arthas-pod-trigger { border-radius:6px; }
+.ks-arthas-activebar { border:1px solid #dce3eb; border-radius:6px; background:#f7f9fb; }
+.ks-arthas-guide-toggle { display:flex; align-items:center; flex-wrap:wrap; gap:8px; border-block:1px solid #e3e8ee; padding:8px 0; }
+.ks-arthas-guide-toggle > span { color:#62778a; font-size:12px; }
+.ks-arthas-workspace { grid-template-columns:minmax(0,1fr); }
+.ks-arthas-workspace.has-guide { grid-template-columns:minmax(0,1.55fr) minmax(400px,.85fr); }
+.ks-arthas-side[hidden] { display:none; }
+.ks-arthas-side .ks-arthas-community-cases { display:block; }
+.ks-arthas-session-head { gap:16px; margin-bottom:14px; align-items:center; }
+.ks-arthas-session-head p { margin-bottom:0; overflow-wrap:anywhere; }
+.ks-arthas-terminal-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; flex-shrink:0; }
+.ks-arthas-terminal-wrap { background:#151f2b; min-height:0; border-radius:5px; border:1px solid #22354a; }
+.ks-arthas-terminal { box-sizing:border-box; height:clamp(360px,52vh,640px); padding:12px; min-width:0; }
+.ks-arthas-terminal-status { position:absolute; top:12px; right:16px; color:#bdd5ea; background:#22354a; padding:4px 8px; border-radius:4px; font-size:12px; pointer-events:none; }
+.ks-arthas-command-bar input { min-width:0; }
+.ks-arthas-session-card.is-fullscreen { position:fixed; inset:12px; z-index:9999; width:auto; margin:0; background:#fff; box-shadow:0 0 0 100vmax rgba(15,23,42,.45); overflow:auto; }
+.ks-page .ks-arthas-session-card.is-fullscreen > .pf-v6-c-card__body { display:flex; flex-direction:column; height:100%; min-height:0; padding:16px; }
+.ks-arthas-session-card.is-fullscreen .ks-arthas-terminal-wrap { flex:1; min-height:200px; }
+.ks-arthas-session-card.is-fullscreen .ks-arthas-terminal { height:100%; min-height:0; }
+.ks-arthas-session-card.is-fullscreen .ks-arthas-command-bar,
+.ks-arthas-session-card.is-fullscreen .ks-arthas-session-head,
+.ks-arthas-session-card.is-fullscreen .ks-arthas-quick { flex-shrink:0; }
+@media (max-width:1280px) { .ks-arthas-workspace.has-guide { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:620px) { .ks-arthas-session-head { align-items:flex-start; flex-direction:column; } .ks-arthas-session-card.is-fullscreen { inset:4px; } }
+/* Fullscreen uses a stable portal host moved to body, outside Page's clipping. */
+.ks-arthas-session-card.is-fullscreen > .pf-v6-c-card__body { display:flex; flex-direction:column; height:100%; min-height:0; padding:16px; }
+.ks-arthas-session-card.is-fullscreen { box-sizing:border-box; }
+
+/* Keep both setup surfaces on the same baseline. Only the lower pane scrolls. */
+.ks-arthas-page { height:var(--ks-arthas-page-height,auto); min-height:0; }
+.ks-arthas-setup { align-items:stretch; }
+.ks-arthas-setup > .ks-arthas-card { height:100%; }
+.ks-arthas-pinned { position:relative; z-index:70; flex-shrink:0; display:flex; flex-direction:column; gap:18px; background:var(--pf-t--global--background--color--secondary--default,#f3f6f9); padding-block:8px 16px; border-bottom:1px solid #dce3eb; }
+.ks-arthas-pinned .ks-arthas-progress small { overflow-wrap:anywhere; }
+.ks-arthas-pinned .ks-arthas-setup { margin:0; }
+.ks-arthas-scroll-region { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; display:flex; flex-direction:column; gap:18px; padding-bottom:16px; }
+.ks-arthas-scroll-region > * { flex-shrink:0; }
+.ks-arthas-scroll-region .ks-arthas-side { position:static; max-height:none; overflow:visible; }
+.ks-arthas-scroll-region :is(button,input,[tabindex]) { scroll-margin-block-start:12px; }
+@media (min-width:900px) and (max-height:900px) {
+  .ks-arthas-pinned { gap:12px; padding-block:4px 12px; }
+  .ks-arthas-pinned .ks-arthas-header p { display:none; }
+  .ks-arthas-pinned .ks-arthas-setup { grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr); }
+  .ks-arthas-pinned .ks-arthas-progress li { padding-block:7px; }
+  .ks-page .ks-arthas-pinned .ks-arthas-card > .pf-v6-c-card__body { padding:16px; }
+}
+@media (max-width:899px) {
+  .ks-arthas-pinned { max-height:65dvh; overflow:auto; overscroll-behavior:contain; }
+  .ks-arthas-pinned .ks-arthas-header { position:sticky; top:0; z-index:1; background:#f3f6f9; }
+}
+
+/* Compact persistent target controls; the terminal follows in the same workspace. */
+.ks-arthas-page { gap:12px; }
+.ks-arthas-pinned { gap:10px; padding:0; border:0; }
+.ks-arthas-toolbar { display:flex; justify-content:flex-end; min-height:28px; }
+.ks-arthas-toolbar > button { padding-block:0; }
+.ks-page .ks-arthas-target-card > .pf-v6-c-card__body,
+.ks-arthas-target-card > .pf-v6-c-card__body {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px 16px; padding:16px 20px;
+}
+.ks-arthas-target-card .ks-arthas-form { grid-template-columns:minmax(120px,1fr) minmax(120px,1fr) minmax(220px,1.65fr) minmax(110px,1fr); gap:16px; }
+.ks-arthas-target-actions { align-self:end; padding-bottom:1px; }
+.ks-arthas-target-note { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; color:#66788a; font-size:12px; }
+.ks-arthas-target-note .pf-v6-c-check__label { font-size:12px; }
+.ks-arthas-target-card select:disabled { opacity:1; color:#526477; }
+.ks-arthas-scroll-region { gap:12px; }
+.ks-arthas-switch { position:relative; }
+.ks-arthas-switch-dismiss { position:fixed; inset:0; z-index:80; border:0; background:transparent; cursor:default; }
+.ks-arthas-switch-confirm { position:absolute; right:0; top:calc(100% + 8px); z-index:81; width:280px; padding:16px; background:#fff; border:1px solid #d5deea; border-radius:6px; box-shadow:0 8px 24px #162b4626; }
+.ks-arthas-switch-confirm p { margin:8px 0 16px; color:#66788a; }
+.ks-arthas-switch-confirm > div { display:flex; justify-content:flex-end; gap:8px; }
+.ks-arthas-session-head { gap:12px; }
+.ks-arthas-session-head h2 { white-space:nowrap; }
+.ks-arthas-main:empty { display:none; }
+@media(max-width:1000px) {
+  .ks-arthas-target-card .ks-arthas-form { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:620px) {
+  .ks-arthas-target-card > .pf-v6-c-card__body { grid-template-columns:minmax(0,1fr); }
+  .ks-arthas-target-actions { grid-row:2; }
+  .ks-arthas-pinned { max-height:none; overflow:visible; }
+}
+.ks-title-section .ks-title-row:has(.ks-arthas-toolbar) { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.ks-arthas-target-card .ks-arthas-form :is(button,select):disabled,
+.ks-arthas-target-card .ks-arthas-form [aria-disabled="true"] { opacity:1; color:#526477; -webkit-text-fill-color:#526477; }
+.ks-arthas-pod-popover { overscroll-behavior:contain; }
+.ks-arthas-pod-popover ul { max-height:min(240px,40dvh); overflow-y:auto; overscroll-behavior:contain; touch-action:pan-y; }
+.ks-arthas-workspace.has-guide:not(.is-active) { grid-template-columns:minmax(0,1fr); }
+
+.ks-arthas-command-notice { color:#66788a; font-size:12px; line-height:1.5; overflow-wrap:anywhere; margin-top:4px; }
+
+/* Scroll the guide independently, including at its top and bottom boundaries. */
+.ks-arthas-scroll-region .ks-arthas-side {
+  position:sticky;
+  top:0;
+  min-height:0;
+  max-height:var(--ks-arthas-guide-height,calc(100dvh - 280px));
+  overflow-y:auto;
+  overscroll-behavior-y:contain;
+  scrollbar-gutter:stable;
+  touch-action:pan-y;
+}

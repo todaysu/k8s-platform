@@ -14,12 +14,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
@@ -67,19 +69,6 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 	if err != nil {
 		return ClusterCapacity{}, err
 	}
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, cachedListOptions)
-	if err != nil {
-		return ClusterCapacity{}, mapConnectionError(err)
-	}
-	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
-	if err != nil {
-		return ClusterCapacity{}, mapConnectionError(err)
-	}
-
-	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, cachedListOptions)
-	if err != nil {
-		return ClusterCapacity{}, mapConnectionError(err)
-	}
 
 	businessSet := make(map[string]struct{}, len(rule.BusinessNamespaces))
 	for _, namespace := range rule.BusinessNamespaces {
@@ -92,13 +81,17 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 		SafetyReservePercent:    15,
 		Comparison:              CapacityComparison{Status: "not_set"},
 	}
-	for _, node := range nodes.Items {
+	if err := visitNodes(ctx, clientset, func(item *corev1.Node) error {
+		node := *item
 		if node.Spec.Unschedulable {
-			continue
+			return nil
 		}
 		snapshot.WorkerNodes++
 		snapshot.CPUAllocatableMilli += node.Status.Allocatable.Cpu().MilliValue()
 		snapshot.MemoryAllocatable += node.Status.Allocatable.Memory().Value()
+		return nil
+	}); err != nil {
+		return ClusterCapacity{}, err
 	}
 
 	byNamespace := make(map[string]*NamespaceCapacity)
@@ -117,12 +110,17 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 		return entry
 	}
 	// Namespace membership is independent of whether it currently contains scheduled Pods.
-	for _, namespace := range namespaces.Items {
-		ensureNamespace(namespace.Name).CreatedAt = namespace.CreationTimestamp.Time
+	if err := visitNamespaces(ctx, clientset, func(item *corev1.Namespace) error {
+		ensureNamespace(item.Name).CreatedAt = item.CreationTimestamp.Time
+		return nil
+	}); err != nil {
+		return ClusterCapacity{}, err
 	}
-	for _, pod := range pods.Items {
+
+	if err := visitPods(ctx, clientset, "", func(item *corev1.Pod) error {
+		pod := *item
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
+			return nil
 		}
 		values := effectivePodResources(pod)
 		if values.CPURequestsMilli == 0 {
@@ -133,7 +131,7 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 		}
 		if pod.Spec.NodeName == "" {
 			addCapacityValues(&snapshot.Pending, values)
-			continue
+			return nil
 		}
 		entry := ensureNamespace(pod.Namespace)
 		target := &snapshot.Platform
@@ -143,7 +141,11 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 		addCapacityValues(target, values)
 		entry.Pods++
 		addCapacityValues(&entry.CapacityValues, values)
+		return nil
+	}); err != nil {
+		return ClusterCapacity{}, err
 	}
+
 	sort.Strings(snapshot.SystemNamespaces)
 	for _, entry := range byNamespace {
 		snapshot.Namespaces = append(snapshot.Namespaces, *entry)
@@ -157,7 +159,7 @@ func (connector *KubernetesConnector) Capacity(ctx context.Context, parsed Parse
 		return snapshot.Namespaces[left].Namespace < snapshot.Namespaces[right].Namespace
 	})
 
-	services, err := clientset.CoreV1().Services("").List(ctx, cachedListOptions)
+	services, err := boundedServices(ctx, clientset)
 	if err == nil {
 		connector.collectCapacityUsage(ctx, clientset, services.Items, rule, &snapshot)
 	}
@@ -316,6 +318,29 @@ func (queue *terminalSizeQueue) Next() *remotecommand.TerminalSize {
 	return &remotecommand.TerminalSize{Width: size.Width, Height: size.Height}
 }
 
+// podShellCommand starts an interactive shell with a stable prompt. The shell
+// runs as the container process, so the prompt must be exported before exec
+// rather than typed into the session.
+func podShellCommand(shell, prompt string) []string {
+	shellPath := "/bin/sh"
+	if shell == "bash" {
+		shellPath = "/bin/bash"
+	}
+	if prompt == "" {
+		return []string{shellPath}
+	}
+	interactive := shellPath
+	if shell == "bash" {
+		// Avoid profile/rc files overriding PS1 after exec.
+		interactive = "/bin/bash --noprofile --norc"
+	}
+	return []string{shellPath, "-c", "export PS1=" + shellSingleQuote(prompt) + "; exec " + interactive}
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
 func (connector *KubernetesConnector) ExecPod(ctx context.Context, parsed ParsedKubeconfig, namespace, name string, options PodExecOptions) error {
 	config := connector.restConfig(parsed)
 	clientset, err := kubernetes.NewForConfig(config)
@@ -342,11 +367,11 @@ func (connector *KubernetesConnector) ExecPod(ctx context.Context, parsed Parsed
 	if !found {
 		return newError(CodeContainerNotFound)
 	}
-	shell := "/bin/sh"
-	if options.Shell == "bash" {
-		shell = "/bin/bash"
+	command := podShellCommand(options.Shell, options.Prompt)
+	if len(options.Command) > 0 {
+		command = options.Command
 	}
-	request := clientset.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(name).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container: options.Container, Command: []string{shell}, Stdin: true, Stdout: true, Stderr: true, TTY: true}, scheme.ParameterCodec)
+	request := clientset.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(name).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container: options.Container, Command: command, Stdin: true, Stdout: true, Stderr: options.DisableTTY, TTY: !options.DisableTTY}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, request.URL())
 	if err != nil {
 		return mapConnectionError(err)
@@ -357,7 +382,11 @@ func (connector *KubernetesConnector) ExecPod(ctx context.Context, parsed Parsed
 	}
 	// Kubernetes combines stderr into stdout for TTY sessions. Passing a separate
 	// stderr stream is invalid for some API server versions and proxies.
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: options.Stdin, Stdout: options.Stdout, Tty: true, TerminalSizeQueue: sizeQueue})
+	streamOptions := remotecommand.StreamOptions{Stdin: options.Stdin, Stdout: options.Stdout, Tty: !options.DisableTTY, TerminalSizeQueue: sizeQueue}
+	if options.DisableTTY {
+		streamOptions.Stderr = options.Stderr
+	}
+	err = executor.StreamWithContext(ctx, streamOptions)
 	if apierrors.IsForbidden(err) {
 		return newError(CodePodExecForbidden)
 	}
@@ -379,30 +408,46 @@ var (
 )
 
 func (connector *KubernetesConnector) ListEvents(ctx context.Context, parsed ParsedKubeconfig) (EventBatch, error) {
-	clientset, err := connector.listClientset(parsed)
+	client, err := connector.listClientset(parsed)
 	if err != nil {
 		return EventBatch{}, err
 	}
-	events, err := clientset.EventsV1().Events("").List(ctx, cachedListOptions)
-	if err == nil {
-		items := make([]ClusterEvent, 0, len(events.Items))
-		for index := range events.Items {
-			items = append(items, normalizedEventV1(&events.Items[index]))
+	batch := EventBatch{APIVersion: "events.k8s.io/v1", Items: []ClusterEvent{}}
+	missing := false
+	err = visitPages(ctx, func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+		page, e := client.EventsV1().Events("").List(ctx, options)
+		if e != nil {
+			missing = apierrors.IsNotFound(e) && options.Continue == ""
+			return nil, e
 		}
-		return EventBatch{APIVersion: "events.k8s.io/v1", ResourceVersion: events.ResourceVersion, Items: items}, nil
+		batch.ResourceVersion = page.ResourceVersion
+		return page, nil
+	}, func(item *eventsv1.Event) error {
+		batch.Items = append(batch.Items, normalizedEventV1(item))
+		return nil
+	})
+	if err == nil {
+		return batch, nil
 	}
-	if !apierrors.IsNotFound(err) {
-		return EventBatch{}, mapConnectionError(err)
+	if !missing {
+		return EventBatch{}, err
 	}
-	legacy, err := clientset.CoreV1().Events("").List(ctx, cachedListOptions)
+	batch = EventBatch{APIVersion: "v1", Items: []ClusterEvent{}}
+	err = visitPages(ctx, func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+		page, e := client.CoreV1().Events("").List(ctx, options)
+		if e != nil {
+			return nil, e
+		}
+		batch.ResourceVersion = page.ResourceVersion
+		return page, nil
+	}, func(item *corev1.Event) error {
+		batch.Items = append(batch.Items, normalizedCoreEvent(item))
+		return nil
+	})
 	if err != nil {
-		return EventBatch{}, mapConnectionError(err)
+		return EventBatch{}, err
 	}
-	items := make([]ClusterEvent, 0, len(legacy.Items))
-	for index := range legacy.Items {
-		items = append(items, normalizedCoreEvent(&legacy.Items[index]))
-	}
-	return EventBatch{APIVersion: "v1", ResourceVersion: legacy.ResourceVersion, Items: items}, nil
+	return batch, nil
 }
 
 func (connector *KubernetesConnector) WatchEvents(ctx context.Context, parsed ParsedKubeconfig, apiVersion string, resourceVersion string, receive func(ClusterEvent) error) error {
@@ -546,6 +591,13 @@ func normalizedCoreEvent(event *corev1.Event) ClusterEvent {
 }
 
 func normalizedEvent(namespace string, uid string, eventType string, reason string, action string, message string, regarding corev1.ObjectReference, controller string, instance string, count int64, first time.Time, last time.Time, resourceVersion string, created time.Time) ClusterEvent {
+	if len(message) > 4096 {
+		end := 4096
+		for end > 0 && !utf8.RuneStart(message[end]) {
+			end--
+		}
+		message = strings.Clone(message[:end]) + "… [truncated]"
+	}
 	if first.IsZero() {
 		first = created
 	}
@@ -662,19 +714,20 @@ func (connector *KubernetesConnector) Pods(ctx context.Context, parsed ParsedKub
 	if err != nil {
 		return nil, err
 	}
-	replicaSets, err := clientset.AppsV1().ReplicaSets("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
+	replicaSetOwners := map[string]metav1.OwnerReference{}
+	if err := visitReplicaSets(ctx, clientset, "", func(item *appsv1.ReplicaSet) error {
+		if owner := controllerOwnerReference(item.OwnerReferences); owner != nil {
+			replicaSetOwners[string(item.UID)] = *owner
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
+	result := []ClusterPod{}
+	if err := visitPods(ctx, clientset, "", func(item *corev1.Pod) error { result = append(result, clusterPod(*item, replicaSetOwners)); return nil }); err != nil {
+		return nil, err
 	}
-	replicaSetOwners := replicaSetOwnerMap(replicaSets.Items)
-	result := make([]ClusterPod, 0, len(pods.Items))
-	for _, pod := range pods.Items {
-		result = append(result, clusterPod(pod, replicaSetOwners))
-	}
+
 	sort.Slice(result, func(left, right int) bool {
 		if result[left].Namespace != result[right].Namespace {
 			return result[left].Namespace < result[right].Namespace
@@ -785,8 +838,15 @@ type prometheusService struct {
 }
 
 type KubernetesConnector struct {
-	timeout              time.Duration
-	healthInstanceSource string
+	timeout                   time.Duration
+	healthInstanceSource      string
+	securityScannerNamespace  string
+	securityScannerPullSecret string
+	securityPodStartupTimeout time.Duration
+	kubeBenchImage            string
+	kubeBenchImageAMD64       string
+	kubeBenchImageARM64       string
+	hostScanConcurrency       int
 }
 
 func NewKubernetesConnector(timeout time.Duration) *KubernetesConnector {
@@ -801,7 +861,7 @@ func NewKubernetesConnectorWithInstanceSource(timeout time.Duration, source stri
 	if source != "workloads" {
 		source = "pods"
 	}
-	return &KubernetesConnector{timeout: timeout, healthInstanceSource: source}
+	return &KubernetesConnector{timeout: timeout, healthInstanceSource: source, securityScannerNamespace: "kube-system", securityPodStartupTimeout: defaultSecurityPodStartupTimeout, kubeBenchImage: defaultKubeBenchImage, hostScanConcurrency: defaultHostScanConcurrency}
 }
 
 func (connector *KubernetesConnector) Version(ctx context.Context, parsed ParsedKubeconfig) (string, error) {
@@ -832,16 +892,13 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 	}
 
 	startedAt := time.Now()
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, cachedListOptions)
-	if err != nil {
-		return HealthSnapshot{}, mapConnectionError(err)
-	}
-	latency := time.Since(startedAt).Milliseconds()
-
-	snapshot := HealthSnapshot{NodesTotal: len(nodes.Items), APILatencyMS: latency}
+	snapshot := HealthSnapshot{}
 	var workerCPUMilli int64
 	var totalCPUMilli, totalMemoryBytes int64
-	for _, node := range nodes.Items {
+	if err := visitNodes(ctx, clientset, func(item *corev1.Node) error {
+		node := *item
+		snapshot.NodesTotal++
+
 		totalCPUMilli += node.Status.Capacity.Cpu().MilliValue()
 		totalMemoryBytes += node.Status.Capacity.Memory().Value()
 		if nodeReady(node) {
@@ -851,21 +908,23 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 			snapshot.WorkerNodes++
 			workerCPUMilli += node.Status.Capacity.Cpu().MilliValue()
 		}
+		return nil
+	}); err != nil {
+		return HealthSnapshot{}, err
 	}
 	snapshot.WorkerCores = workerCPUMilli / 1000
+	snapshot.APILatencyMS = time.Since(startedAt).Milliseconds()
 
 	if connector.healthInstanceSource == "workloads" {
 		if err := connector.collectWorkloadHealth(ctx, clientset, &snapshot); err != nil {
 			return HealthSnapshot{}, err
 		}
 	} else {
-		pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
-		if err != nil {
-			return HealthSnapshot{}, mapConnectionError(err)
-		}
-		for _, pod := range pods.Items {
+		if err := visitPods(ctx, clientset, "", func(item *corev1.Pod) error {
+			pod := *item
+
 			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-				continue
+				return nil
 			}
 			snapshot.InstancesTotal++
 			if podReady(pod) {
@@ -877,9 +936,12 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 					snapshot.CoreComponentsReady++
 				}
 			}
+			return nil
+		}); err != nil {
+			return HealthSnapshot{}, err
 		}
 	}
-	services, err := clientset.CoreV1().Services("").List(ctx, cachedListOptions)
+	services, err := boundedServices(ctx, clientset)
 	if err == nil {
 		connector.collectPrometheusMetrics(ctx, clientset, services.Items, totalCPUMilli, totalMemoryBytes, &snapshot)
 	}
@@ -887,44 +949,37 @@ func (connector *KubernetesConnector) Health(ctx context.Context, parsed ParsedK
 }
 
 func (connector *KubernetesConnector) collectWorkloadHealth(ctx context.Context, clientset *kubernetes.Clientset, snapshot *HealthSnapshot) error {
-	deployments, err := clientset.AppsV1().Deployments("").List(ctx, cachedListOptions)
-	if err != nil {
-		return mapConnectionError(err)
+	if err := visitDeployments(ctx, clientset, "", func(item *appsv1.Deployment) error {
+		snapshot.InstancesTotal += int(desiredReplicas(item.Spec.Replicas))
+		snapshot.InstancesReady += int(item.Status.ReadyReplicas)
+		return nil
+	}); err != nil {
+		return err
 	}
-	statefulSets, err := clientset.AppsV1().StatefulSets("").List(ctx, cachedListOptions)
-	if err != nil {
-		return mapConnectionError(err)
+	if err := visitStatefulSets(ctx, clientset, "", func(item *appsv1.StatefulSet) error {
+		snapshot.InstancesTotal += int(desiredReplicas(item.Spec.Replicas))
+		snapshot.InstancesReady += int(item.Status.ReadyReplicas)
+		return nil
+	}); err != nil {
+		return err
 	}
-	daemonSets, err := clientset.AppsV1().DaemonSets("").List(ctx, cachedListOptions)
-	if err != nil {
-		return mapConnectionError(err)
+	if err := visitDaemonSets(ctx, clientset, "", func(item *appsv1.DaemonSet) error {
+		snapshot.InstancesTotal += int(item.Status.DesiredNumberScheduled)
+		snapshot.InstancesReady += int(item.Status.NumberReady)
+		return nil
+	}); err != nil {
+		return err
 	}
-	for _, deployment := range deployments.Items {
-		snapshot.InstancesTotal += int(desiredReplicas(deployment.Spec.Replicas))
-		snapshot.InstancesReady += int(deployment.Status.ReadyReplicas)
-	}
-	for _, statefulSet := range statefulSets.Items {
-		snapshot.InstancesTotal += int(desiredReplicas(statefulSet.Spec.Replicas))
-		snapshot.InstancesReady += int(statefulSet.Status.ReadyReplicas)
-	}
-	for _, daemonSet := range daemonSets.Items {
-		snapshot.InstancesTotal += int(daemonSet.Status.DesiredNumberScheduled)
-		snapshot.InstancesReady += int(daemonSet.Status.NumberReady)
-	}
-	corePods, err := clientset.CoreV1().Pods("kube-system").List(ctx, cachedListOptions)
-	if err != nil {
-		return mapConnectionError(err)
-	}
-	for _, pod := range corePods.Items {
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
+	return visitPods(ctx, clientset, "kube-system", func(item *corev1.Pod) error {
+		if item.Status.Phase == corev1.PodSucceeded || item.Status.Phase == corev1.PodFailed {
+			return nil
 		}
 		snapshot.CoreComponentsTotal++
-		if podReady(pod) {
+		if podReady(*item) {
 			snapshot.CoreComponentsReady++
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func (connector *KubernetesConnector) Nodes(ctx context.Context, parsed ParsedKubeconfig) ([]ClusterNode, error) {
@@ -933,12 +988,9 @@ func (connector *KubernetesConnector) Nodes(ctx context.Context, parsed ParsedKu
 		return nil, err
 	}
 
-	items, err := clientset.CoreV1().Nodes().List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
-	}
-	nodes := make([]ClusterNode, 0, len(items.Items))
-	for _, node := range items.Items {
+	nodes := []ClusterNode{}
+	if err := visitNodes(ctx, clientset, func(item *corev1.Node) error {
+		node := *item
 		nodes = append(nodes, ClusterNode{
 			Name:              node.Name,
 			Status:            nodeStatus(node),
@@ -952,7 +1004,11 @@ func (connector *KubernetesConnector) Nodes(ctx context.Context, parsed ParsedKu
 			Schedulable:       !node.Spec.Unschedulable,
 			CreatedAt:         node.CreationTimestamp.Time,
 		})
+		return nil
+	}); err != nil {
+		return nil, err
 	}
+
 	sort.Slice(nodes, func(left, right int) bool { return nodes[left].Name < nodes[right].Name })
 	return nodes, nil
 }
@@ -988,62 +1044,51 @@ func (connector *KubernetesConnector) collectWorkloads(ctx context.Context, pars
 		return nil, err
 	}
 
-	deployments, err := clientset.AppsV1().Deployments("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
+	details := []ClusterWorkloadDetail{}
+	workloadByUID := map[string]int{}
+	if err := visitDeployments(ctx, clientset, "", func(item *appsv1.Deployment) error {
+		workloadByUID[string(item.UID)] = len(details)
+		details = append(details, deploymentWorkload(*item))
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	statefulSets, err := clientset.AppsV1().StatefulSets("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
+	if err := visitStatefulSets(ctx, clientset, "", func(item *appsv1.StatefulSet) error {
+		workloadByUID[string(item.UID)] = len(details)
+		details = append(details, statefulSetWorkload(*item))
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	daemonSets, err := clientset.AppsV1().DaemonSets("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
+	if err := visitDaemonSets(ctx, clientset, "", func(item *appsv1.DaemonSet) error {
+		workloadByUID[string(item.UID)] = len(details)
+		details = append(details, daemonSetWorkload(*item))
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	replicaSets, err := clientset.AppsV1().ReplicaSets("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
-	}
-	pods, err := clientset.CoreV1().Pods("").List(ctx, cachedListOptions)
-	if err != nil {
-		return nil, mapConnectionError(err)
-	}
-
-	details := make([]ClusterWorkloadDetail, 0, len(deployments.Items)+len(statefulSets.Items)+len(daemonSets.Items))
-	workloadByUID := make(map[string]int, cap(details))
-	for _, deployment := range deployments.Items {
-		detail := deploymentWorkload(deployment)
-		workloadByUID[string(deployment.UID)] = len(details)
-		details = append(details, detail)
-	}
-	for _, statefulSet := range statefulSets.Items {
-		detail := statefulSetWorkload(statefulSet)
-		workloadByUID[string(statefulSet.UID)] = len(details)
-		details = append(details, detail)
-	}
-	for _, daemonSet := range daemonSets.Items {
-		detail := daemonSetWorkload(daemonSet)
-		workloadByUID[string(daemonSet.UID)] = len(details)
-		details = append(details, detail)
-	}
-
-	replicaSetOwners := make(map[string]string, len(replicaSets.Items))
-	for _, replicaSet := range replicaSets.Items {
-		if owner := controllerOwnerUID(replicaSet.OwnerReferences); owner != "" {
-			replicaSetOwners[string(replicaSet.UID)] = owner
+	replicaSetOwners := map[string]string{}
+	if err := visitReplicaSets(ctx, clientset, "", func(item *appsv1.ReplicaSet) error {
+		if owner := controllerOwnerUID(item.OwnerReferences); owner != "" {
+			replicaSetOwners[string(item.UID)] = owner
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	for _, pod := range pods.Items {
+
+	if err := visitPods(ctx, clientset, "", func(item *corev1.Pod) error {
+		pod := *item
 		owner := controllerOwnerUID(pod.OwnerReferences)
 		if owner == "" {
-			continue
+			return nil
 		}
 		if deploymentOwner := replicaSetOwners[owner]; deploymentOwner != "" {
 			owner = deploymentOwner
 		}
 		index, ok := workloadByUID[owner]
 		if !ok {
-			continue
+			return nil
 		}
 		podSummary := summarizeWorkloadPod(pod)
 		details[index].Pods = append(details[index].Pods, podSummary)
@@ -1052,6 +1097,9 @@ func (connector *KubernetesConnector) collectWorkloads(ctx context.Context, pars
 		if podReady(pod) {
 			details[index].PodsReady++
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	for index := range details {
@@ -1334,6 +1382,13 @@ func (connector *KubernetesConnector) httpClient(config *rest.Config) (*http.Cli
 	if err != nil {
 		return nil, mapConnectionError(err)
 	}
+	copyClient := *httpClient
+	httpClient = &copyClient
+	baseTransport := httpClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	httpClient.Transport = listBudgetTransport{base: baseTransport}
 	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -1413,6 +1468,13 @@ func firstNodeLabel(node corev1.Node, labels ...string) string {
 }
 
 func mapConnectionError(err error) error {
+	if errors.Is(err, errListBudget) {
+		return newError(CodeCollectionLimitExceeded)
+	}
+	var known *Error
+	if errors.As(err, &known) {
+		return known
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return newError(CodeConnectionTimeout)
 	}

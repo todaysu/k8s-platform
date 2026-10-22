@@ -21,9 +21,9 @@ import {
 } from '@patternfly/react-core'
 import {
   AngleRightIcon,
+  CogIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
-  CogIcon,
   SyncAltIcon,
 } from '@patternfly/react-icons'
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table'
@@ -182,7 +182,7 @@ export default function FleetCapacityPage({ onOpenCluster }: Props) {
  const canConfigure = usePermission('configure')
 
   const [data, setData] = useState<FleetCapacity | null>(null)
-  const [classificationOpen, setClassificationOpen] = useState(false)
+  const [classificationOpen, setClassificationOpen] = useState(() => new URLSearchParams(window.location.search).get('classification') === '1')
   const [clusterType, setClusterType] = useState('ALL')
   const [environment, setEnvironment] = useState('ALL')
   const [error, setError] = useState('')
@@ -191,6 +191,13 @@ export default function FleetCapacityPage({ onOpenCluster }: Props) {
   const [risk, setRisk] = useState<'ALL' | Risk>('ALL')
   const [selectedPoolKey, setSelectedPoolKey] = useState('')
   const [success, setSuccess] = useState('')
+
+  const closeClassification = () => {
+    setClassificationOpen(false)
+    if (new URLSearchParams(window.location.search).get('classification') === '1') {
+      window.history.replaceState(window.history.state, '', '/capacity')
+    }
+  }
 
   const load = useCallback(async () => {
     setError('')
@@ -235,12 +242,11 @@ export default function FleetCapacityPage({ onOpenCluster }: Props) {
 
 
     <Card className="ks-capacity-pools-card">
-      <CardHeader className="ks-capacity-pools-header"><CardTitle><Title headingLevel="h2" size="lg">容量资源池</Title></CardTitle><Button isDisabled={!canConfigure} icon={<CogIcon />} onClick={() => setClassificationOpen(true)} variant="secondary">业务命名空间配置</Button></CardHeader>
       <Toolbar>
         <ToolbarContent rowWrap={{ default: 'wrap' }}><ToolbarGroup className="ks-filter-group">
           <ToolbarItem className="ks-filter-control"><span className="ks-filter-label">环境</span><FormSelect aria-label="资源池环境筛选" onChange={(_, value) => { setEnvironment(value); setSelectedPoolKey('') }} value={environment}>{environments.map((item) => <FormSelectOption key={item} label={item === 'ALL' ? '全部环境' : item} value={item} />)}</FormSelect></ToolbarItem>
           <ToolbarItem className="ks-filter-control"><span className="ks-filter-label">集群类型</span><FormSelect aria-label="资源池集群类型筛选" onChange={(_, value) => { setClusterType(value); setSelectedPoolKey('') }} value={clusterType}>{clusterTypes.map((item) => <FormSelectOption key={item} label={item === 'ALL' ? '全部类型' : item} value={item} />)}</FormSelect></ToolbarItem>
-        </ToolbarGroup><ToolbarItem align={{ default: 'alignEnd' }} className="ks-filter-meta"><span className="ks-result-count">{pools.length} 个资源池</span><Button icon={<SyncAltIcon />} isLoading={isLoading} onClick={() => void load()} variant="secondary">刷新容量</Button></ToolbarItem></ToolbarContent>
+        </ToolbarGroup><ToolbarItem align={{ default: 'alignEnd' }} className="ks-filter-meta"><span className="ks-result-count">{pools.length} 个资源池</span><Button icon={<CogIcon />} isDisabled={!canConfigure} onClick={() => setClassificationOpen(true)} variant="link">业务命名空间配置</Button><Button icon={<SyncAltIcon />} isLoading={isLoading} onClick={() => void load()} variant="secondary">刷新容量</Button></ToolbarItem></ToolbarContent>
       </Toolbar>
       <div className="ks-table-scroll"><Table aria-label="容量资源池列表" gridBreakPoint="grid-lg" variant="compact"><Thead><Tr><Th>资源池</Th><Th>池内构成</Th><Th>集群</Th><Th>CPU 余量</Th><Th>内存余量</Th><Th>业务申请</Th><Th>状态</Th><Th screenReaderText="操作" /></Tr></Thead><Tbody>
         {pools.map((pool) => <Tr className={activePool?.key === pool.key ? 'is-selected' : ''} isClickable key={pool.key} onRowClick={() => setSelectedPoolKey(pool.key)}>
@@ -304,6 +310,6 @@ export default function FleetCapacityPage({ onOpenCluster }: Props) {
       </Tbody></Table></div>
       {visible.length === 0 && <div className="ks-empty-state"><Title headingLevel="h3" size="lg">没有匹配的容量数据</Title><p>调整筛选条件，或检查集群容量采集状态。</p><Button onClick={clearFilters} variant="link">清除筛选</Button></div>}
     </Card>
-    <CapacityClassificationDialog onClose={() => setClassificationOpen(false)} onSaved={() => { setSuccess('业务命名空间清单已保存。'); void load() }} open={classificationOpen} />
+    <CapacityClassificationDialog onClose={closeClassification} onSaved={() => { setSuccess('业务命名空间清单已保存。'); void load() }} open={classificationOpen} />
   </div>
 }

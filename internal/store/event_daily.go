@@ -79,9 +79,9 @@ func eventDailyWhere(clusterID string, q cluster.EventQuery) (string, []any) {
 		conditions = append(conditions, "(regarding_kind='Node' OR regarding_namespace='kube-system' OR regarding_namespace LIKE 'openshift-%')")
 	}
 	if q.Search != "" {
-		pattern := "%" + q.Search + "%"
-		conditions = append(conditions, "(reason LIKE ? OR message_sample LIKE ? OR regarding_name LIKE ?)")
-		args = append(args, pattern, pattern, pattern)
+		columns := []string{"reason", "message_sample", "regarding_name"}
+		conditions = append(conditions, likeContainsClause(columns))
+		args = append(args, likeContainsArgs(columns, q.Search)...)
 	}
 	extra, extraArgs := extraEventConditions(q)
 	conditions = append(conditions, extra...)

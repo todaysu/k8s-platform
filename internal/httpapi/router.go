@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"example.com/k8s-platform/internal/auth"
 	"example.com/k8s-platform/internal/cluster"
+	"example.com/k8s-platform/internal/platformsettings"
 )
 
 type response struct {
@@ -77,7 +81,35 @@ type workloadYAMLManager interface {
 	GetWorkloadYAML(context.Context, string, string, string, string) (cluster.WorkloadYAML, error)
 }
 
-type RouterOptions struct{ PodExecEnabled bool }
+type securityBaselineManager interface {
+	StartSecurityBaselineScan(context.Context, string, cluster.SecurityScanMode) (cluster.SecurityBaselineRecord, error)
+	GetFleetSecurityBaselines(context.Context) (cluster.FleetSecurityBaseline, error)
+	GetSecurityBaselineHistory(context.Context, string, int) (cluster.SecurityBaselineHistory, error)
+	GetSecurityWhitelist(context.Context, string) ([]cluster.SecurityWhitelistEntry, error)
+	AddSecurityWhitelist(context.Context, string, string, string) (cluster.SecurityWhitelistEntry, error)
+	DeleteSecurityWhitelist(context.Context, string, string) error
+}
+
+// routeAuthenticator is implemented by the auth service so the router can
+// install the authorization table it builds.
+type routeAuthenticator interface {
+	SetRouteAccess(auth.RouteAccess)
+}
+
+type settingsRestarter interface {
+	Restart(context.Context, string) (platformsettings.ApplyStatus, error)
+}
+
+type RouterOptions struct {
+	QuotaRepository    cluster.RequestQuotaRepository
+	SettingsRepository platformsettings.Repository
+	SettingsRestarter  settingsRestarter
+	Admission          AdmissionLimits
+	PodExecEnabled     bool
+	// Authenticator receives the route authorization table. When nil the
+	// middleware keeps its own conservative default.
+	Authenticator routeAuthenticator
+}
 
 type errorResponse struct {
 	Code    string `json:"code"`
@@ -107,44 +139,216 @@ func NewRouterWithOptions(version string, options RouterOptions, validators ...c
 	}
 	searcher, _ := validator.(globalResourceSearcher)
 	yamlManager, _ := validator.(workloadYAMLManager)
+	securityManager, _ := validator.(securityBaselineManager)
 	router := http.NewServeMux()
-	router.HandleFunc("GET /api/v1/health", health)
-	router.HandleFunc("GET /api/v1/version", func(writer http.ResponseWriter, _ *http.Request) {
+	// Every route is registered through handle so the pattern list stays exact:
+	// the authorization table and its startup check are built from this list,
+	// which removes the possibility of a route existing without a decision.
+	registered := make([]string, 0, 48)
+	handle := func(pattern string, handler http.HandlerFunc) {
+		registered = append(registered, pattern)
+		router.HandleFunc(pattern, handler)
+	}
+	handle("GET /api/v1/health", health)
+	handle("GET /api/v1/version", func(writer http.ResponseWriter, _ *http.Request) {
 		writeVersion(writer, version)
 	})
-	router.HandleFunc("GET /api/v1/capabilities", func(writer http.ResponseWriter, _ *http.Request) {
+	handle("GET /api/v1/capabilities", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, response{Data: map[string]bool{"pod_exec_enabled": options.PodExecEnabled}})
 	})
-	router.HandleFunc("POST /api/v1/clusters/validate", validateCluster(validator))
-	router.HandleFunc("GET /api/v1/clusters/{id}/monitoring", monitoringHandler(validator))
-	router.HandleFunc("POST /api/v1/clusters/{id}/kubectl", runClusterKubectl(validator))
-	router.HandleFunc("GET /api/v1/clusters/{id}/kubectl/tty", clusterKubectlTTY(validator))
-	router.HandleFunc("GET /api/v1/capacity", getFleetCapacity(manager))
-	router.HandleFunc("GET /api/v1/capacity/classification", getCapacityClassification(manager))
-	router.HandleFunc("PUT /api/v1/capacity/classification", saveCapacityClassification(manager))
-	router.HandleFunc("GET /api/v1/clusters", listClusters(manager))
-	router.HandleFunc("POST /api/v1/clusters", onboardCluster(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}", getCluster(manager))
-	router.HandleFunc("PATCH /api/v1/clusters/{id}/classification", updateClusterClassification(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/nodes", getClusterNodes(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/capacity", getClusterCapacity(manager))
-	router.HandleFunc("POST /api/v1/clusters/{id}/capacity/baselines", lockClusterCapacityBaseline(manager))
-	router.HandleFunc("POST /api/v1/clusters/{id}/capacity/baseline-decisions", keepClusterCapacityBaseline(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/pods", getClusterPods(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/pods/{namespace}/{name}", getClusterPod(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/logs", getClusterPodLogs(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec", podExecHandler(execManager, options.PodExecEnabled))
-	router.HandleFunc("GET /api/v1/clusters/{id}/workloads", getClusterWorkloads(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}", getClusterWorkload(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/yaml", getClusterWorkloadYAML(yamlManager))
-	router.HandleFunc("GET /api/v1/search/resources", searchGlobalResources(searcher))
-	router.HandleFunc("GET /api/v1/events", getFleetEvents(events))
-	router.HandleFunc("GET /api/v1/events/resource", getEventResource(manager))
-	router.HandleFunc("GET /api/v1/clusters/{id}/events", getClusterEvents(events))
-	router.HandleFunc("GET /api/v1/clusters/{id}/events/summary", getClusterEventSummary(events))
-	router.HandleFunc("GET /api/v1/clusters/{id}/events/options", getClusterEventFacets(events))
-	router.HandleFunc("DELETE /api/v1/clusters/{id}", deleteCluster(manager))
-	return router
+	handle("GET /api/v1/settings", getPlatformSettings(options.SettingsRepository))
+	handle("PUT /api/v1/settings/{section}", savePlatformSettings(options.SettingsRepository, options.SettingsRestarter))
+	handle("POST /api/v1/clusters/validate", validateCluster(validator))
+	handle("GET /api/v1/clusters/{id}/monitoring", monitoringHandler(validator))
+	handle("POST /api/v1/clusters/{id}/kubectl", runClusterKubectl(validator))
+	handle("GET /api/v1/clusters/{id}/kubectl/tty", clusterKubectlTTY(validator))
+	handle("GET /api/v1/capacity", getFleetCapacity(manager))
+	handle("GET /api/v1/capacity/classification", getCapacityClassification(manager))
+	handle("PUT /api/v1/capacity/classification", saveCapacityClassification(manager))
+	handle("GET /api/v1/clusters", listClusters(manager))
+	handle("POST /api/v1/clusters", onboardCluster(manager))
+	handle("GET /api/v1/clusters/{id}", getCluster(manager))
+	handle("PATCH /api/v1/clusters/{id}/classification", updateClusterClassification(manager))
+	handle("GET /api/v1/clusters/{id}/nodes", getClusterNodes(manager))
+	handle("GET /api/v1/clusters/{id}/capacity", getClusterCapacity(manager))
+	handle("POST /api/v1/clusters/{id}/capacity/baselines", lockClusterCapacityBaseline(manager))
+	handle("POST /api/v1/clusters/{id}/capacity/baseline-decisions", keepClusterCapacityBaseline(manager))
+	handle("GET /api/v1/clusters/{id}/pods", getClusterPods(manager))
+	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}", getClusterPod(manager))
+	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/logs", getClusterPodLogs(manager))
+	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec", podExecHandler(execManager, options.PodExecEnabled))
+	handle("GET /api/v1/clusters/{id}/workloads", getClusterWorkloads(manager))
+	handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}", getClusterWorkload(manager))
+	handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/yaml", getClusterWorkloadYAML(yamlManager))
+	handle("POST /api/v1/clusters/{id}/security-baseline/scan", scanClusterSecurityBaseline(securityManager))
+	handle("GET /api/v1/clusters/{id}/security-baseline/history", getClusterSecurityBaselineHistory(securityManager))
+	handle("GET /api/v1/security-baselines", getFleetSecurityBaselines(securityManager))
+	handle("GET /api/v1/security-baseline/benchmarks", listSecurityBenchmarks)
+	handle("GET /api/v1/clusters/{id}/security-baseline/whitelist", getSecurityWhitelist(securityManager))
+	handle("POST /api/v1/clusters/{id}/security-baseline/whitelist", addSecurityWhitelist(securityManager))
+	handle("DELETE /api/v1/clusters/{id}/security-baseline/whitelist/{controlID}", deleteSecurityWhitelist(securityManager))
+	handle("GET /api/v1/search/resources", searchGlobalResources(searcher))
+	handle("GET /api/v1/events", getFleetEvents(events))
+	handle("GET /api/v1/events/resource", getEventResource(manager))
+	handle("GET /api/v1/clusters/{id}/events", getClusterEvents(events))
+	handle("GET /api/v1/clusters/{id}/events/summary", getClusterEventSummary(events))
+	handle("GET /api/v1/clusters/{id}/events/options", getClusterEventFacets(events))
+	handle("DELETE /api/v1/clusters/{id}", deleteCluster(manager))
+
+	// A state-changing route without an access rule would silently fall back to
+	// "admin only" at runtime. Failing here makes the omission a startup error.
+	if missing, err := UndeclaredStateChangingRoutes(registered); err != nil {
+		panic("route access table: " + err.Error())
+	} else if len(missing) > 0 {
+		panic("routes without an authorization rule: " + strings.Join(missing, ", "))
+	}
+	access, err := RouteAccess(registered)
+	if err != nil {
+		panic("route access table: " + err.Error())
+	}
+	if options.Authenticator != nil {
+		options.Authenticator.SetRouteAccess(access)
+	}
+	guard := newAdmission(options.Admission)
+	guard.shared = options.QuotaRepository
+	return guard.wrap(router)
+}
+
+func scanClusterSecurityBaseline(manager securityBaselineManager) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodeSecurityScanUnavailable)
+			return
+		}
+		var payload struct {
+			Mode      string `json:"mode"`
+			Benchmark string `json:"benchmark"`
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+			writeAPIError(writer, http.StatusBadRequest, cluster.CodeSecurityScanModeInvalid)
+			return
+		}
+		mode, err := cluster.NormalizeSecurityScanMode(payload.Mode)
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		benchmark, err := cluster.NormalizeSecurityBenchmark(payload.Benchmark)
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		// Starting a scan only validates and queues it. The background worker
+		// owns the long-running Kubernetes calls, so this request stays cheap.
+		ctx, cancel := requestTimeout(request, 10*time.Second)
+		defer cancel()
+		ctx = cluster.WithSecurityBenchmark(ctx, benchmark)
+		record, err := manager.StartSecurityBaselineScan(ctx, request.PathValue("id"), mode)
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusAccepted, response{Data: record})
+	}
+}
+
+func getSecurityWhitelist(manager securityBaselineManager) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
+			return
+		}
+		ctx, cancel := requestTimeout(request, 10*time.Second)
+		defer cancel()
+		entries, err := manager.GetSecurityWhitelist(ctx, request.PathValue("id"))
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: entries})
+	}
+}
+
+func addSecurityWhitelist(manager securityBaselineManager) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
+			return
+		}
+		var payload struct {
+			ControlID string `json:"control_id"`
+			Reason    string `json:"reason"`
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, 8<<10)
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			writeAPIError(writer, http.StatusBadRequest, cluster.CodeSecurityWhitelistInvalid)
+			return
+		}
+		ctx, cancel := requestTimeout(request, 10*time.Second)
+		defer cancel()
+		entry, err := manager.AddSecurityWhitelist(ctx, request.PathValue("id"), payload.ControlID, payload.Reason)
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusCreated, response{Data: entry})
+	}
+}
+
+func deleteSecurityWhitelist(manager securityBaselineManager) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
+			return
+		}
+		ctx, cancel := requestTimeout(request, 10*time.Second)
+		defer cancel()
+		if err := manager.DeleteSecurityWhitelist(ctx, request.PathValue("id"), request.PathValue("controlID")); err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: true})
+	}
+}
+
+func listSecurityBenchmarks(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, response{Data: cluster.SupportedSecurityBenchmarks()})
+}
+
+func getFleetSecurityBaselines(manager securityBaselineManager) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
+			return
+		}
+		ctx, cancel := requestTimeout(request, 10*time.Second)
+		defer cancel()
+		result, err := manager.GetFleetSecurityBaselines(ctx)
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: result})
+	}
+}
+
+func getClusterSecurityBaselineHistory(manager securityBaselineManager) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePersistenceFailed)
+			return
+		}
+		limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+		ctx, cancel := requestTimeout(request, 10*time.Second)
+		defer cancel()
+		result, err := manager.GetSecurityBaselineHistory(ctx, request.PathValue("id"), limit)
+		if err != nil {
+			writeClusterError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: result})
+	}
 }
 
 func getFleetEvents(manager clusterEventManager) http.HandlerFunc {
@@ -750,12 +954,20 @@ func decodeClusterRequest(writer http.ResponseWriter, request *http.Request) (va
 }
 
 func writeClusterError(writer http.ResponseWriter, err error) {
+	if cluster.ErrorCode(err) == cluster.CodeSecurityScanQueueFull {
+		writer.Header().Set("Retry-After", "5")
+		writeAPIError(writer, http.StatusTooManyRequests, cluster.CodeSecurityScanQueueFull)
+		return
+	}
 	code := cluster.ErrorCode(err)
 	status := http.StatusUnprocessableEntity
 	switch code {
-	case cluster.CodeNameRequired, cluster.CodeEnvironmentRequired, cluster.CodeClusterTypeRequired, cluster.CodeClusterTypeInvalid, cluster.CodeClusterTypeMismatch, cluster.CodeTechnologyStackRequired, cluster.CodeTechnologyStackInvalid, cluster.CodeKubeconfigRequired, cluster.CodeKubeconfigTooLarge, cluster.CodeKubeconfigInvalid, cluster.CodeSearchQueryInvalid, cluster.CodeCapacityRulesInvalid, cluster.CodeBaselineReasonRequired:
+	case "PLATFORM_BUSY":
+		status = http.StatusTooManyRequests
+		writer.Header().Set("Retry-After", "2")
+	case cluster.CodeNameRequired, cluster.CodeEnvironmentRequired, cluster.CodeClusterTypeRequired, cluster.CodeClusterTypeInvalid, cluster.CodeClusterTypeMismatch, cluster.CodeTechnologyStackRequired, cluster.CodeTechnologyStackInvalid, cluster.CodeKubeconfigRequired, cluster.CodeKubeconfigTooLarge, cluster.CodeKubeconfigInvalid, cluster.CodeSearchQueryInvalid, cluster.CodeCapacityRulesInvalid, cluster.CodeBaselineReasonRequired, cluster.CodeSecurityScanModeInvalid:
 		status = http.StatusBadRequest
-	case cluster.CodeNameDuplicate, cluster.CodeClusterDuplicate:
+	case cluster.CodeNameDuplicate, cluster.CodeClusterDuplicate, cluster.CodeSecurityScanInProgress:
 		status = http.StatusConflict
 	case cluster.CodeClusterNotFound, cluster.CodeWorkloadNotFound, cluster.CodePodNotFound:
 		status = http.StatusNotFound
@@ -763,7 +975,7 @@ func writeClusterError(writer http.ResponseWriter, err error) {
 		status = http.StatusInternalServerError
 	case cluster.CodePodNotRunning, cluster.CodeContainerNotFound:
 		status = http.StatusConflict
-	case cluster.CodePodExecUnavailable, cluster.CodeCapacityPending:
+	case cluster.CodePodExecUnavailable, cluster.CodeCapacityPending, cluster.CodeSecurityScanUnavailable:
 		status = http.StatusServiceUnavailable
 	}
 	writeAPIError(writer, status, code)
@@ -777,6 +989,8 @@ func writeAPIError(writer http.ResponseWriter, status int, code string) {
 
 func errorMessage(code string) string {
 	messages := map[string]string{
+		cluster.CodeSecurityScanQueueFull:    "扫描队列已满，请稍后重试。",
+		"PLATFORM_BUSY":                      "平台当前任务较多，请稍后重试。",
 		cluster.CodeNameRequired:             "请输入集群名称。",
 		cluster.CodeEnvironmentRequired:      "请选择或输入集群环境。",
 		cluster.CodeClusterTypeRequired:      "请选择集群类型。",
@@ -819,8 +1033,14 @@ func errorMessage(code string) string {
 		cluster.CodeAuthorizationFailed:      "Kubeconfig 中的连接凭据没有读取集群版本的权限。",
 		cluster.CodeConnectionFailed:         "无法连接 Kubernetes API Server。",
 		cluster.CodeCapacityRulesInvalid:     "容量分类规则无效或存在 Namespace 冲突。",
+		cluster.CodeCollectionLimitExceeded:  "集群对象或单页响应超过采集预算，已保留上一份完整快照。",
 		cluster.CodeCapacityPending:          "容量数据尚未采集完成，请稍后重试。",
 		cluster.CodeBaselineReasonRequired:   "暂不更新基线时必须填写原因。",
+		cluster.CodeSecurityScanModeInvalid:  "扫描方式无效，当前版本仅支持 kube-bench CIS 扫描。",
+		cluster.CodeSecurityBenchmarkInvalid: "扫描标准版本无效，请选择 kube-bench 支持的 benchmark。",
+		cluster.CodeSecurityWhitelistInvalid: "白名单参数无效：控制项 ID 或原因格式不正确。",
+		cluster.CodeSecurityScanInProgress:   "该集群已有扫描任务在排队或执行中，请等待完成后再试。",
+		cluster.CodeSecurityScanUnavailable:  "当前平台未启用该扫描方式，请检查扫描器配置。",
 	}
 	if message, ok := messages[code]; ok {
 		return message

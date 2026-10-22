@@ -38,12 +38,15 @@ func (repository *healthCollectorRepository) UpdateClusterHealth(_ context.Conte
 
 func TestHealthCollectorPersistsSuccessAndIsolatesFailure(t *testing.T) {
 	cipher, _ := NewAESGCMCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	// One ciphertext per cluster: credentials are bound to the cluster id, so
+	// a shared blob would fail to authenticate for the second record.
+	encryptedHealthy, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "healthy")
+	encryptedFailed, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "failed")
 	previousCheck := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)
 	previousNodes := 7
 	repository := &healthCollectorRepository{records: []ClusterRecord{
-		{ManagedCluster: ManagedCluster{ID: "healthy", APIServer: "https://healthy.test"}, EncryptedCredentials: encrypted},
-		{ManagedCluster: ManagedCluster{ID: "failed", APIServer: "https://failed.test", LastCheckedAt: previousCheck, NodesReady: &previousNodes}, EncryptedCredentials: encrypted},
+		{ManagedCluster: ManagedCluster{ID: "healthy", APIServer: "https://healthy.test"}, EncryptedCredentials: encryptedHealthy},
+		{ManagedCluster: ManagedCluster{ID: "failed", APIServer: "https://failed.test", LastCheckedAt: previousCheck, NodesReady: &previousNodes}, EncryptedCredentials: encryptedFailed},
 	}}
 	connector := fakeConnector{healthFn: func(_ context.Context, parsed ParsedKubeconfig) (HealthSnapshot, error) {
 		if parsed.APIServer == "https://failed.test" {
@@ -67,7 +70,7 @@ func TestHealthCollectorPersistsSuccessAndIsolatesFailure(t *testing.T) {
 
 func TestHealthCollectorLimitsConcurrentClusterRequests(t *testing.T) {
 	cipher, _ := NewAESGCMCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`))
+	encrypted, _ := cipher.Encrypt([]byte(`{"ca_data":"Y2E=","token":"token"}`), "cluster-1")
 	repository := &healthCollectorRepository{}
 	for index := 0; index < 8; index++ {
 		repository.records = append(repository.records, ClusterRecord{ManagedCluster: ManagedCluster{ID: string(rune('a' + index)), APIServer: "https://cluster.test"}, EncryptedCredentials: encrypted})

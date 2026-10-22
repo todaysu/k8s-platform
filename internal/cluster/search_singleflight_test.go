@@ -2,16 +2,39 @@ package cluster
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// plainCipher is a test double that keeps the cluster binding visible: it
+// refuses to open a value sealed for a different cluster, so a test that mixes
+// records up fails here instead of silently passing.
 type plainCipher struct{}
 
-func (plainCipher) Encrypt(value []byte) (string, error) { return string(value), nil }
-func (plainCipher) Decrypt(value string) ([]byte, error) { return []byte(value), nil }
+func (plainCipher) Encrypt(value []byte, clusterID string) (string, error) {
+	return aadPrefix + clusterID + ":" + string(value), nil
+}
+
+func (plainCipher) Decrypt(value, clusterID string) ([]byte, error) {
+	// The prefix must be present before the cluster id is parsed: tests store
+	// plaintext credentials that may themselves contain colons.
+	rest, ok := strings.CutPrefix(value, aadPrefix)
+	if !ok {
+		return []byte(value), nil
+	}
+	bound, payload, ok := strings.Cut(rest, ":")
+	if !ok || bound != clusterID {
+		return nil, newError(CodeEncryptionFailed)
+	}
+	return []byte(payload), nil
+}
+
+func (plainCipher) NeedsRebind(value string) bool {
+	return !strings.HasPrefix(value, aadPrefix)
+}
 
 type searchConnector struct {
 	Connector

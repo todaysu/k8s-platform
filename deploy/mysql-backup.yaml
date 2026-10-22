@@ -33,6 +33,7 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           containers:
             - name: mysqldump
+              # 镜像地址：替换为企业镜像仓库地址（与 MySQL 实例保持同版本）。
               image: mysql:8.4
               command: ["/bin/sh", "-c"]
               args:

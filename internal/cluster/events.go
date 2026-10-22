@@ -195,22 +195,52 @@ func DecodeEventCursor(value string) (*time.Time, string, error) {
 // EventCollector follows the Kubernetes API's list-then-watch pattern. It runs
 // centrally, so managed clusters do not need an additional agent.
 type EventCollector struct {
-	service        *OnboardingService
-	repo           EventRepository
-	events         EventConnector
-	mu             sync.Mutex
-	workers        map[string]context.CancelFunc
-	statusThrottle *statusThrottle
+	service          *OnboardingService
+	repo             EventRepository
+	events           EventConnector
+	normalRetention  time.Duration
+	warningRetention time.Duration
+	rollupRetention  time.Duration
+	dailyRetention   time.Duration
+	cleanupBatch     int
+	mu               sync.Mutex
+	workers          map[string]context.CancelFunc
+	statusThrottle   *statusThrottle
 }
 
 func NewEventCollector(service *OnboardingService, repo EventRepository) *EventCollector {
 	events, _ := service.connector.(EventConnector)
 	return &EventCollector{
-		service:        service,
-		repo:           repo,
-		events:         events,
-		workers:        map[string]context.CancelFunc{},
-		statusThrottle: newStatusThrottle(eventStatusInterval),
+		service:          service,
+		repo:             repo,
+		events:           events,
+		normalRetention:  7 * 24 * time.Hour,
+		warningRetention: 30 * 24 * time.Hour,
+		rollupRetention:  365 * 24 * time.Hour,
+		dailyRetention:   31 * 24 * time.Hour,
+		cleanupBatch:     5000,
+		workers:          map[string]context.CancelFunc{},
+		statusThrottle:   newStatusThrottle(eventStatusInterval),
+	}
+}
+
+// ConfigureRetention applies the persisted event policy to the collector.
+// Values are validated by platformsettings before this method is called.
+func (collector *EventCollector) ConfigureRetention(normal, warning, rollup, daily time.Duration, batch int) {
+	if normal > 0 {
+		collector.normalRetention = normal
+	}
+	if warning > 0 {
+		collector.warningRetention = warning
+	}
+	if rollup > 0 {
+		collector.rollupRetention = rollup
+	}
+	if daily > 0 {
+		collector.dailyRetention = daily
+	}
+	if batch > 0 {
+		collector.cleanupBatch = batch
 	}
 }
 
@@ -218,7 +248,9 @@ func (collector *EventCollector) Run(ctx context.Context) {
 	if collector.repo == nil || collector.events == nil {
 		return
 	}
-	_ = collector.repo.EnsureEventRollups(ctx)
+	if lease, scoped := CollectionLeaseFromContext(ctx); !scoped || lease.Shard == 0 {
+		_ = collector.repo.EnsureEventRollups(ctx)
+	}
 	reconcile := time.NewTicker(15 * time.Second)
 	cleanup := time.NewTicker(time.Hour)
 	defer reconcile.Stop()
@@ -238,7 +270,7 @@ func (collector *EventCollector) Run(ctx context.Context) {
 }
 
 func (collector *EventCollector) reconcile(ctx context.Context) {
-	records, err := collector.service.repository.ListRecords(ctx)
+	records, err := collector.service.collectionRecords(ctx)
 	if err != nil {
 		return
 	}
@@ -280,7 +312,29 @@ func (collector *EventCollector) collect(ctx context.Context, record ClusterReco
 	backoff := eventReconnectBase
 	for ctx.Err() == nil {
 		metrics.EventLists.Inc()
-		batch, err := collector.events.ListEvents(ctx, parsed)
+		batch, err := func() (EventBatch, error) {
+			initial, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+			work, release, err := collector.service.collectionBudget(initial, ctx, record.ID, "collection_list", 4)
+			if err != nil {
+				return EventBatch{}, err
+			}
+			cancel()
+			defer release()
+			work, stop := context.WithTimeout(work, time.Minute)
+			defer stop()
+			batch, err := collector.events.ListEvents(work, parsed)
+			if err != nil {
+				return EventBatch{}, err
+			}
+			for index := range batch.Items {
+				batch.Items[index].ClusterID = record.ID
+			}
+			if err = collector.repo.UpsertEvents(work, batch.Items); err != nil {
+				return EventBatch{}, err
+			}
+			return batch, nil
+		}()
 		if err != nil {
 			metrics.EventListErrors.Inc()
 			collector.status(ctx, record.ID, "error", "", err)
@@ -288,15 +342,7 @@ func (collector *EventCollector) collect(ctx context.Context, record ClusterReco
 			backoff = minDuration(backoff*2, eventReconnectMax)
 			continue
 		}
-		for index := range batch.Items {
-			batch.Items[index].ClusterID = record.ID
-		}
-		if err := collector.repo.UpsertEvents(ctx, batch.Items); err != nil {
-			collector.status(ctx, record.ID, "error", batch.ResourceVersion, err)
-			waitContext(ctx, jitter(backoff))
-			backoff = minDuration(backoff*2, eventReconnectMax)
-			continue
-		}
+
 		collector.status(ctx, record.ID, "watching", batch.ResourceVersion, nil)
 		metrics.EventWatchStarts.Inc()
 		watchStarted := time.Now()
@@ -409,26 +455,29 @@ func (collector *EventCollector) status(ctx context.Context, id, state, rv strin
 }
 
 func (collector *EventCollector) cleanup(ctx context.Context) {
+	if lease, scoped := CollectionLeaseFromContext(ctx); scoped && lease.Shard != 0 {
+		return
+	}
 	now := time.Now().UTC()
-	normalCutoff := now.Add(-7 * 24 * time.Hour)
-	warningCutoff := now.Add(-30 * 24 * time.Hour)
+	normalCutoff := now.Add(-collector.normalRetention)
+	warningCutoff := now.Add(-collector.warningRetention)
 	for {
-		deleted, err := collector.repo.DeleteEventsByRetention(ctx, normalCutoff, warningCutoff, 5000)
-		if err != nil || deleted < 5000 {
+		deleted, err := collector.repo.DeleteEventsByRetention(ctx, normalCutoff, warningCutoff, collector.cleanupBatch)
+		if err != nil || deleted < int64(collector.cleanupBatch) {
 			break
 		}
 	}
-	rollupCutoff := now.Add(-365 * 24 * time.Hour)
+	rollupCutoff := now.Add(-collector.rollupRetention)
 	for {
-		deleted, err := collector.repo.DeleteEventRollupsBefore(ctx, rollupCutoff, 5000)
-		if err != nil || deleted < 5000 {
+		deleted, err := collector.repo.DeleteEventRollupsBefore(ctx, rollupCutoff, collector.cleanupBatch)
+		if err != nil || deleted < int64(collector.cleanupBatch) {
 			break
 		}
 	}
-	dailyCutoff := now.Add(-31 * 24 * time.Hour)
+	dailyCutoff := now.Add(-collector.dailyRetention)
 	for {
-		deleted, err := collector.repo.DeleteEventDailyBefore(ctx, dailyCutoff, 5000)
-		if err != nil || deleted < 5000 {
+		deleted, err := collector.repo.DeleteEventDailyBefore(ctx, dailyCutoff, collector.cleanupBatch)
+		if err != nil || deleted < int64(collector.cleanupBatch) {
 			return
 		}
 	}

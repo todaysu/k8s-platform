@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -27,15 +28,166 @@ type User struct {
 	Role     string `json:"role"`
 	Disabled bool   `json:"disabled"`
 }
+
+type userContextKey struct{}
+
+// WithUser carries the authenticated user to handlers without exposing the
+// session cookie or database lookup to every module.
+func WithUser(ctx context.Context, user User) context.Context {
+	return context.WithValue(ctx, userContextKey{}, user)
+}
+
+func UserFromContext(ctx context.Context) (User, bool) {
+	user, ok := ctx.Value(userContextKey{}).(User)
+	return user, ok
+}
+
 type attempt struct {
 	Count int
 	Until time.Time
 }
+
+// RouteRule declares the privilege a single route requires. Authorization is
+// looked up by the route pattern Go's mux matched, so a route can never be
+// granted or denied by accident of its URL spelling.
+type RouteRule struct {
+	// MinRole is the lowest role allowed to call the route.
+	MinRole string
+	// WebSocket marks routes upgraded to a bidirectional protocol. Those always
+	// require the strict Origin check because the browser does not apply the
+	// same-origin policy to a handshake.
+	WebSocket bool
+	// AdminOnlyModeQuery, when set with AdminOnlyModeValue, raises the
+	// requirement to admin.
+	AdminOnlyModeQuery string
+	AdminOnlyModeValue string
+}
+
+// RouteAccess is the lookup table installed by the HTTP layer at startup.
+type RouteAccess interface {
+	// Lookup returns the rule for a mux pattern such as
+	// "GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec".
+	Lookup(pattern string) (RouteRule, bool)
+}
+
+// IsWebSocketUpgrade reports whether the request is a protocol upgrade.
+func IsWebSocketUpgrade(r *http.Request) bool {
+	return isWebSocketUpgrade(r)
+}
+
+func isWebSocketUpgrade(r *http.Request) bool {
+	for _, value := range r.Header.Values("Connection") {
+		if strings.EqualFold(strings.TrimSpace(value), "upgrade") {
+			return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+		}
+	}
+	return false
+}
+
+// RoleAllows reports whether a role meets the minimum required role.
+func RoleAllows(userRole, required string) bool {
+	if required == "" {
+		return true
+	}
+	rank := map[string]int{"viewer": 1, "operator": 2, "admin": 3}
+	return rank[userRole] >= rank[required]
+}
+
+// maxTrackedAttempts bounds the in-memory throttle table. When the bound is
+// reached the oldest entries are evicted instead of rejecting every caller,
+// otherwise one flood would permanently lock out all new clients.
+const maxTrackedAttempts = 10000
+
+// attemptWindow and maxAttemptsPerWindow apply per source IP.
+const (
+	attemptWindow      = 15 * time.Minute
+	maxAttemptsPerIP   = 20
+	maxAttemptsPerUser = 10
+	// accountWindow is longer than attemptWindow: a distributed attacker must
+	// not be able to walk the per-account budget by rotating source addresses.
+	accountWindow = time.Hour
+)
+
+// clientKey identifies the caller. When the platform runs behind an ingress or
+// load balancer, RemoteAddr is the proxy address and every user shares one
+// bucket, so a trusted X-Forwarded-For is used when configured.
+func (s *Service) clientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if s.trustProxyHeaders {
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			first, _, _ := strings.Cut(forwarded, ",")
+			if candidate := strings.TrimSpace(first); candidate != "" {
+				// Only a syntactically valid IP is trusted, so a malformed
+				// header cannot collapse every caller into one bucket.
+				if net.ParseIP(candidate) != nil {
+					host = candidate
+				}
+			}
+		}
+	}
+	return host
+}
+
+// boundedPrune removes expired entries and, if still at capacity, evicts the
+// entry closest to expiry so the table stays usable under sustained load.
+func boundedPrune(now time.Time, table map[string]attempt, capacity int) {
+	for k, v := range table {
+		if now.After(v.Until) {
+			delete(table, k)
+		}
+	}
+	if len(table) < capacity {
+		return
+	}
+	oldestKey, oldestAt := "", time.Time{}
+	for k, v := range table {
+		if oldestKey == "" || v.Until.Before(oldestAt) {
+			oldestKey, oldestAt = k, v.Until
+		}
+	}
+	delete(table, oldestKey)
+}
+
+func (s *Service) bump(table map[string]attempt, key string, window time.Duration, limit int, now time.Time) bool {
+	v := table[key]
+	if v.Count == 0 || now.After(v.Until) {
+		v = attempt{Until: now.Add(window)}
+	}
+	v.Count++
+	table[key] = v
+	return v.Count > limit
+}
+
+// limited throttles a login attempt by source address and, when known, by
+// account name. It reports true only when the request must be rejected; it
+// always records the attempt so a flooding source cannot bypass accounting.
+func (s *Service) limited(r *http.Request, username string) bool {
+	now := time.Now()
+	key := s.clientKey(r)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	boundedPrune(now, s.attempts, maxTrackedAttempts)
+	blocked := s.bump(s.attempts, key, attemptWindow, maxAttemptsPerIP, now)
+	if username != "" {
+		boundedPrune(now, s.accountAttempts, maxTrackedAttempts)
+		if s.bump(s.accountAttempts, strings.ToLower(username), accountWindow, maxAttemptsPerUser, now) {
+			blocked = true
+		}
+	}
+	return blocked
+}
+
 type Service struct {
 	db                                 *sql.DB
 	ownsDB                             bool
 	mu                                 sync.Mutex
 	attempts                           map[string]attempt
+	accountAttempts                    map[string]attempt
+	trustProxyHeaders                  bool
+	access                             RouteAccess
 	secure                             bool
 	ttl                                time.Duration
 	bootstrap, bootstrapPath, username string
@@ -69,7 +221,7 @@ func New(path, username, hash string, secure bool, ttl time.Duration) (*Service,
 // NewWithDB uses platform-managed storage. The caller owns db and must have
 // initialized auth_users and auth_sessions through the platform migrations.
 func NewWithDB(db *sql.DB, bootstrapPath, username, hash string, secure bool, ttl time.Duration) (*Service, error) {
-	s := &Service{db: db, attempts: map[string]attempt{}, secure: secure, ttl: ttl, username: username, bootstrapPath: bootstrapPath}
+	s := &Service{db: db, attempts: map[string]attempt{}, accountAttempts: map[string]attempt{}, secure: secure, ttl: ttl, username: username, bootstrapPath: bootstrapPath}
 	var count int
 	var err error
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_users`).Scan(&count); err != nil {
@@ -98,6 +250,68 @@ func (s *Service) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+// TrustProxyHeaders enables X-Forwarded-For parsing for the login throttle.
+// Leave it off unless a trusted reverse proxy or ingress sets that header:
+// otherwise any client could forge the value and bypass per-source limiting.
+func (s *Service) TrustProxyHeaders(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trustProxyHeaders = enabled
+}
+
+// SetRouteAccess installs the authorization table built by the HTTP layer.
+func (s *Service) SetRouteAccess(access RouteAccess) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.access = access
+}
+
+// isTerminalRequest reports whether a GET request would open an interactive
+// session. It is only consulted while no authorization table is installed, so
+// that a missing table cannot hand a shell to a read-only role.
+func isTerminalRequest(r *http.Request) bool {
+	if isWebSocketUpgrade(r) {
+		return true
+	}
+	return strings.HasSuffix(r.URL.Path, "/exec") || strings.HasSuffix(r.URL.Path, "/tty")
+}
+
+// routeAccessInstalled reports whether the HTTP layer supplied a table.
+func (s *Service) routeAccessInstalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.access != nil
+}
+
+// lookupRoute resolves the authorization rule, tolerating an unset table.
+func (s *Service) lookupRoute(pattern string) (RouteRule, bool) {
+	s.mu.Lock()
+	access := s.access
+	s.mu.Unlock()
+	if access == nil {
+		return RouteRule{}, false
+	}
+	return access.Lookup(pattern)
+}
+
+// isDeclaredWebSocket reports whether the matched route is a declared terminal.
+func (s *Service) isDeclaredWebSocket(r *http.Request) bool {
+	s.mu.Lock()
+	access := s.access
+	s.mu.Unlock()
+	if access == nil {
+		return false
+	}
+	rule, ok := access.Lookup(r.Method + " " + r.Pattern)
+	return ok && rule.WebSocket
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)
@@ -165,27 +379,6 @@ func (s *Service) issue(w http.ResponseWriter, u User) error {
 	return nil
 }
 func validPassword(p string) bool { return len(p) >= 12 && len(p) <= 72 }
-func (s *Service) limited(r *http.Request) bool {
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, v := range s.attempts {
-		if now.After(v.Until) {
-			delete(s.attempts, k)
-		}
-	}
-	v := s.attempts[host]
-	if v.Count == 0 {
-		v.Until = now.Add(15 * time.Minute)
-	}
-	v.Count++
-	if len(s.attempts) > 10000 {
-		return true
-	}
-	s.attempts[host] = v
-	return v.Count > 20
-}
 func (s *Service) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -194,7 +387,10 @@ func (s *Service) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if (r.Method != "GET" && r.Method != "HEAD") || (strings.HasSuffix(path, "/exec") || strings.HasSuffix(path, "/kubectl/tty")) {
+		// A WebSocket handshake is a GET request and is not protected by the
+		// browser same-origin policy, so declared terminal routes always get the
+		// strict Origin check regardless of method.
+		if isWebSocketUpgrade(r) || s.isDeclaredWebSocket(r) || (r.Method != "GET" && r.Method != "HEAD") {
 			if !sameOrigin(r) {
 				reply(w, 403, nil, "ORIGIN_REJECTED")
 				return
@@ -221,6 +417,7 @@ func (s *Service) Wrap(next http.Handler) http.Handler {
 			reply(w, 401, nil, "UNAUTHENTICATED")
 			return
 		}
+		r = r.WithContext(WithUser(r.Context(), u))
 		if path == "/api/v1/auth/logout" && r.Method == "POST" {
 			if c, e := r.Cookie("kubescope_session"); e == nil {
 				key := sha256.Sum256([]byte(c.Value))
@@ -242,16 +439,32 @@ func (s *Service) Wrap(next http.Handler) http.Handler {
 			s.users(w, r, u)
 			return
 		}
-		if strings.HasSuffix(path, "/kubectl/tty") && u.Role != "admin" {
-			reply(w, 403, nil, "FORBIDDEN")
-			return
-		}
-		if strings.HasSuffix(path, "/exec") {
-			if u.Role != "admin" && u.Role != "operator" {
+		// Authorization is decided by the route's declared access requirement
+		// rather than by matching the request path suffix. Suffix matching is a
+		// second source of truth: it silently stops matching when a pattern gains
+		// a sub-path, which would hand a privileged handler to a weaker role.
+		//
+		// When no table is installed the middleware refuses to reason about
+		// individual routes: it cannot tell a terminal route from a read, so
+		// only known-safe methods are allowed through. A missing table must
+		// never widen access.
+		if rule, ok := s.lookupRoute(r.Method + " " + r.Pattern); ok {
+			if rule.AdminOnlyModeQuery != "" && r.URL.Query().Get(rule.AdminOnlyModeQuery) == rule.AdminOnlyModeValue && !RoleAllows(u.Role, "admin") {
 				reply(w, 403, nil, "FORBIDDEN")
 				return
 			}
+			if !RoleAllows(u.Role, rule.MinRole) {
+				reply(w, 403, nil, "FORBIDDEN")
+				return
+			}
+		} else if s.routeAccessInstalled() {
+			// Declared read-only route: any authenticated role may read.
 		} else if r.Method != "GET" && r.Method != "HEAD" && u.Role != "admin" {
+			reply(w, 403, nil, "FORBIDDEN")
+			return
+		} else if r.Method == "GET" && isTerminalRequest(r) && !RoleAllows(u.Role, "operator") {
+			// Without a table a GET route is assumed harmless, but a terminal
+			// route hands over an interactive shell, so it stays restricted.
 			reply(w, 403, nil, "FORBIDDEN")
 			return
 		}
@@ -259,16 +472,18 @@ func (s *Service) Wrap(next http.Handler) http.Handler {
 	})
 }
 func (s *Service) login(w http.ResponseWriter, r *http.Request, path string) {
-	if s.limited(r) {
-		reply(w, 429, nil, "LOGIN_RATE_LIMITED")
-		return
-	}
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Token    string `json:"token"`
 	}
 	if !decode(w, r, &input) {
+		return
+	}
+	// Throttle after decoding so the per-account budget can be enforced. The
+	// body is capped by decode, and the request is still cheap to reject.
+	if s.limited(r, input.Username) {
+		reply(w, 429, nil, "LOGIN_RATE_LIMITED")
 		return
 	}
 	if path == "/api/v1/auth/setup" {

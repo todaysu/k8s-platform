@@ -1,0 +1,10 @@
+.ks-audit-data-export { display:grid; gap:16px; color:#273849; }
+.ks-audit-data-export>p { margin:0; color:#647487; font-size:13px; line-height:1.6; }
+.ks-audit-data-export__summary { margin:0; padding:14px 16px; background:#fafbfd; border:1px solid #dce3e9; border-radius:6px; display:grid; gap:8px; font-size:13px; }
+.ks-audit-data-export__summary>div { display:grid; grid-template-columns:88px 1fr; gap:12px; }
+.ks-audit-data-export__summary dt { color:#66788b; }
+.ks-audit-data-export__summary dd { margin:0; color:#273849; overflow-wrap:anywhere; }
+.ks-audit-data-export__filters { display:flex; flex-wrap:wrap; gap:6px; }
+.ks-audit-data-export__filters>span { background:#eef2f6; border:1px solid #d5dfe7; border-radius:10px; padding:1px 8px; font-size:12px; color:#526b80; }
+.ks-audit-data-export__formats { display:flex; gap:24px; flex-wrap:wrap; margin:0; padding:0; border:0; }
+.ks-audit-data-export__formats legend { width:100%; margin-bottom:8px; padding:0; color:#273849; font-size:13px; font-weight:600; }
