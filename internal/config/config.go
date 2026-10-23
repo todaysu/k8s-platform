@@ -23,6 +23,9 @@ type Config struct {
 	HTTPClusterConcurrency    int
 	RuntimeRole               string
 	ListenAddr                string
+	TLSCertFile               string
+	TLSKeyFile                string
+	HealthAddr                string
 	MetricsAddr               string
 	DatabasePath              string
 	PlatformDatabaseDSN       string
@@ -211,8 +214,9 @@ func Load() (Config, error) {
 	cfg := Config{
 		CollectionShards:     shardCount,
 		HTTPQueryConcurrency: querySlots, HTTPRealtimeConcurrency: realtimeSlots, HTTPMonitoringConcurrency: monitoringSlots, HTTPSessionConcurrency: sessionSlots, HTTPClusterConcurrency: clusterSlots,
-		RuntimeRole:                role,
-		ListenAddr:                 envOrDefault("LISTEN_ADDR", ":8080"),
+		RuntimeRole: role,
+		ListenAddr:  envOrDefault("LISTEN_ADDR", ":8080"),
+		TLSCertFile: os.Getenv("TLS_CERT_FILE"), TLSKeyFile: os.Getenv("TLS_KEY_FILE"), HealthAddr: os.Getenv("HEALTH_ADDR"),
 		MetricsAddr:                os.Getenv("METRICS_ADDR"),
 		DatabasePath:               envOrDefault("DATABASE_PATH", "./data/platform.db"),
 		PlatformDatabaseDSN:        os.Getenv("PLATFORM_DATABASE_DSN"),
@@ -298,7 +302,10 @@ func Load() (Config, error) {
 	if cfg.AdminPasswordHash == "" && cfg.ServesAPI() && !setupWithoutDatabase {
 		return Config{}, errors.New("ADMIN_PASSWORD_HASH is required")
 	}
-	if cfg.CredentialEncryptionKey == "" {
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return Config{}, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must both be configured")
+	}
+	if cfg.CredentialEncryptionKey == "" && !setupWithoutDatabase {
 		return Config{}, errors.New("CREDENTIAL_ENCRYPTION_KEY is required")
 	}
 

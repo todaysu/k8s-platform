@@ -14,9 +14,8 @@ import {
 import { fetchClusterPod, fetchClusterPods, fetchPlatformCapabilities, type ClusterPod } from '../api/clusters'
 import { usePermission } from '../auth/context'
 import ArthasTerminal, { type ArthasTerminalHandle } from '../components/ArthasTerminal'
-import SettingsRequirementAlert from '../components/SettingsRequirementAlert'
 import ArthasPodPicker from './ArthasPodPicker'
-import { usePlatformSettings } from './usePlatformSettings'
+import { openPlatformSettings, usePlatformSettings } from './usePlatformSettings'
 import ArthasGuide from '../tools/arthas/ArthasGuide'
 import { useFullscreenPanel } from '../monitoring/useFullscreenPanel'
 import './ArthasPage.css'
@@ -30,8 +29,11 @@ const podKey = (pod: ClusterPod) => `${pod.namespace}/${pod.name}`
 const quickCommands = [
   { label: '实时面板', command: 'dashboard -n 3' },
   { label: '最忙线程', command: 'thread -n 10' },
+  { label: '阻塞线程', command: 'thread -b' },
+  { label: '线程列表', command: 'thread' },
   { label: '内存概览', command: 'memory' },
   { label: 'JVM 信息', command: 'jvm' },
+  { label: '类加载器', command: 'classloader -l' },
 ]
 
 export default function ArthasPage({ clusters }: Props) {
@@ -191,9 +193,9 @@ export default function ArthasPage({ clusters }: Props) {
       {titleActions ? createPortal(guideToggle, titleActions) : guideToggle}
       <div className="ks-arthas-scroll-region" aria-label="Arthas 可滚动工作区">
       {!canConfigure && <Alert isInline title="需要管理员权限" variant="warning">Arthas 可以读取和修改 JVM 运行时，仅允许平台管理员使用。</Alert>}
-      {arthasPackageMissing && <SettingsRequirementAlert section="java" title="Arthas 离线包地址尚未配置" variant="warning">
-        参数配置中尚未填写 Arthas 离线包地址。请先完成配置，避免诊断会话启动后才发现外部包不可用；使用平台内置包时可以忽略此提示。
-      </SettingsRequirementAlert>}
+      {arthasPackageMissing && <p className="ks-arthas-package-hint">
+        默认 Arthas 版本：4.3.5。如需更改，请到<button type="button" onClick={() => openPlatformSettings('java')}>平台参数</button>更改。
+      </p>}
       {error && <Alert isInline title={error} variant="danger" />}
 
         <Card className="ks-arthas-card ks-arthas-target-card" aria-label="诊断目标">

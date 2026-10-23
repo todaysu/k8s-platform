@@ -97,16 +97,73 @@ flowchart LR
 平台是单一二进制 + 内置前端静态资源，**构建一次、多架构通用**。
 
 ```bash
-# 1. 构建多架构镜像（amd64 + arm64）
-docker buildx create --name ftc-builder --use
+# 1. 准备 builder（国内网络务必配置镜像加速，见下方说明）
+cat > /tmp/buildkitd.toml <<'EOF'
+[registry."docker.io"]
+  mirrors = ["docker.m.daocloud.io", "docker.xuanyuan.me"]
+EOF
+
+docker buildx rm ftc-builder 2>/dev/null
+docker buildx create --name ftc-builder \
+  --driver docker-container \
+  --driver-opt network=host \
+  --config /tmp/buildkitd.toml \
+  --use
+docker buildx inspect ftc-builder --bootstrap   # 确认 Platforms 含 linux/amd64
+
+# 2. 构建多架构镜像（amd64 + arm64）
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -t your-registry.example.com/ftc-platform:0.1.0 \
   --push .
 
-# 2. 确认 manifest list 已生成（应看到两个平台）
+# 3. 确认 manifest list 已生成（应看到两个平台）
 docker buildx imagetools inspect your-registry.example.com/ftc-platform:0.1.0
 ```
+
+> **国内网络必须给 buildx 单独配镜像源。** `~/.docker/daemon.json` 里的 `registry-mirrors` 只对 daemon 生效，**docker-container 类型的 builder 不继承它**，会直连 `registry-1.docker.io` 并超时。表现是构建卡在 `load metadata for docker.io/library/node:22-alpine` 后报 `i/o timeout`。
+>
+> 如果用默认的 `docker` driver（`docker buildx build` 不带 `--builder`），则走 daemon，会自动使用镜像加速。
+
+**只构建 x86_64 单架构镜像**（Apple Silicon 本机构建 x86 镜像）：
+
+```bash
+docker buildx build --platform linux/amd64 \
+  -t your-registry.example.com/ftc-platform:0.1.0 \
+  --load .
+```
+
+Go 二进制以 `CGO_ENABLED=0` 交叉编译，**arm64 机器构建 amd64 镜像不需要模拟器或交叉工具链**。但 Dockerfile 里的 `apk add kubectl` 需要对应架构的 alpine 仓库，`--platform linux/amd64` 会自动处理。
+
+> **Go module 与 npm 源同样需要镜像。** `proxy.golang.org` 在国内不可达，Dockerfile 已把 `GOPROXY` 与 `NPM_REGISTRY` 做成构建参数，默认指向 `goproxy.cn` 与 `registry.npmmirror.com`。海外网络请覆盖：
+>
+> ```bash
+> docker buildx build --platform linux/amd64 \
+>   --build-arg GOPROXY=https://proxy.golang.org,direct \
+>   --build-arg NPM_REGISTRY=https://registry.npmjs.org \
+>   -t your-registry.example.com/ftc-platform:0.1.0 --load .
+> ```
+>
+> 仓库也提供了 Makefile 目标：
+>
+> ```bash
+> make build-image-amd64 REGISTRY=your-registry.example.com IMAGE_TAG=0.1.0
+> make build-image-multi  REGISTRY=your-registry.example.com IMAGE_TAG=0.1.0
+> ```
+
+**验证产出的架构**（务必确认，避免推错镜像到集群）：
+
+```bash
+docker image inspect your-registry.example.com/ftc-platform:0.1.0 --format '{{.Architecture}}/{{.Os}}'
+# 期望：amd64/linux
+
+# 进一步确认容器内二进制架构与可运行性
+docker run --rm --platform linux/amd64 --entrypoint sh \
+  your-registry.example.com/ftc-platform:0.1.0 -c 'uname -m; ls -la /app/ftc-platform'
+# 期望：x86_64
+```
+
+**首次构建耗时较长**（需拉取 node/golang/alpine 三套基础镜像，约 20 分钟），后续构建走缓存通常在 2–5 分钟。
 
 然后替换三处镜像地址：
 
@@ -717,6 +774,8 @@ kubectl -n ftc-platform exec platform-mysql-0 -- \
 | 建议 | 被纳管集群用最小权限 SA | 见第 6 节 |
 | 建议 | 平台自身 Pod 加 `resourceQuota` 与 `LimitRange` | 防止意外超卖 |
 | 建议 | MySQL 备份异地留存 | 单 PVC 备份扛不住节点级故障 |
+| 建议 | 调大上传上限时同步调大 `max_allowed_packet` | 文件内容存放在平台数据库中，包大小超过 MySQL 限制会写入失败 |
+| 建议 | 调大上传上限后核对 Ingress 的 `proxy-body-size` | 该注解由 setup 按初始上限生成；参数页调大后需同步更新 Ingress，否则代理会先返回 413 |
 | 可选 | 审计平台自身操作 | 平台已有会话与安全基线历史记录 |
 
 ### 11.1 平台已内置的安全能力

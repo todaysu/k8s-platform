@@ -71,6 +71,20 @@ describe('platform settings validation', () => {
     })
   })
 
+  it('accepts built-in Arthas and rejects unsafe offline overrides', () => {
+    const settings = base()
+    settings.java.arthas_url = ''
+    expect(validateSection('java', settings)).toEqual({})
+    settings.java.arthas_url = 'https://user:secret@repo.internal/arthas.zip'
+    settings.java.arthas_version = '4.3.5;unsafe'
+    settings.java.download_timeout_seconds = 0
+    expect(validateSection('java', settings)).toEqual({
+      arthas_url: '请输入 http:// 或 https:// 开头的有效地址。',
+      arthas_version: '请输入更新包版本，例如 4.3.5。',
+      download_timeout_seconds: '请输入 5–600 之间的整数。',
+    })
+  })
+
   it('validates backup targets and disk thresholds', () => {
     const settings = base()
     settings.database.backup_enabled = true

@@ -3,5 +3,6 @@
 data
 web/node_modules
 web/dist
+dist
 **/*_test.go
 docs

@@ -30,16 +30,9 @@ type PreflightNode = {
   taints?: string[]
 }
 
-type PreflightIngressClass = {
-  name: string
-  default: boolean
-  controller: string
-}
-
 type Preflight = {
   namespace: string
   nodes: PreflightNode[]
-  ingress_classes: PreflightIngressClass[]
   runtime_secret_exists: boolean
   warnings: string[]
   errors: string[]
@@ -61,6 +54,9 @@ type InstallStatus = {
   ca_cert?: string
   hosts?: string[]
   permissions_revoked?: boolean
+  domain?: string
+  node_port?: number
+  admin_username?: string
 }
 
 type ExternalDatabase = {
@@ -72,7 +68,7 @@ type ExternalDatabase = {
   tls: string
 }
 
-const setupSteps = ['环境检查', '外部 MySQL', '访问配置', '确认安装']
+const setupSteps = ['检查环境', '外部 MySQL', '访问配置', '安装与使用']
 
 async function readResponse<T>(response: Response, fallback: string): Promise<T> {
   let payload: ApiResponse<T>
@@ -122,23 +118,15 @@ export default function SetupPage() {
   const [testingDatabase, setTestingDatabase] = useState(false)
   const [databaseTestResult, setDatabaseTestResult] = useState('')
   const [domain, setDomain] = useState('')
-  const [ingressClass, setIngressClass] = useState('')
-  const [platformImage, setPlatformImage] = useState('')
-  const [platformPullSecret, setPlatformPullSecret] = useState('')
+  const [nodePort, setNodePort] = useState(30443)
+  const [confirmed, setConfirmed] = useState(false)
+  const [finishing, setFinishing] = useState(false)
   const [adminUsername, setAdminUsername] = useState('admin')
   const [adminPassword, setAdminPassword] = useState('')
   const [adminConfirm, setAdminConfirm] = useState('')
   const [installing, setInstalling] = useState(false)
   const [installStatus, setInstallStatus] = useState<InstallStatus | null>(null)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (installStatus?.state !== 'completed' || installStatus.permissions_revoked || !token) return
-    const timer = window.setTimeout(() => {
-      void getInstallStatus(token).then(setInstallStatus).catch(() => {})
-    }, 35000)
-    return () => window.clearTimeout(timer)
-  }, [installStatus?.permissions_revoked, installStatus?.state, token])
 
   useEffect(() => {
     if (!installing || !token) return
@@ -157,7 +145,6 @@ export default function SetupPage() {
     return () => { active = false; window.clearInterval(timer) }
   }, [installing, token])
 
-  const usableIngressClasses = preflight?.ingress_classes ?? []
   const preflightErrors = preflight?.errors ?? []
   const preflightWarnings = preflight?.warnings ?? []
 
@@ -167,8 +154,15 @@ export default function SetupPage() {
     try {
       const result = await post<Preflight>('/api/v1/setup/preflight', { token })
       setPreflight(result)
-      const defaultClass = result.ingress_classes.find(item => item.default)?.name || result.ingress_classes[0]?.name || ''
-      setIngressClass(current => current || defaultClass)
+      const previous = await getInstallStatus(token)
+      if (previous.state !== 'idle') {
+        setInstallStatus(previous)
+        setStep(4)
+        setInstalling(previous.state === 'running')
+        if (previous.domain) setDomain(previous.domain)
+        if (previous.node_port) setNodePort(previous.node_port)
+        if (previous.admin_username) setAdminUsername(previous.admin_username)
+      }
       if (result.errors.length > 0) setError('环境检查未通过，请先处理下方问题。')
     } catch (cause) {
       setPreflight(null)
@@ -190,15 +184,15 @@ export default function SetupPage() {
 
   const accessError = useMemo(() => {
     if (!domainPattern.test(domain.trim().toLowerCase())) return '请输入合法的内部域名，例如 ftc-platform.cmb.local。'
-    if (!ingressClass) return '请选择 IngressClass。'
+    if (!Number.isInteger(nodePort) || nodePort < 30000 || nodePort > 32767) return 'HTTPS NodePort 必须在 30000–32767 之间。'
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$/.test(adminUsername)) return '管理员用户名格式无效。'
     if (adminPassword.length < 12 || adminPassword.length > 72) return '管理员密码需要 12–72 字节。'
     if (adminPassword !== adminConfirm) return '两次管理员密码不一致。'
     return ''
-  }, [adminConfirm, adminPassword, adminUsername, domain, ingressClass])
+  }, [adminConfirm, adminPassword, adminUsername, domain, nodePort])
 
   const canContinue = step === 1
-    ? Boolean(preflight) && preflightErrors.length === 0 && !preflight?.runtime_secret_exists
+    ? Boolean(preflight) && preflightErrors.length === 0 && (!preflight?.runtime_secret_exists || installStatus?.state === 'failed')
     : step === 2
       ? !databaseError
       : step === 3
@@ -208,7 +202,7 @@ export default function SetupPage() {
   const next = () => {
     setError('')
     if (step === 1 && preflightErrors.length > 0) { setError('请先处理环境检查中的错误。'); return }
-    if (step === 1 && preflight?.runtime_secret_exists) { setError('平台已经初始化，不能重复安装。'); return }
+    if (step === 1 && preflight?.runtime_secret_exists && installStatus?.state !== 'failed') { setError('平台已经初始化；请查看当前安装进度。'); return }
     if (step === 2 && databaseError) { setError(databaseError); return }
     if (step === 3 && accessError) { setError(accessError); return }
     setStep(current => Math.min(4, current + 1))
@@ -261,7 +255,7 @@ export default function SetupPage() {
       const result = await post<InstallStatus>('/api/v1/setup/install', {
         token,
         domain: domain.trim().toLowerCase(),
-        ingress_class: ingressClass,
+        node_port: nodePort,
         external_database: {
           host: database.host.trim(),
           port: database.port.trim(),
@@ -272,17 +266,21 @@ export default function SetupPage() {
         },
         admin_username: adminUsername,
         admin_password: adminPassword,
-        platform_image: platformImage.trim(),
-        platform_image_pull_secret: platformPullSecret.trim(),
-        api_replicas: 1,
-        collector_replicas: 1,
-        worker_replicas: 1,
       })
       setInstallStatus(result)
     } catch (cause) {
       setInstalling(false)
       setError(cause instanceof Error ? cause.message : '启动安装失败。')
     }
+  }
+
+  const finishInstall = async () => {
+    setFinishing(true); setError('')
+    try {
+      const result = await post<InstallStatus>('/api/v1/setup/finish', { token, confirmed })
+      setInstallStatus(result)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '关闭初始化入口失败。') }
+    finally { setFinishing(false) }
   }
 
   const completed = installStatus?.state === 'completed'
@@ -315,11 +313,11 @@ export default function SetupPage() {
           {step === 1 && <>
             <section className="ks-setup-panel">
               <h2>检查运行环境</h2>
-              <p className="ks-setup-panel-lead">初始化令牌由引导 Job 自动生成。平台会检查节点、IngressClass 和是否已经初始化。</p>
+              <p className="ks-setup-panel-lead">初始化凭证保存在本地安装清单的 setup-token 字段。平台会检查节点和已有安装状态。</p>
               <Form onSubmit={event => { event.preventDefault(); void runPreflight() }}>
                 <FormGroup label="初始化凭证" isRequired fieldId="setup-token">
                   <TextInput aria-label="初始化凭证" id="setup-token" type="password" value={token} onChange={(_, value) => setToken(value)} isDisabled={checking || installing} />
-                  <small className="ks-setup-hint">读取命令：kubectl -n ftc-platform logs job/ftc-platform-bootstrap</small>
+                  <small className="ks-setup-hint">从 deploy/install.yaml 的 ftc-platform-bootstrap Secret 中读取 setup-token。请保管好安装清单。</small>
                 </FormGroup>
                 <div className="ks-setup-inline-actions">
                   <Button type="submit" variant="secondary" isLoading={checking} isDisabled={checking || installing}>检查环境</Button>
@@ -341,9 +339,9 @@ export default function SetupPage() {
                   </div>)}
                 </div>
                 <div className="ks-setup-report-card">
-                  <h4>Ingress 与状态</h4>
-                  <p><b>IngressClass：</b>{preflight.ingress_classes.length ? preflight.ingress_classes.map(item => `${item.name}${item.default ? '（默认）' : ''}`).join('、') : '未发现'}</p>
+                  <h4>安装状态</h4>
                   <p><b>已有运行 Secret：</b>{preflight.runtime_secret_exists ? '是' : '否'}</p>
+                  <p><b>访问方式：</b>平台 HTTPS + NodePort</p>
                   <p><b>MySQL：</b>下一步填写外部 MySQL 连接信息</p>
                 </div>
               </div>
@@ -397,23 +395,15 @@ FLUSH PRIVILEGES;`}</pre>
           {step === 3 && <>
             <section className="ks-setup-panel">
               <h2>配置访问方式</h2>
-              <p className="ks-setup-panel-lead">使用集群已有的 IngressClass 暴露平台。平台会生成私有 CA 和服务证书，初始化完成后下载 CA 并配置 hosts。</p>
+              <p className="ks-setup-panel-lead">平台直接提供 HTTPS，证书由安装器自动生成。请先确定域名与 NodePort，并让域名解析到可访问的集群节点。</p>
               <div className="ks-setup-form-grid">
                 <FormGroup label="内部域名" isRequired fieldId="setup-domain">
                   <TextInput id="setup-domain" value={domain} onChange={(_, value) => setDomain(value)} placeholder="ftc-platform.cmb.local" />
-                  <small className="ks-setup-hint">hosts 指向任意一个节点内网 IP。</small>
+                  <small className="ks-setup-hint">域名需解析到能访问 NodePort 的节点 IP。</small>
                 </FormGroup>
-                <FormGroup label="IngressClass" isRequired fieldId="setup-ingress-class">
-                  <FormSelect id="setup-ingress-class" value={ingressClass} onChange={(_, value) => setIngressClass(value)}>
-                    <FormSelectOption value="" label="选择 IngressClass" />
-                    {usableIngressClasses.map(item => <FormSelectOption key={item.name} value={item.name} label={`${item.name}${item.default ? '（默认）' : ''}`} />)}
-                  </FormSelect>
-                </FormGroup>
-                <FormGroup label="平台运行镜像" fieldId="setup-platform-image">
-                  <TextInput id="setup-platform-image" value={platformImage} onChange={(_, value) => setPlatformImage(value)} placeholder="留空使用安装 ConfigMap" />
-                </FormGroup>
-                <FormGroup label="平台镜像拉取 Secret" fieldId="setup-platform-pull">
-                  <TextInput id="setup-platform-pull" value={platformPullSecret} onChange={(_, value) => setPlatformPullSecret(value)} placeholder="可选" />
+                <FormGroup label="HTTPS NodePort" isRequired fieldId="setup-node-port">
+                  <TextInput id="setup-node-port" type="number" value={nodePort} onChange={(_, value) => setNodePort(Number(value))} />
+                  <small className="ks-setup-hint">默认 30443；请确认防火墙允许访问。</small>
                 </FormGroup>
               </div>
               {accessError && <Alert isInline title={accessError} variant="danger" />}
@@ -435,22 +425,22 @@ FLUSH PRIVILEGES;`}</pre>
           {step === 4 && <>
             <section className="ks-setup-panel">
               <h2>确认并安装</h2>
-              <p className="ks-setup-panel-lead">安装开始后会连接外部 MySQL、建表、创建 Ingress 和平台实例，过程约 2–5 分钟。</p>
+              <p className="ks-setup-panel-lead">安装器将连接外部 MySQL、建表、生成证书并部署平台实例。</p>
               <div className="ks-setup-review">
                 <div><h3>外部 MySQL</h3><p>{database.username}@{database.host}:{database.port}/{database.database}</p><p>TLS：{database.tls === 'disabled' ? '关闭' : database.tls === 'preferred' ? '优先' : '必须'}</p><p>平台只建表，不创建数据库/账号</p></div>
-                <div><h3>访问方式</h3><p>https://{domain.trim().toLowerCase()}</p><p>IngressClass {ingressClass} · 自签 CA</p><p>管理员 {adminUsername}</p></div>
+                <div><h3>访问方式</h3><p>https://{domain.trim().toLowerCase()}:{nodePort}</p><p>平台自签 CA · HTTPS NodePort</p><p>管理员 {adminUsername}</p></div>
               </div>
-              {preflight?.nodes.length ? <div className="ks-setup-hosts"><b>安装完成后的 hosts 目标（任一节点）：</b><pre>{preflight.nodes.flatMap(node => node.internal_ips).map(ip => `${ip}  ${domain.trim().toLowerCase()}`).join('\n')}</pre></div> : null}
-              {failed && <Alert isInline title="安装失败" variant="danger"><p>{installStatus?.error}</p><p>已创建的资源会保留；请修复问题后重新执行，或联系平台维护人员。</p></Alert>}
+              {preflight?.nodes.length ? <div className="ks-setup-hosts"><b>域名解析目标（选择可访问 NodePort 的节点）：</b><pre>{preflight.nodes.flatMap(node => node.internal_ips).map(ip => `${ip}  ${installStatus?.domain || domain.trim().toLowerCase()}`).join('\n')}</pre></div> : null}
+              {failed && <Alert isInline title="安装失败" variant="danger"><p>{installStatus?.error}</p><p>已创建的资源会保留；修复后可重新提交安装配置。</p></Alert>}
               {completed && <div className="ks-setup-result">
                 <Alert isInline title="初始化完成" variant="success" />
                 <p>访问地址：<a href={installStatus?.url} rel="noreferrer" target="_blank">{installStatus?.url}</a></p>
-                <p>管理员：{adminUsername}</p>
+                <p>将域名解析到可访问 NodePort 的节点，并在客户端信任下载的 CA 后打开平台。管理员：{installStatus?.admin_username || adminUsername}</p>
                 <div className="ks-setup-inline-actions">
                   <Button variant="secondary" onClick={downloadCA} isDisabled={!installStatus?.ca_cert}>下载平台 CA 证书</Button>
                 </div>
-                <p className="ks-setup-hint">{installStatus?.permissions_revoked ? '初始化权限已回收，setup 身份不能再修改集群。' : '安装完成后约 30 秒会自动回收 setup 的 RoleBinding/ClusterRoleBinding。'}</p>
-                <div className="ks-setup-hosts"><b>hosts 配置：</b><pre>{(installStatus?.hosts ?? []).map(ip => `${ip}  ${domain.trim().toLowerCase()}`).join('\n')}</pre></div>
+                <p className="ks-setup-hint">{installStatus?.permissions_revoked ? '初始化入口已关闭。' : '确认已能登录正式平台后，关闭初始化入口并回收权限。'}</p>
+                <div className="ks-setup-hosts"><b>hosts 配置：</b><pre>{(installStatus?.hosts ?? []).map(ip => `${ip}  ${installStatus?.domain || domain.trim().toLowerCase()}`).join('\n')}</pre></div>
               </div>}
               {installStatus && <ol className="ks-setup-progress">
                 {installStatus.steps.map(item => <li className={`is-${item.status}`} key={item.key}>
@@ -469,7 +459,13 @@ FLUSH PRIVILEGES;`}</pre>
               {step < 4 && <Button variant="primary" isDisabled={!canContinue || installing || checking} onClick={next}>下一步</Button>}
               {step === 4 && !installStatus && <Button variant="primary" isDisabled={!canContinue || installing} isLoading={installing} onClick={() => void startInstall()}>开始安装</Button>}
               {step === 4 && failed && <Button variant="secondary" isDisabled={installing} onClick={() => void startInstall()}>重新尝试</Button>}
-              {step === 4 && completed && <Button variant="secondary" onClick={() => window.location.assign(installStatus?.url ?? '/')}>打开平台</Button>}
+              {step === 4 && completed && <>
+                <Button variant="secondary" onClick={() => window.open(installStatus?.url ?? '/', '_blank')}>打开平台</Button>
+                {!installStatus?.permissions_revoked && <>
+                  <label className="ks-setup-finish-confirm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /> 已确认能登录正式平台</label>
+                  <Button variant="primary" isDisabled={!confirmed || finishing} isLoading={finishing} onClick={() => void finishInstall()}>完成并关闭初始化入口</Button>
+                </>}
+              </>}
             </div>
           </footer>
         </CardBody>

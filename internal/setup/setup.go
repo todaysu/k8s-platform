@@ -162,6 +162,9 @@ func New(config Config) (*Server, error) {
 	if config.Namespace == "" {
 		config.Namespace = os.Getenv("POD_NAMESPACE")
 	}
+	if config.Namespace == "" {
+		config.Namespace = "ftc-platform"
+	}
 	if config.RuntimeSecret == "" {
 		config.RuntimeSecret = "ftc-platform-runtime"
 	}
@@ -209,7 +212,11 @@ func New(config Config) (*Server, error) {
 			}
 		}
 	}
-	return &Server{config: config, client: client, dynamic: dynamicClient, restart: restart}, nil
+	server := &Server{config: config, client: client, dynamic: dynamicClient, restart: restart}
+	if err := server.loadInstallState(context.Background()); err != nil {
+		return nil, err
+	}
+	return server, nil
 }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -224,6 +231,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		server.handleInstall(writer, request)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/setup/install":
 		server.handleInstallStatus(writer, request)
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/setup/finish":
+		server.handleFinish(writer, request)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/setup/ca":
 		server.handleCA(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/setup/test":

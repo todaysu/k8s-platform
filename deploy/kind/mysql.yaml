@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ftc-platform
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: platform-mysql
+  namespace: ftc-platform
+type: Opaque
+stringData:
+  root-password: ftc-kind-root-v1
+  username: ftc
+  password: ftc-kind-v1
+  database: ftc_platform
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-mysql
+  namespace: ftc-platform
+spec:
+  selector:
+    app.kubernetes.io/name: platform-mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: platform-mysql
+  namespace: ftc-platform
+spec:
+  serviceName: platform-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_0900_ai_ci
+            - --default-time-zone=+00:00
+            - --max-connections=200
+            - --innodb-buffer-pool-size=256M
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: platform-mysql, key: root-password }
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef: { name: platform-mysql, key: database }
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef: { name: platform-mysql, key: username }
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: platform-mysql, key: password }
+          ports:
+            - name: mysql
+              containerPort: 3306
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"]
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD"]
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 384Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 5Gi

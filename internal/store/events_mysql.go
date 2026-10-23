@@ -13,6 +13,11 @@ import (
 
 type MySQLEvents struct{ db *sql.DB }
 
+// SQLDB exposes the pooled connection to read-only services that consume the
+// retained event aggregates. Callers must not close it; ownership remains with
+// MySQLEvents.
+func (store *MySQLEvents) SQLDB() *sql.DB { return store.db }
+
 func OpenMySQLEvents(dsn string) (*MySQLEvents, error) {
 	db, err := openMySQLDB(dsn)
 	if err != nil {

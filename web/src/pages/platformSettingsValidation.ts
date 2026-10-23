@@ -79,15 +79,19 @@ export function validateSection(section: SettingsSection, settings: PlatformSett
     if (value.arthas_url !== '') {
       try {
         const parsed = new URL(value.arthas_url)
-        if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.host) throw new Error('unsupported URL')
+        if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.host || parsed.username || parsed.password || parsed.hash) throw new Error('unsupported URL')
       } catch {
         errors.arthas_url = '请输入 http:// 或 https:// 开头的有效地址。'
+      }
+      if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*$/.test(value.arthas_version) || value.arthas_version.length > 64) {
+        errors.arthas_version = '请输入更新包版本，例如 4.3.5。'
       }
     }
     if (value.arthas_sha256 !== '' && !sha256.test(value.arthas_sha256)) {
       errors.arthas_sha256 = 'SHA-256 需要 64 位十六进制字符。'
     }
     integer(errors, 'max_concurrency', value.max_concurrency, 1, 20)
+    integer(errors, 'download_timeout_seconds', value.download_timeout_seconds, 5, 600)
     integer(errors, 'diagnostic_timeout_minutes', value.diagnostic_timeout_minutes, 5, 240)
     integer(errors, 'temporary_retention_hours', value.temporary_retention_hours, 1, 168)
     integer(errors, 'heap_dump_max_gib', value.heap_dump_max_gib, 1, 100)

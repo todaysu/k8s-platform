@@ -117,8 +117,8 @@ func TestPreflightAllowsSmallExternalMySQLCluster(t *testing.T) {
 	if result.PXCAvailable {
 		t.Fatal("PXC should not be required for an external-MySQL install")
 	}
-	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "IngressClass") {
-		t.Fatalf("expected only the missing IngressClass error, got %v", result.Errors)
+	if len(result.Errors) != 0 {
+		t.Fatalf("external MySQL with NodePort must not require IngressClass: %v", result.Errors)
 	}
 	if result.Nodes[1].Schedulable {
 		t.Fatal("tainted node must not be schedulable")

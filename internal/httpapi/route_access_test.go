@@ -72,6 +72,15 @@ func TestRouteAccessLookupRules(t *testing.T) {
 	if _, declared := access.Lookup("GET /api/v1/clusters"); declared {
 		t.Fatal("read-only routes must not require a rule")
 	}
+	for _, pattern := range []string{"POST /api/v1/reports", "GET /api/v1/reports/config", "PUT /api/v1/reports/config"} {
+		rule, declared := access.Lookup(pattern)
+		if !declared || rule.MinRole != "admin" {
+			t.Fatalf("report administration route %q must be admin-only: %#v", pattern, rule)
+		}
+	}
+	if _, declared := access.Lookup("GET /api/v1/reports"); declared {
+		t.Fatal("saved report list must remain available to authenticated viewers")
+	}
 }
 
 func TestRoleAllows(t *testing.T) {

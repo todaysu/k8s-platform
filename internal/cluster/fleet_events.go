@@ -382,15 +382,15 @@ func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q Fle
 			appendFleetFailure(&result, record, err)
 			continue
 		}
-		localEvents := int64(0)
+		localAffected := false
 		for _, group := range groups {
 			if q.Issue != "" && group.Category != q.Issue {
 				continue
 			}
-			if group.EventCount == 0 {
+			if group.EventCount <= 0 && group.OccurrenceCount <= 0 {
 				continue
 			}
-			localEvents += group.EventCount
+			localAffected = true
 			total += group.EventCount
 			affectedObjects += group.AffectedObjects
 			types[group.Type] = true
@@ -431,7 +431,7 @@ func (service *OnboardingService) getFleetEventIssues(ctx context.Context, q Fle
 			}
 			bucket.clusters[record.ID] = true
 		}
-		if localEvents > 0 {
+		if localAffected {
 			affectedClusters++
 		}
 		service.appendFleetCollector(record, statuses, &result)
@@ -480,15 +480,15 @@ func (service *OnboardingService) getFleetEventObjects(ctx context.Context, q Fl
 			continue
 		}
 		localObjects := map[string]FleetEventObject{}
-		localEvents := int64(0)
+		localAffected := false
 		for _, row := range rows {
 			if q.Issue != "" && row.Category != q.Issue {
 				continue
 			}
-			if row.EventCount == 0 {
+			if row.EventCount <= 0 && row.OccurrenceCount <= 0 {
 				continue
 			}
-			localEvents += row.EventCount
+			localAffected = true
 			total += row.EventCount
 			categories[row.Category] = true
 			namespaces[row.RegardingNamespace] = true
@@ -518,7 +518,7 @@ func (service *OnboardingService) getFleetEventObjects(ctx context.Context, q Fl
 			}
 			localObjects[key] = object
 		}
-		if localEvents > 0 {
+		if localAffected {
 			affectedClusters++
 		}
 		if q.ClusterID != "" && len(localObjects) > 0 {

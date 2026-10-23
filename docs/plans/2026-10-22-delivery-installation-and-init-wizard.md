@@ -1,5 +1,7 @@
 # 交付版安装与初始化设计
 
+> 2026-10-23：交付范围已收敛为普通 Kubernetes、平台原生 HTTPS + NodePort。本文保留历史设计与已实现记录；最终调整以 [单一交付方案](2026-10-23-single-kubernetes-delivery.md) 为准。新方案尚待实现，现有 install.yaml 仍为 Ingress 版本。
+
 日期：2026-10-22
 状态：设计评审，待确认 4 个架构决策后进入实现
 

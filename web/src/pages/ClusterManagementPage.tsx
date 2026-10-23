@@ -2,6 +2,7 @@ import OperationsToolsPage from './OperationsToolsPage'
 import FleetMonitoringPage from './FleetMonitoringPage'
 import PlatformAccessPage from './PlatformAccessPage'
 import SecurityBaselinePage from './SecurityBaselinePage'
+import OperationalReportsPage from './OperationalReportsPage'
 import { usePermission } from '../auth/context'
 import { AccountMenu } from '../auth/Auth'
 import {
@@ -55,6 +56,7 @@ import {
   CubesIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
+  FileAltIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
@@ -159,7 +161,7 @@ const statusMeta: Record<ClusterStatus, {
   unreachable: { icon: ExclamationCircleIcon, label: '连接失败', status: 'danger' },
 }
 
-type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'inspections' | 'security' | 'access' | 'tools' | 'monitoring'
+type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'inspections' | 'reports' | 'security' | 'access' | 'tools' | 'monitoring'
 
 const navItems = [
   { icon: TachometerAltIcon, id: 'overview' as const, label: '概览' },
@@ -168,6 +170,7 @@ const navItems = [
   { icon: ChartPieIcon, id: 'capacity' as const, label: '容量' },
   { icon: BellIcon, id: 'events' as const, label: '跨集群事件' },
   { icon: SearchIcon, id: 'inspections' as const, label: '巡检分析' },
+  { icon: FileAltIcon, id: 'reports' as const, label: '运行报告' },
   { icon: ShieldAltIcon, id: 'security' as const, label: '安全扫描' },
   { icon: CubesIcon, id: 'tools' as const, label: '运维工具' },
 ]
@@ -489,6 +492,7 @@ function navigationSectionFromLocation(): NavigationSection {
   if (window.location.pathname === '/capacity') return 'capacity'
   if (window.location.pathname === '/events') return 'events'
   if (window.location.pathname === '/inspections') return 'inspections'
+  if (window.location.pathname === '/reports' || window.location.pathname.startsWith('/reports/')) return 'reports'
   return window.location.pathname.startsWith('/clusters') ? 'clusters' : 'overview'
 }
 
@@ -668,7 +672,7 @@ function ClusterManagementPage() {
   }
 
   const navigateFromSidebar = (section: NavigationSection) => {
- if (section === 'tools' || section === 'monitoring' || section === 'security') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
+ if (section === 'tools' || section === 'monitoring' || section === 'security' || section === 'reports') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
     if (section === 'access') { window.history.pushState({ section }, '', '/settings/access'); setActiveClusterID(null); setActiveSection('access'); return }
     if (section === 'clusters') {
       showClusterList('ALL')
@@ -737,7 +741,7 @@ function ClusterManagementPage() {
               <div className="ks-title-row">
                 <div>
                   <Title headingLevel="h1" size="2xl">
-                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'security' ? '安全扫描' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? toolTitle : activeSection === 'monitoring' ? '监控' : '集群'}
+                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'reports' ? '运行报告' : activeSection === 'security' ? '安全扫描' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? toolTitle : activeSection === 'monitoring' ? '监控' : '集群'}
                   </Title>
 
                 </div>
@@ -753,8 +757,8 @@ function ClusterManagementPage() {
             </PageSection>
 
             <PageSection className="ks-content-section">
-              {activeSection !== 'access' && activeSection !== 'tools' && activeSection !== 'security' && loadError && <Alert isInline title="集群列表读取失败" variant="danger">{loadError}</Alert>}
-              {activeSection !== 'access' && activeSection !== 'tools' && activeSection !== 'security' && unreachableCount > 0 && (
+              {activeSection !== 'access' && activeSection !== 'tools' && activeSection !== 'security' && activeSection !== 'reports' && loadError && <Alert isInline title="集群列表读取失败" variant="danger">{loadError}</Alert>}
+              {activeSection !== 'access' && activeSection !== 'tools' && activeSection !== 'security' && activeSection !== 'reports' && unreachableCount > 0 && (
                 <Alert
                   actionLinks={<AlertActionLink onClick={() => showClusterList('unreachable')}>查看异常集群</AlertActionLink>}
                   isInline
@@ -807,6 +811,8 @@ function ClusterManagementPage() {
                 <FleetEventsPage clusters={clusters} />
               ) : activeSection === 'inspections' ? (
                 <FleetInspectionsPage findings={inspectionFindings} onOpenCapacity={openClusterCapacity} onOpenCluster={openCluster} />
+              ) : activeSection === 'reports' ? (
+                <OperationalReportsPage clusters={clusters} />
               ) : (
               <Card className="ks-cluster-card" id="managed-clusters">
                 <CardHeader>

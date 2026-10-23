@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -18,14 +19,22 @@ import (
 	"example.com/k8s-platform/internal/leadership"
 	"example.com/k8s-platform/internal/metrics"
 	"example.com/k8s-platform/internal/platformsettings"
+	"example.com/k8s-platform/internal/reports"
 	"example.com/k8s-platform/internal/runtimecontrol"
 	"example.com/k8s-platform/internal/setup"
 	"example.com/k8s-platform/internal/store"
+	"example.com/k8s-platform/internal/tlsserver"
 )
 
-const platformVersion = "0.1.0-dev"
+var platformVersion = "v1.0.0"
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "renew-certificate" {
+		if err := setup.RunCertificateRenewal(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
@@ -71,7 +80,7 @@ func main() {
 	manager.EnableQueuedSecurityScans()
 	var eventRepository cluster.EventRepository = database
 	var closeEvents func() error
-	if cfg.PlatformDatabaseDSN == "" && cfg.EventDatabaseDSN != "" {
+	if cfg.EventDatabaseDSN != "" {
 		mysqlEvents, openErr := store.OpenMySQLEvents(cfg.EventDatabaseDSN)
 		if openErr != nil {
 			log.Fatal(openErr)
@@ -151,7 +160,25 @@ func main() {
 		if restartErr != nil {
 			log.Printf("platform settings: automatic Kubernetes restart disabled: %v", restartErr)
 		}
-		routerOptions := httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled, Authenticator: authentication, SettingsRepository: database, Admission: httpapi.AdmissionLimits{Queries: cfg.HTTPQueryConcurrency, Realtime: cfg.HTTPRealtimeConcurrency, Monitoring: cfg.HTTPMonitoringConcurrency, Sessions: cfg.HTTPSessionConcurrency, PerCluster: cfg.HTTPClusterConcurrency}}
+		eventDBProvider, ok := eventRepository.(interface{ SQLDB() *sql.DB })
+		if !ok {
+			log.Fatal("event repository does not expose its database connection")
+		}
+		reportContext, cancelReports := context.WithTimeout(applicationContext, 10*time.Second)
+		reportService, reportErr := reports.New(
+			reportContext,
+			database.SQLDB(),
+			eventDBProvider.SQLDB(),
+			cfg.PlatformDatabaseDSN == "",
+			cfg.PlatformDatabaseDSN == "" && cfg.EventDatabaseDSN == "",
+			database,
+			cipher,
+		)
+		cancelReports()
+		if reportErr != nil {
+			log.Fatalf("initialize operational reports: %v", reportErr)
+		}
+		routerOptions := httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled, Reports: reportService, Authenticator: authentication, SettingsRepository: database, Admission: httpapi.AdmissionLimits{Queries: cfg.HTTPQueryConcurrency, Realtime: cfg.HTTPRealtimeConcurrency, Monitoring: cfg.HTTPMonitoringConcurrency, Sessions: cfg.HTTPSessionConcurrency, PerCluster: cfg.HTTPClusterConcurrency}}
 		if restartErr == nil {
 			routerOptions.SettingsRestarter = restarter
 		}
@@ -198,7 +225,19 @@ func main() {
 	}
 
 	log.Printf("platform listening on %s", cfg.ListenAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if cfg.HealthAddr != "" {
+		startInternalHealth(applicationContext, cfg.HealthAddr, database.SQLDB())
+	}
+	if cfg.TLSCertFile != "" && cfg.ServesAPI() {
+		server.TLSConfig, err = tlsserver.FromFiles(applicationContext, cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = server.ListenAndServeTLS("", "")
+	} else {
+		err = server.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }
@@ -216,6 +255,10 @@ func runSetupServer(cfg config.Config) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	tlsConfig, err := setupServer.BootstrapTLS(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/health", setupServer)
 	mux.Handle("/api/v1/setup/", setupServer)
@@ -228,7 +271,10 @@ func runSetupServer(cfg config.Config) {
 	}
 	applicationContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux, TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second}
+	if cfg.HealthAddr != "" {
+		startInternalHealth(applicationContext, cfg.HealthAddr, nil)
+	}
 	go func() {
 		<-applicationContext.Done()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -236,7 +282,7 @@ func runSetupServer(cfg config.Config) {
 		_ = server.Shutdown(shutdownContext)
 	}()
 	log.Printf("setup server listening on %s", cfg.ListenAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }

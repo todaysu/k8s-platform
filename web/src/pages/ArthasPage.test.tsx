@@ -100,6 +100,9 @@ describe('Arthas guided session page', () => {
     expect(ns).toBeDisabled()
     expect(screen.getByRole('combobox',{name:'选择 Arthas Pod'})).toHaveTextContent('java-a')
     expect(screen.getByLabelText('测试终端')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '阻塞线程' })).toHaveAttribute('title', 'thread -b')
+    expect(screen.getByRole('button', { name: '线程列表' })).toHaveAttribute('title', 'thread')
+    expect(screen.getByRole('button', { name: '类加载器' })).toHaveAttribute('title', 'classloader -l')
     fireEvent.click(screen.getByRole('button',{name:'切换目标'}))
     fireEvent.click(screen.getByRole('button',{name:'取消'}))
     expect(terminalCalls.stop).not.toHaveBeenCalled()
@@ -113,7 +116,7 @@ describe('Arthas guided session page', () => {
     expect(screen.getByRole('checkbox')).not.toBeChecked()
   })
 
-  it('prompts to configure the Arthas offline package when it is missing', async () => {
+  it('shows a small built-in package hint with a settings link', async () => {
     const payload = (data: unknown) => ({ ok: true, json: async () => ({ data, error: null }) })
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -123,8 +126,9 @@ describe('Arthas guided session page', () => {
     }))
     render(<ArthasPage clusters={[{ id: 'c1', name: 'cluster-a' }]} />)
 
-    expect(await screen.findByText('Arthas 离线包地址尚未配置')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('前往参数配置'))
+    expect(await screen.findByText(/默认 Arthas 版本：4\.3\.5/)).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '平台参数' }))
     expect(window.location.pathname).toBe('/settings/access')
     expect(window.location.search).toBe('?tab=parameters&section=java')
   })

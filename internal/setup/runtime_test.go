@@ -17,7 +17,7 @@ func runtimePlan() RuntimePlan {
 
 func TestBuildRuntimeResources(t *testing.T) {
 	config := BuildRuntimeConfigMap(runtimePlan())
-	if config.Namespace != "ftc-platform" || config.Data["SETUP_MODE"] != "false" || config.Data["TRUST_PROXY_HEADERS"] != "true" {
+	if config.Namespace != "ftc-platform" || config.Data["SETUP_MODE"] != "false" || config.Data["TRUST_PROXY_HEADERS"] != "false" || config.Data["COLLECTION_SHARDS"] != "16" {
 		t.Fatalf("unexpected runtime config: %#v", config.Data)
 	}
 	deployments, err := BuildRuntimeDeployments(runtimePlan())
@@ -35,8 +35,11 @@ func TestBuildRuntimeResources(t *testing.T) {
 		t.Fatalf("unexpected role deployments: %s %s", collector.Name, worker.Name)
 	}
 	apiContainer := api.Spec.Template.Spec.Containers[0]
-	if apiContainer.ReadinessProbe.HTTPGet.Path != "/api/v1/health" {
+	if apiContainer.ReadinessProbe.HTTPGet.Path != "/readyz" {
 		t.Fatalf("unexpected API probe: %s", apiContainer.ReadinessProbe.HTTPGet.Path)
+	}
+	if apiContainer.ReadinessProbe.HTTPGet.Port.StrVal != "health" || apiContainer.Env[len(apiContainer.Env)-1].Name != "TLS_KEY_FILE" {
+		t.Fatalf("API must use internal health port and mounted TLS files: %#v", apiContainer)
 	}
 	collectorContainer := collector.Spec.Template.Spec.Containers[0]
 	if collectorContainer.ReadinessProbe.HTTPGet.Path != "/readyz" || collectorContainer.LivenessProbe.HTTPGet.Path != "/healthz" {
@@ -46,7 +49,7 @@ func TestBuildRuntimeResources(t *testing.T) {
 		t.Fatal("collector is missing anti-affinity")
 	}
 	service := BuildRuntimeService("ftc-platform")
-	if service.Spec.Selector["app.kubernetes.io/name"] != "ftc-platform" {
+	if service.Spec.Selector["app.kubernetes.io/name"] != "ftc-platform" || service.Spec.Ports[0].NodePort != 30443 || service.Spec.Ports[0].TargetPort.StrVal != "https" {
 		t.Fatalf("unexpected service selector: %#v", service.Spec.Selector)
 	}
 }

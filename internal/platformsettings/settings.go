@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"example.com/k8s-platform/internal/arthasdist"
 )
 
 const (
@@ -142,6 +144,18 @@ func Load(ctx context.Context, repository Repository) (Settings, error) {
 		return Settings{}, err
 	}
 	for _, record := range records {
+		if record.Section == SectionRuntime {
+			// Older releases stored the removed file service's upload limit.
+			// Ignore only that retired key when reading existing settings.
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(record.Payload, &fields); err == nil {
+				delete(fields, "artifact_max_upload_mib")
+				record.Payload, err = json.Marshal(fields)
+				if err != nil {
+					return Settings{}, err
+				}
+			}
+		}
 		if err := decodeInto(&value, record.Section, record.Payload); err != nil {
 			return Settings{}, fmt.Errorf("decode %s platform settings: %w", record.Section, err)
 		}
@@ -281,8 +295,11 @@ func validate(value Settings, section string) error {
 	case SectionJava:
 		if value.Java.ArthasURL != "" {
 			parsed, err := url.Parse(value.Java.ArthasURL)
-			if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+			if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 				return errors.New("arthas_url must be an HTTP or HTTPS URL")
+			}
+			if !arthasdist.ValidVersion(value.Java.ArthasVersion) {
+				return errors.New("arthas_version must use a version such as 4.3.5")
 			}
 		}
 		if value.Java.ArthasSHA256 != "" && !sha256Pattern.MatchString(value.Java.ArthasSHA256) {

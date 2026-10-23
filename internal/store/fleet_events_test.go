@@ -249,3 +249,45 @@ func TestFleetDailyRollupServesLongWindows(t *testing.T) {
 		t.Fatalf("unexpected daily object rollup: %#v", objects.Objects)
 	}
 }
+
+func TestFleetDailyIssuesIncludeRepeatedEventsFromEarlierDays(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	day := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
+	if _, err = db.Create(ctx, cluster.ClusterRecord{ManagedCluster: cluster.ManagedCluster{ID: "c1", Name: "c1", APIServer: "https://c1", CreatedAt: day, LastCheckedAt: day}, Fingerprint: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	event := cluster.ClusterEvent{ClusterID: "c1", EventUID: "persistent-event", Type: "Warning", Reason: "FailedScheduling", Message: "no available nodes", RegardingKind: "Pod", RegardingNamespace: "app", RegardingName: "web-1", RegardingUID: "pod-1", OccurrenceCount: 2, FirstObservedAt: day.Add(-time.Hour), LastObservedAt: day.Add(-time.Hour)}
+	if err = db.UpsertEvents(ctx, []cluster.ClusterEvent{event}); err != nil {
+		t.Fatal(err)
+	}
+	event.OccurrenceCount = 7
+	event.LastObservedAt = day.Add(12 * time.Hour)
+	if err = db.UpsertEvents(ctx, []cluster.ClusterEvent{event}); err != nil {
+		t.Fatal(err)
+	}
+	svc := cluster.NewOnboardingService(nil, nil, db)
+	svc.SetEventRepository(db)
+	for _, view := range []string{"issues", "objects", "resources"} {
+		t.Run(view, func(t *testing.T) {
+			result, err := svc.GetFleetEvents(ctx, cluster.FleetEventQuery{View: view, EventQuery: cluster.EventQuery{Since: day, Until: day.Add(24 * time.Hour), Limit: 25}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Summary.AffectedClusters != 1 || result.Summary.AffectedObjects != 1 {
+				t.Fatalf("repeated event must retain affected cluster and object counts: %#v", result)
+			}
+			if view == "issues" {
+				if len(result.Issues) != 1 || result.Issues[0].EventCount != 0 || result.Issues[0].OccurrenceCount != 5 {
+					t.Fatalf("repeated event must remain visible without becoming a new event: %#v", result)
+				}
+			} else if len(result.Objects) != 1 || result.Objects[0].EventCount != 0 || result.Objects[0].OccurrenceCount != 5 {
+				t.Fatalf("repeated event must remain visible on the affected object: %#v", result)
+			}
+		})
+	}
+}

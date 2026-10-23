@@ -2,11 +2,19 @@ package setup
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"example.com/k8s-platform/internal/store"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,6 +33,7 @@ type ExternalDatabase struct {
 type InstallRequest struct {
 	Token                   string           `json:"token"`
 	Domain                  string           `json:"domain"`
+	NodePort                int32            `json:"node_port"`
 	IngressClass            string           `json:"ingress_class"`
 	ExternalDatabase        ExternalDatabase `json:"external_database"`
 	AdminUsername           string           `json:"admin_username"`
@@ -48,6 +57,9 @@ type InstallStatus struct {
 	Steps              []InstallStep `json:"steps"`
 	Error              string        `json:"error,omitempty"`
 	URL                string        `json:"url,omitempty"`
+	Domain             string        `json:"domain,omitempty"`
+	NodePort           int32         `json:"node_port,omitempty"`
+	AdminUsername      string        `json:"admin_username,omitempty"`
 	CAURL              string        `json:"ca_url,omitempty"`
 	CACert             string        `json:"ca_cert,omitempty"`
 	Hosts              []string      `json:"hosts,omitempty"`
@@ -61,9 +73,9 @@ var installStepDefinitions = []struct {
 }{
 	{"preflight", "环境预检"},
 	{"database", "连接外部 MySQL 并初始化"},
-	{"ingress", "创建 HTTPS Ingress"},
+	{"tls", "生成 HTTPS 证书"},
 	{"runtime", "部署平台实例"},
-	{"verify", "健康检查"},
+	{"verify", "验证平台服务"},
 }
 
 func newInstallStatus() InstallStatus {
@@ -80,36 +92,79 @@ func (server *Server) StartInstall(request InstallRequest) error {
 		server.installMu.Unlock()
 		return fmt.Errorf("安装正在进行中，请等待当前任务结束")
 	}
-	server.install = newInstallStatus()
 	server.installRunning = true
 	server.installMu.Unlock()
+	release, lost, err := server.acquireInstallLease(context.Background())
+	if err != nil {
+		server.installMu.Lock()
+		server.installRunning = false
+		server.installMu.Unlock()
+		return err
+	}
+	server.installMu.Lock()
+	server.install = newInstallStatus()
+	server.install.Domain = strings.ToLower(strings.TrimSpace(request.Domain))
+	server.install.AdminUsername = request.AdminUsername
+	if request.NodePort == 0 {
+		server.install.NodePort = 30443
+	} else {
+		server.install.NodePort = request.NodePort
+	}
+	server.installMu.Unlock()
+	if err := server.saveInstallState(context.Background()); err != nil {
+		release()
+		server.installMu.Lock()
+		server.installRunning = false
+		server.installMu.Unlock()
+		return fmt.Errorf("保存安装进度失败：%w", err)
+	}
 	go func() {
+		defer release()
+		parent, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-lost:
+				cancel()
+			case <-done:
+			}
+		}()
 		defer func() {
 			server.installMu.Lock()
 			server.installRunning = false
 			server.install.UpdatedAt = time.Now().UTC()
 			server.installMu.Unlock()
 		}()
-		server.runInstall(request)
+		server.runInstall(parent, request)
 	}()
 	return nil
 }
 
-func (server *Server) runInstall(request InstallRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+func (server *Server) runInstall(parent context.Context, request InstallRequest) {
+	ctx, cancel := context.WithTimeout(parent, 45*time.Minute)
 	defer cancel()
+	var dsn string
 	fail := func(step string, err error) {
+		message := err.Error()
+		for _, secret := range []string{request.ExternalDatabase.Password, request.AdminPassword, dsn} {
+			if secret != "" {
+				message = strings.ReplaceAll(message, secret, "[已隐藏]")
+			}
+		}
 		server.installMu.Lock()
 		for index := range server.install.Steps {
 			if server.install.Steps[index].Key == step {
 				server.install.Steps[index].Status = "failed"
-				server.install.Steps[index].Message = err.Error()
+				server.install.Steps[index].Message = message
 			}
 		}
 		server.install.State = "failed"
-		server.install.Error = err.Error()
+		server.install.Error = message
 		server.install.UpdatedAt = time.Now().UTC()
 		server.installMu.Unlock()
+		_ = server.saveInstallState(context.Background())
 	}
 	step := func(key, status, message string) {
 		server.installMu.Lock()
@@ -121,6 +176,7 @@ func (server *Server) runInstall(request InstallRequest) {
 		}
 		server.install.UpdatedAt = time.Now().UTC()
 		server.installMu.Unlock()
+		_ = server.saveInstallState(context.Background())
 	}
 
 	namespace := server.config.Namespace
@@ -133,48 +189,32 @@ func (server *Server) runInstall(request InstallRequest) {
 		fail("preflight", fmt.Errorf("%s", strings.Join(preflight.Errors, "；")))
 		return
 	}
-	ingressClass := strings.TrimSpace(request.IngressClass)
-	if ingressClass == "" {
-		for _, class := range preflight.IngressClasses {
-			if class.Default {
-				ingressClass = class.Name
-				break
-			}
-		}
-		if ingressClass == "" && len(preflight.IngressClasses) > 0 {
-			ingressClass = preflight.IngressClasses[0].Name
-		}
-	}
-	if ingressClass == "" {
-		fail("preflight", fmt.Errorf("没有可用的 IngressClass"))
-		return
-	}
-	foundClass := false
-	for _, class := range preflight.IngressClasses {
-		if class.Name == ingressClass {
-			foundClass = true
-			break
-		}
-	}
-	if !foundClass {
-		fail("preflight", fmt.Errorf("IngressClass %s 不存在", ingressClass))
-		return
-	}
 	domain, err := ValidateInternalDomain(request.Domain)
 	if err != nil {
 		fail("preflight", err)
 		return
 	}
-	step("preflight", "done", "集群能力检查通过")
+	if request.NodePort == 0 {
+		request.NodePort = 30443
+	}
+	if request.NodePort < 30000 || request.NodePort > 32767 {
+		fail("preflight", fmt.Errorf("HTTPS NodePort 必须在 30000–32767 之间"))
+		return
+	}
+	step("preflight", "done", "节点与访问配置检查通过")
 
 	step("database", "running", "正在连接外部 MySQL、创建表结构和管理员")
-	dsn, err := externalDatabaseDSN(request.ExternalDatabase)
+	dsn, err = externalDatabaseDSN(request.ExternalDatabase)
 	if err != nil {
 		fail("database", err)
 		return
 	}
 	if err := pingDatabase(ctx, dsn); err != nil {
 		fail("database", fmt.Errorf("无法连接外部 MySQL：%w", err))
+		return
+	}
+	if err := verifyExistingShardMode(ctx, dsn); err != nil {
+		fail("database", err)
 		return
 	}
 	adminHash, err := provisionAdmin(ctx, dsn, request.AdminUsername, request.AdminPassword, server.config.SecureCookies, server.config.SessionTTL)
@@ -188,19 +228,21 @@ func (server *Server) runInstall(request InstallRequest) {
 	}
 	step("database", "done", "外部 MySQL 已连接，表结构和管理员已就绪")
 
-	step("ingress", "running", "正在创建自签 CA、TLS Secret 和 Ingress")
-	if err := server.ApplyIngress(ctx, IngressPlan{Namespace: namespace, Host: domain, IngressClass: ingressClass}); err != nil {
-		fail("ingress", err)
+	step("tls", "running", "正在生成并保存自签证书")
+	if _, err := server.EnsureTLS(ctx, platformCASecret, platformTLSCert, domain, nil); err != nil {
+		fail("tls", err)
 		return
 	}
-	caCertificate := ""
-	if secret, err := server.client.CoreV1().Secrets(namespace).Get(ctx, platformCASecret, metav1.GetOptions{}); err == nil {
-		caCertificate = string(secret.Data["ca.crt"])
+	ca, err := server.client.CoreV1().Secrets(namespace).Get(ctx, platformCASecret, metav1.GetOptions{})
+	if err != nil {
+		fail("tls", err)
+		return
 	}
-	step("ingress", "done", "HTTPS Ingress 已创建")
+	caCertificate := string(ca.Data["ca.crt"])
+	step("tls", "done", "HTTPS 证书已保存")
 
 	step("runtime", "running", "正在部署 API、Collector 和 Worker")
-	platformImage, err := server.resolvePlatformImage(ctx, request.PlatformImage)
+	platformImage, pullSecrets, err := server.ownImage(ctx)
 	if err != nil {
 		fail("runtime", err)
 		return
@@ -208,16 +250,18 @@ func (server *Server) runInstall(request InstallRequest) {
 	runtimePlan := RuntimePlan{
 		Namespace:         namespace,
 		PlatformImage:     platformImage,
-		ImagePullSecret:   strings.TrimSpace(request.PlatformImagePullSecret),
+		ImagePullSecrets:  pullSecrets,
+		Domain:            domain,
+		NodePort:          request.NodePort,
 		APIReplicas:       request.APIReplicas,
 		CollectorReplicas: request.CollectorReplicas,
 		WorkerReplicas:    request.WorkerReplicas,
 	}
 	if runtimePlan.APIReplicas <= 0 {
-		runtimePlan.APIReplicas = 1
+		runtimePlan.APIReplicas = 2
 	}
 	if runtimePlan.CollectorReplicas <= 0 {
-		runtimePlan.CollectorReplicas = 1
+		runtimePlan.CollectorReplicas = 2
 	}
 	if runtimePlan.WorkerReplicas <= 0 {
 		runtimePlan.WorkerReplicas = 1
@@ -228,16 +272,28 @@ func (server *Server) runInstall(request InstallRequest) {
 	}
 	step("runtime", "done", "API/Collector/Worker 已提交")
 
-	step("verify", "running", "正在等待平台 API 就绪")
-	if err := server.WaitForDeployment(ctx, namespace, "ftc-platform", 8*time.Minute); err != nil {
+	step("verify", "running", "正在等待 API、采集器和任务实例就绪")
+	for _, name := range []string{"ftc-platform", "ftc-platform-collector", "ftc-platform-worker"} {
+		if err := server.WaitForDeployment(ctx, namespace, name, 8*time.Minute); err != nil {
+			fail("verify", err)
+			return
+		}
+	}
+	if err := waitForShards(ctx, dsn, 16, 3*time.Minute); err != nil {
 		fail("verify", err)
 		return
 	}
-	if err := waitForHTTPHealth(ctx, fmt.Sprintf("http://ftc-platform.%s.svc/api/v1/health", namespace), 3*time.Minute); err != nil {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca.Data["ca.crt"]) {
+		fail("verify", fmt.Errorf("平台 CA 证书无效"))
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: domain, MinVersion: tls.VersionTLS12}}}
+	if err := waitForClientHealth(ctx, client, fmt.Sprintf("https://ftc-platform.%s.svc/api/v1/health", namespace), 3*time.Minute); err != nil {
 		fail("verify", err)
 		return
 	}
-	step("verify", "done", "平台 API 健康检查通过")
+	step("verify", "done", "平台服务与 HTTPS 验证通过")
 
 	hosts := make([]string, 0)
 	seen := map[string]bool{}
@@ -251,13 +307,16 @@ func (server *Server) runInstall(request InstallRequest) {
 	}
 	server.installMu.Lock()
 	server.install.State = "completed"
-	server.install.URL = "https://" + domain
+	server.install.URL = fmt.Sprintf("https://%s:%d", domain, request.NodePort)
+	server.install.Domain = domain
+	server.install.NodePort = request.NodePort
 	server.install.CAURL = "/api/v1/setup/ca"
 	server.install.CACert = caCertificate
 	server.install.Hosts = hosts
 	server.install.UpdatedAt = time.Now().UTC()
 	server.installMu.Unlock()
-	go server.revokeSetupPermissions()
+	_ = server.saveInstallState(context.Background())
+
 }
 
 // revokeSetupPermissions removes the setup identity's bindings after the
@@ -312,6 +371,96 @@ func (server *Server) resolvePlatformImage(ctx context.Context, requested string
 	return image, nil
 }
 
+func (server *Server) ownImage(ctx context.Context) (string, []corev1.LocalObjectReference, error) {
+	name := os.Getenv("POD_NAME")
+	if name == "" {
+		return "", nil, fmt.Errorf("无法读取初始化 Pod 名称")
+	}
+	pod, err := server.client.CoreV1().Pods(server.config.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", nil, fmt.Errorf("读取初始化 Pod 镜像失败：%w", err)
+	}
+	if len(pod.Spec.Containers) == 0 || pod.Spec.Containers[0].Image == "" || strings.Contains(pod.Spec.Containers[0].Image, "REPLACE_WITH") {
+		return "", nil, fmt.Errorf("请在安装清单中配置平台镜像")
+	}
+	return pod.Spec.Containers[0].Image, pod.Spec.ImagePullSecrets, nil
+}
+
+func verifyExistingShardMode(ctx context.Context, dsn string) error {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var tables int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collection_shard_config'").Scan(&tables); err != nil {
+		return err
+	}
+	if tables == 0 {
+		return nil
+	}
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT shard_count FROM collection_shard_config WHERE id=1").Scan(&count)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取已有采集分片配置失败：%w", err)
+	}
+	if count != 16 {
+		return fmt.Errorf("现有数据库采集分片数为 %d，安装配置要求 16；请先迁移数据库，安装器不会清空已有分片", count)
+	}
+	return nil
+}
+
+func waitForClientHealth(ctx context.Context, client *http.Client, url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(request)
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("HTTPS 健康检查超时：%v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+func waitForShards(ctx context.Context, dsn string, expected int, timeout time.Duration) error {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	deadline := time.Now().Add(timeout)
+	for {
+		owned, err := store.CountActiveCollectionShards(ctx, db, false)
+		if err == nil && owned == expected {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("采集分片未全部接管：已接管 %d/%d：%v", owned, expected, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
 func validAdminCredentials(username, password string) bool {
 	return adminUsernamePattern.MatchString(username) && len(password) >= 12 && len(password) <= 72
 }
@@ -335,6 +484,15 @@ func (server *Server) handleInstall(writer http.ResponseWriter, request *http.Re
 	if _, err := externalDatabaseDSN(payload.ExternalDatabase); err != nil {
 		writeError(writer, http.StatusBadRequest, "INVALID_DATABASE", err.Error())
 		return
+	}
+	server.installMu.Lock()
+	running := server.installRunning
+	server.installMu.Unlock()
+	if !running {
+		if err := server.loadInstallState(request.Context()); err != nil {
+			writeError(writer, http.StatusServiceUnavailable, "SETUP_STORAGE_FAILED", err.Error())
+			return
+		}
 	}
 	exists, err := server.runtimeSecretExists(request.Context())
 	if err != nil {
@@ -361,5 +519,70 @@ func (server *Server) handleInstallStatus(writer http.ResponseWriter, request *h
 	if !server.validToken(writer, request, request.Header.Get("X-Setup-Token")) {
 		return
 	}
+	server.installMu.Lock()
+	running := server.installRunning
+	server.installMu.Unlock()
+	if !running {
+		_ = server.loadInstallState(request.Context())
+	}
 	writeJSON(writer, http.StatusOK, server.installSnapshot())
+}
+
+func (server *Server) handleFinish(writer http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		Token     string `json:"token"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	if !decode(writer, request, &payload) {
+		return
+	}
+	if !server.validToken(writer, request, payload.Token) {
+		return
+	}
+	if !payload.Confirmed {
+		writeError(writer, http.StatusBadRequest, "CONFIRM_REQUIRED", "请先确认已能登录正式平台。")
+		return
+	}
+	status := server.installSnapshot()
+	if status.State != "completed" {
+		writeError(writer, http.StatusConflict, "NOT_READY", "平台尚未通过安装验证。")
+		return
+	}
+	if status.PermissionsRevoked {
+		writeJSON(writer, http.StatusOK, status)
+		return
+	}
+	server.installMu.Lock()
+	server.install.PermissionsRevoked = true
+	server.install.UpdatedAt = time.Now().UTC()
+	server.installMu.Unlock()
+	if err := server.saveInstallState(request.Context()); err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "SAVE_FAILED", err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, server.installSnapshot())
+	go server.removeSetupResources()
+}
+
+func (server *Server) removeSetupResources() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	namespace := server.config.Namespace
+	ignoreMissing := func(err error) bool { return err == nil || apierrors.IsNotFound(err) }
+	// The response is sent before deleting this Pod's Deployment.
+	if err := server.client.CoreV1().Services(namespace).Delete(ctx, "ftc-platform-setup", metav1.DeleteOptions{}); !ignoreMissing(err) {
+		log.Printf("setup cleanup: service deletion failed: %v", err)
+		return
+	}
+	if err := server.client.AppsV1().Deployments(namespace).Delete(ctx, "ftc-platform-setup", metav1.DeleteOptions{}); !ignoreMissing(err) {
+		log.Printf("setup cleanup: deployment deletion failed: %v", err)
+		return
+	}
+	if err := server.client.RbacV1().RoleBindings(namespace).Delete(ctx, "ftc-platform-setup", metav1.DeleteOptions{}); !ignoreMissing(err) {
+		log.Printf("setup cleanup: role binding deletion failed: %v", err)
+		return
+	}
+	if err := server.client.RbacV1().ClusterRoleBindings().Delete(ctx, "ftc-platform-setup", metav1.DeleteOptions{}); !ignoreMissing(err) {
+		log.Printf("setup cleanup: cluster role binding deletion failed: %v", err)
+	}
 }

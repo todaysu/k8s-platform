@@ -37,6 +37,19 @@ func TestLoadUsesDefaultsUntilASectionIsSaved(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesSettingsAfterFileServiceRemoval(t *testing.T) {
+	repository := &memoryRepository{records: map[string]Record{
+		SectionRuntime: {Section: SectionRuntime, Payload: []byte(`{"query_concurrency":80,"artifact_max_upload_mib":64}`)},
+	}}
+	value, err := Load(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Runtime.QueryConcurrency != 80 || value.Runtime.RealtimeConcurrency != Defaults().Runtime.RealtimeConcurrency {
+		t.Fatalf("existing runtime configuration was lost: %#v", value.Runtime)
+	}
+}
+
 func TestSaveValidatesAndReturnsMergedSettings(t *testing.T) {
 	repository := &memoryRepository{}
 	now := time.Date(2026, time.October, 22, 2, 0, 0, 0, time.UTC)
@@ -57,5 +70,29 @@ func TestSaveRejectsInvalidEventRetention(t *testing.T) {
 	payload := []byte(`{"normal_retention_days":30,"warning_retention_days":7,"rollup_retention_days":365,"daily_retention_days":31,"cleanup_batch_size":5000}`)
 	if _, err := Save(context.Background(), &memoryRepository{}, SectionEvents, payload, time.Now()); err == nil {
 		t.Fatal("expected warning retention validation error")
+	}
+}
+
+func TestJavaDefaultsToBuiltinAndValidatesOfflineOverride(t *testing.T) {
+	value := Defaults()
+	if value.Java.ArthasURL != "" || value.Java.ArthasVersion != "4.3.5" {
+		t.Fatal("Arthas should default to its embedded distribution")
+	}
+	if err := validate(value, SectionJava); err != nil {
+		t.Fatal(err)
+	}
+	value.Java.ArthasURL = "https://repo.internal/arthas.zip"
+	value.Java.ArthasVersion = "4.4.0"
+	if err := validate(value, SectionJava); err != nil {
+		t.Fatal(err)
+	}
+	value.Java.ArthasVersion = "4.4.0; unsafe"
+	if err := validate(value, SectionJava); err == nil {
+		t.Fatal("invalid override version accepted")
+	}
+	value.Java.ArthasVersion = "4.4.0"
+	value.Java.ArthasURL = "https://user:password@repo.internal/arthas.zip"
+	if err := validate(value, SectionJava); err == nil {
+		t.Fatal("URL credentials accepted")
 	}
 }

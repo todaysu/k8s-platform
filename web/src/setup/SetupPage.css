@@ -106,3 +106,4 @@
   .ks-setup-volume { align-items: stretch; grid-template-columns: 28px minmax(0, 1fr); }
   .ks-setup-volume > .pf-v6-c-form__group:nth-of-type(2) { grid-column: 2; }
 }
+.ks-setup-finish-confirm { display: inline-flex; gap: .45rem; align-items: center; font-size: .875rem; }

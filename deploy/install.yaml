@@ -1,703 +1,19 @@
-# FTC 平台交付版安装清单（外部 MySQL + ingress-nginx hostNetwork，不使用 Helm）
-# 使用：替换 REPLACE_WITH_PLATFORM_IMAGE 后执行（不要加 -n，清单内含两个命名空间）
-#   kubectl apply -f deploy/install.yaml
-# 初始化入口：http://<节点IP>:30080
-# 包含：ingress-nginx hostNetwork（节点 80/443）+ 平台 bootstrap/setup。
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  labels:
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-  name: ingress-nginx
----
-apiVersion: v1
-automountServiceAccountToken: true
-kind: ServiceAccount
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx
-  namespace: ingress-nginx
----
-apiVersion: v1
-automountServiceAccountToken: true
-kind: ServiceAccount
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission
-  namespace: ingress-nginx
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx
-  namespace: ingress-nginx
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  - pods
-  - secrets
-  - endpoints
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses/status
-  verbs:
-  - update
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingressclasses
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - coordination.k8s.io
-  resourceNames:
-  - ingress-nginx-leader
-  resources:
-  - leases
-  verbs:
-  - get
-  - update
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - create
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - discovery.k8s.io
-  resources:
-  - endpointslices
-  verbs:
-  - list
-  - watch
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission
-  namespace: ingress-nginx
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-  - create
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  - endpoints
-  - nodes
-  - pods
-  - secrets
-  - namespaces
-  verbs:
-  - list
-  - watch
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - nodes
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses/status
-  verbs:
-  - update
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingressclasses
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - discovery.k8s.io
-  resources:
-  - endpointslices
-  verbs:
-  - list
-  - watch
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission
-rules:
-- apiGroups:
-  - admissionregistration.k8s.io
-  resources:
-  - validatingwebhookconfigurations
-  verbs:
-  - get
-  - update
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx
-  namespace: ingress-nginx
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: ingress-nginx
-subjects:
-- kind: ServiceAccount
-  name: ingress-nginx
-  namespace: ingress-nginx
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission
-  namespace: ingress-nginx
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: ingress-nginx-admission
-subjects:
-- kind: ServiceAccount
-  name: ingress-nginx-admission
-  namespace: ingress-nginx
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  labels:
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: ingress-nginx
-subjects:
-- kind: ServiceAccount
-  name: ingress-nginx
-  namespace: ingress-nginx
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: ingress-nginx-admission
-subjects:
-- kind: ServiceAccount
-  name: ingress-nginx-admission
-  namespace: ingress-nginx
----
-apiVersion: v1
-data:
-  allow-snippet-annotations: "false"
-kind: ConfigMap
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-controller
-  namespace: ingress-nginx
----
-apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-controller
-  namespace: ingress-nginx
-spec:
-  ipFamilies:
-  - IPv4
-  ipFamilyPolicy: SingleStack
-  ports:
-  - appProtocol: http
-    name: http
-    port: 80
-    protocol: TCP
-    targetPort: http
-  - appProtocol: https
-    name: https
-    port: 443
-    protocol: TCP
-    targetPort: https
-  selector:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-  type: NodePort
----
-apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-controller-admission
-  namespace: ingress-nginx
-spec:
-  ports:
-  - appProtocol: https
-    name: https-webhook
-    port: 443
-    targetPort: webhook
-  selector:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-  type: ClusterIP
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-controller
-  namespace: ingress-nginx
-spec:
-  replicas: 1
-  minReadySeconds: 0
-  revisionHistoryLimit: 10
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: controller
-      app.kubernetes.io/instance: ingress-nginx
-      app.kubernetes.io/name: ingress-nginx
-  strategy:
-    rollingUpdate:
-      maxUnavailable: 1
-    type: RollingUpdate
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: controller
-        app.kubernetes.io/instance: ingress-nginx
-        app.kubernetes.io/name: ingress-nginx
-        app.kubernetes.io/part-of: ingress-nginx
-        app.kubernetes.io/version: 1.11.3
-    spec:
-      containers:
-      - args:
-        - /nginx-ingress-controller
-        - --election-id=ingress-nginx-leader
-        - --controller-class=k8s.io/ingress-nginx
-        - --ingress-class=nginx
-        - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
-        - --validating-webhook=:8443
-        - --validating-webhook-certificate=/usr/local/certificates/cert
-        - --validating-webhook-key=/usr/local/certificates/key
-        - --watch-ingress-without-class=true
-        - --enable-metrics=false
-        env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: LD_PRELOAD
-          value: /usr/local/lib/libmimalloc.so
-        image: registry.k8s.io/ingress-nginx/controller:v1.11.3
-        imagePullPolicy: IfNotPresent
-        lifecycle:
-          preStop:
-            exec:
-              command:
-              - /wait-shutdown
-        livenessProbe:
-          failureThreshold: 5
-          httpGet:
-            path: /healthz
-            port: 10254
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          successThreshold: 1
-          timeoutSeconds: 1
-        name: controller
-        ports:
-        - containerPort: 80
-          name: http
-          protocol: TCP
-        - containerPort: 443
-          name: https
-          protocol: TCP
-        - containerPort: 8443
-          name: webhook
-          protocol: TCP
-        readinessProbe:
-          failureThreshold: 3
-          httpGet:
-            path: /healthz
-            port: 10254
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          successThreshold: 1
-          timeoutSeconds: 1
-        resources:
-          requests:
-            cpu: 100m
-            memory: 90Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            add:
-            - NET_BIND_SERVICE
-            drop:
-            - ALL
-          readOnlyRootFilesystem: false
-          runAsNonRoot: true
-          runAsUser: 101
-          seccompProfile:
-            type: RuntimeDefault
-        volumeMounts:
-        - mountPath: /usr/local/certificates/
-          name: webhook-cert
-          readOnly: true
-      dnsPolicy: ClusterFirstWithHostNet
-      hostNetwork: true
-      nodeSelector:
-        kubernetes.io/os: linux
-      serviceAccountName: ingress-nginx
-      terminationGracePeriodSeconds: 0
-      tolerations:
-      - effect: NoSchedule
-        key: node-role.kubernetes.io/master
-        operator: Equal
-      - effect: NoSchedule
-        key: node-role.kubernetes.io/control-plane
-        operator: Equal
-      volumes:
-      - name: webhook-cert
-        secret:
-          secretName: ingress-nginx-admission
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission-create
-  namespace: ingress-nginx
-spec:
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: admission-webhook
-        app.kubernetes.io/instance: ingress-nginx
-        app.kubernetes.io/name: ingress-nginx
-        app.kubernetes.io/part-of: ingress-nginx
-        app.kubernetes.io/version: 1.11.3
-      name: ingress-nginx-admission-create
-    spec:
-      containers:
-      - args:
-        - create
-        - --host=ingress-nginx-controller-admission,ingress-nginx-controller-admission.$(POD_NAMESPACE).svc
-        - --namespace=$(POD_NAMESPACE)
-        - --secret-name=ingress-nginx-admission
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.4
-        imagePullPolicy: IfNotPresent
-        name: create
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 65532
-          seccompProfile:
-            type: RuntimeDefault
-      nodeSelector:
-        kubernetes.io/os: linux
-      restartPolicy: OnFailure
-      serviceAccountName: ingress-nginx-admission
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission-patch
-  namespace: ingress-nginx
-spec:
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: admission-webhook
-        app.kubernetes.io/instance: ingress-nginx
-        app.kubernetes.io/name: ingress-nginx
-        app.kubernetes.io/part-of: ingress-nginx
-        app.kubernetes.io/version: 1.11.3
-      name: ingress-nginx-admission-patch
-    spec:
-      containers:
-      - args:
-        - patch
-        - --webhook-name=ingress-nginx-admission
-        - --namespace=$(POD_NAMESPACE)
-        - --patch-mutating=false
-        - --secret-name=ingress-nginx-admission
-        - --patch-failure-policy=Fail
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.4
-        imagePullPolicy: IfNotPresent
-        name: patch
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 65532
-          seccompProfile:
-            type: RuntimeDefault
-      nodeSelector:
-        kubernetes.io/os: linux
-      restartPolicy: OnFailure
-      serviceAccountName: ingress-nginx-admission
----
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: nginx
-spec:
-  controller: k8s.io/ingress-nginx
----
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingWebhookConfiguration
-metadata:
-  labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.11.3
-  name: ingress-nginx-admission
-webhooks:
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: ingress-nginx-controller-admission
-      namespace: ingress-nginx
-      path: /networking/v1/ingresses
-      port: 443
-  failurePolicy: Fail
-  matchPolicy: Equivalent
-  name: validate.nginx.ingress.kubernetes.io
-  rules:
-  - apiGroups:
-    - networking.k8s.io
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - ingresses
-  sideEffects: None
----
-# FTC 平台交付版引导清单（外部 MySQL 版）
-#
-# 这一份只创建初始化入口：
-#   - 命名空间、运行/初始化 ServiceAccount 与最小权限；
-#   - 自动生成 setup token 与凭据加密密钥；
-#   - setup Deployment/Service，不连接数据库、不创建 MySQL/Ingress/运行时。
-#
-# 使用前只需要替换三处 REPLACE_WITH_PLATFORM_IMAGE（安装 ConfigMap、引导 Job、setup Pod）。
-# 然后：
-#   kubectl apply -f deploy/install-bootstrap.yaml
-#   kubectl -n ftc-platform rollout status deployment/ftc-platform-setup
-#   kubectl -n ftc-platform logs job/ftc-platform-bootstrap   # 读取 setup token
-#   kubectl -n ftc-platform port-forward svc/ftc-platform-setup 8080:80
-#   浏览器打开 http://127.0.0.1:8080
-#
-# 外部 MySQL、Ingress、自签 CA、正式运行 Deployment 由 setup 控制器
-# 在后续阶段创建；本阶段先把初始化入口和安全边界跑通。
+# FTC Platform: ordinary Kubernetes, HTTPS NodePort, existing MySQL 8+.
+# Generate a private data/delivery/install.yaml with: go run ./cmd/installer
+# Edit the single image below, then: kubectl apply -f data/delivery/install.yaml
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ftc-platform
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ftc-platform-bootstrap
+  namespace: ftc-platform
+type: Opaque
+stringData:
+  setup-token: REPLACE_WITH_SETUP_TOKEN
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -705,7 +21,6 @@ metadata:
   name: ftc-platform
   namespace: ftc-platform
 ---
-# 初始化专用身份：只在 setup 模式使用，初始化完成后应删除对应 RoleBinding。
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -715,10 +30,38 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ftc-platform-bootstrap
+  name: ftc-platform-certificates
   namespace: ftc-platform
 ---
-# 运行期身份：只保留 Lease、Pod 回收和参数保存触发的 Deployment 滚动重启。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ftc-platform-certificates
+  namespace: ftc-platform
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["ftc-platform"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["ftc-platform-ca", "ftc-platform-tls"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ftc-platform-certificates
+  namespace: ftc-platform
+subjects:
+  - kind: ServiceAccount
+    name: ftc-platform-certificates
+    namespace: ftc-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ftc-platform-certificates
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -749,32 +92,6 @@ roleRef:
   kind: Role
   name: ftc-platform-runtime
 ---
-# 引导 Job 只需要写一次 bootstrap Secret。
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: ftc-platform-bootstrap
-  namespace: ftc-platform
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: ftc-platform-bootstrap
-  namespace: ftc-platform
-subjects:
-  - kind: ServiceAccount
-    name: ftc-platform-bootstrap
-    namespace: ftc-platform
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: ftc-platform-bootstrap
----
-# 初始化身份：命名空间内的编排权限。集群级权限单独放在 ClusterRole 中。
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -782,26 +99,24 @@ metadata:
   namespace: ftc-platform
 rules:
   - apiGroups: [""]
-    resources: ["secrets", "configmaps", "services", "pods", "pods/log", "events"]
+    resources: ["secrets", "configmaps", "services", "pods"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "create", "update"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "list", "delete"]
+    resourceNames: ["ftc-platform-setup"]
+    verbs: ["get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -817,7 +132,6 @@ roleRef:
   kind: Role
   name: ftc-platform-setup
 ---
-# 集群级：节点和 IngressClass 只读。
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -826,14 +140,9 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["storage.k8s.io"]
-    resources: ["storageclasses"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingressclasses"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterrolebindings"]
+    resourceNames: ["ftc-platform-setup"]
     verbs: ["get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -849,72 +158,6 @@ roleRef:
   kind: ClusterRole
   name: ftc-platform-setup
 ---
-# 向导默认值。镜像地址由初始化页面覆盖，不在这里写死成公开仓库。
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ftc-platform-install
-  namespace: ftc-platform
-data:
-  PLATFORM_IMAGE: REPLACE_WITH_PLATFORM_IMAGE
-  INGRESS_CLASS: "nginx"
-  INGRESS_HOST: ""
-  SETUP_RUNTIME_SECRET: "ftc-platform-runtime"
----
-# 首次启动生成 setup token 和 32 字节加密密钥；重复执行不会覆盖。
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: ftc-platform-bootstrap
-  namespace: ftc-platform
-spec:
-  backoffLimit: 6
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: ftc-platform-bootstrap
-    spec:
-      serviceAccountName: ftc-platform-bootstrap
-      restartPolicy: OnFailure
-      securityContext:
-        runAsNonRoot: true
-        seccompProfile: { type: RuntimeDefault }
-      containers:
-        - name: bootstrap
-          image: REPLACE_WITH_PLATFORM_IMAGE
-          imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              set -eu
-              if kubectl -n ftc-platform get secret ftc-platform-bootstrap >/dev/null 2>&1; then
-                echo "bootstrap secret already exists"
-                echo "setup token: $(kubectl -n ftc-platform get secret ftc-platform-bootstrap -o jsonpath='{.data.setup-token}' | base64 -d)"
-                exit 0
-              fi
-              token="$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | cut -c1-32)"
-              key="$(head -c 32 /dev/urandom | base64)"
-              kubectl -n ftc-platform create secret generic ftc-platform-bootstrap \
-                --from-literal=setup-token="$token" \
-                --from-literal=encryption-key="$key"
-              echo "setup token: $token"
-              echo "encryption key: $key"
-              echo "请立即备份 encryption key；丢失后已纳管集群的 Kubeconfig 将无法解密。"
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: { drop: ["ALL"] }
-            readOnlyRootFilesystem: true
-          env:
-            - { name: HOME, value: "/tmp" }
-          volumeMounts:
-            - { name: tmp, mountPath: /tmp }
-          resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 250m, memory: 256Mi }
-      volumes:
-        - name: tmp
-          emptyDir: {}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -922,6 +165,8 @@ metadata:
   namespace: ftc-platform
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: ftc-platform-setup
@@ -931,44 +176,51 @@ spec:
         app.kubernetes.io/name: ftc-platform-setup
     spec:
       serviceAccountName: ftc-platform-setup
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
-        seccompProfile: { type: RuntimeDefault }
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: setup
           image: REPLACE_WITH_PLATFORM_IMAGE
           imagePullPolicy: IfNotPresent
           env:
-            - { name: SETUP_MODE, value: "true" }
-            - { name: LISTEN_ADDR, value: ":8080" }
-            - { name: WEB_DIST_DIR, value: "/app/web" }
-            - { name: SECURE_COOKIES, value: "true" }
-            - { name: TRUST_PROXY_HEADERS, value: "true" }
+            - name: SETUP_MODE
+              value: "true"
+            - name: LISTEN_ADDR
+              value: ":8443"
+            - name: HEALTH_ADDR
+              value: ":8081"
+            - name: WEB_DIST_DIR
+              value: /app/web
+            - name: SECURE_COOKIES
+              value: "true"
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             - name: SETUP_TOKEN
               valueFrom: { secretKeyRef: { name: ftc-platform-bootstrap, key: setup-token } }
-            - name: CREDENTIAL_ENCRYPTION_KEY
-              valueFrom: { secretKeyRef: { name: ftc-platform-bootstrap, key: encryption-key } }
           ports:
-            - { name: http, containerPort: 8080 }
+            - name: https
+              containerPort: 8443
+            - name: health
+              containerPort: 8081
           readinessProbe:
-            httpGet: { path: /api/v1/health, port: http }
-            initialDelaySeconds: 3
+            httpGet: { path: /readyz, port: health }
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /api/v1/health, port: http }
-            initialDelaySeconds: 15
+            httpGet: { path: /healthz, port: health }
             periodSeconds: 20
-          resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { cpu: 500m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
-            capabilities: { drop: ["ALL"] }
             readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
       volumes:
@@ -985,7 +237,7 @@ spec:
   selector:
     app.kubernetes.io/name: ftc-platform-setup
   ports:
-    - name: http
-      port: 80
-      targetPort: http
+    - name: https
+      port: 443
+      targetPort: https
       nodePort: 30080

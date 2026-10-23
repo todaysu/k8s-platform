@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"example.com/k8s-platform/internal/arthasdist"
 	"io"
 	"log"
 	"net"
@@ -17,7 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"example.com/k8s-platform/internal/arthasdist"
 	"example.com/k8s-platform/internal/cluster"
+	"example.com/k8s-platform/internal/platformsettings"
 	"github.com/gorilla/websocket"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -50,7 +51,17 @@ func (socket *terminalSocket) writeJSON(value any) error {
 	return socket.connection.WriteJSON(value)
 }
 
-func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
+type arthasPreparationError string
+
+func (err arthasPreparationError) Error() string { return string(err) }
+
+func podExecHandler(manager clusterExecManager, enabled bool, repositories ...platformsettings.Repository) http.HandlerFunc {
+	var repository platformsettings.Repository
+	if len(repositories) > 0 {
+		repository = repositories[0]
+	}
+	loader := &arthasdist.Loader{}
+	var activeArthas atomic.Int32
 	return func(writer http.ResponseWriter, request *http.Request) {
 		if !enabled || manager == nil {
 			writeAPIError(writer, http.StatusServiceUnavailable, cluster.CodePodExecUnavailable)
@@ -88,14 +99,28 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 		}
 		options := cluster.PodExecOptions{Container: container, Shell: shell, Prompt: prompt, Stdin: nil, Stdout: nil, Stderr: nil, Sizes: nil}
 		sessionToken := ""
+		javaSettings := platformsettings.Defaults().Java
 		if mode == "arthas" {
+			settingsCtx, settingsCancel := context.WithTimeout(request.Context(), 5*time.Second)
+			settings, settingsErr := platformsettings.Load(settingsCtx, repository)
+			settingsCancel()
+			if settingsErr != nil {
+				writePlatformSettingsError(writer, http.StatusServiceUnavailable, "ARTHAS_SETTINGS_UNAVAILABLE", "读取 Java 排障配置失败，请稍后重试。")
+				return
+			}
+			javaSettings = settings.Java
+			if activeArthas.Add(1) > int32(javaSettings.MaxConcurrency) {
+				activeArthas.Add(-1)
+				writePlatformSettingsError(writer, http.StatusTooManyRequests, "ARTHAS_CONCURRENCY_LIMIT", "Java 诊断会话已达到并发上限，请稍后重试。")
+				return
+			}
+			defer activeArthas.Add(-1)
 			random := make([]byte, 16)
 			if _, err := rand.Read(random); err != nil {
 				writeAPIError(writer, http.StatusInternalServerError, "ARTHAS_SESSION_FAILED")
 				return
 			}
 			sessionToken = hex.EncodeToString(random)
-			options.Command = arthasSessionCommand(sessionToken)
 			// Values are validated as DNS names above, so they cannot carry
 			// newlines and forge extra log lines.
 			log.Printf("arthas session cluster=%s pod=%s/%s container=%s", request.PathValue("id"), namespace, podName, container)
@@ -110,7 +135,7 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 		var execContext context.Context
 		var cancel context.CancelFunc
 		if mode == "arthas" {
-			execContext, cancel = context.WithTimeout(request.Context(), 30*time.Minute)
+			execContext, cancel = context.WithTimeout(request.Context(), time.Duration(javaSettings.DiagnosticTimeoutMinutes)*time.Minute)
 		} else {
 			execContext, cancel = context.WithCancel(request.Context())
 		}
@@ -123,6 +148,9 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 		socket := &terminalSocket{connection: connection}
 		finished := make(chan error, 1)
 		executionDone := make(chan struct{})
+		var bundleHome atomic.Value
+		bundleHome.Store(arthasdist.Home)
+		var launcherStarted atomic.Bool
 		if sessionToken != "" {
 			defer func() {
 				cancel()
@@ -131,9 +159,12 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 				case <-executionDone:
 				case <-time.After(2 * time.Second):
 				}
+				if !launcherStarted.Load() {
+					return
+				}
 				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 8*time.Second)
 				defer cleanupCancel()
-				_ = cleanupArthasClient(cleanupCtx, manager, request.PathValue("id"), namespace, podName, container, sessionToken)
+				_ = cleanupArthasBundleClient(cleanupCtx, manager, request.PathValue("id"), namespace, podName, container, sessionToken, bundleHome.Load().(string))
 			}()
 		}
 		go func() {
@@ -143,10 +174,23 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 			options.Stderr = socket
 			options.Sizes = sizes
 			if mode == "arthas" {
-				if err := prepareArthas(execContext, manager, request.PathValue("id"), namespace, podName, container, socket); err != nil {
+				if javaSettings.ArthasURL != "" {
+					_, _ = io.WriteString(socket, "[platform] 正在下载并校验管理员配置的 Arthas 更新离线包…\r\n")
+				}
+				bundle, err := loader.Load(execContext, arthasdist.Source{URL: javaSettings.ArthasURL, Version: javaSettings.ArthasVersion, SHA256: javaSettings.ArthasSHA256, Timeout: time.Duration(javaSettings.DownloadTimeoutSeconds) * time.Second})
+				if err != nil {
+					finished <- arthasPreparationError(err.Error())
+					return
+				}
+				bundleHome.Store(bundle.Home)
+				options.Command = arthasBundleSessionCommand(sessionToken, bundle)
+				if err := prepareArthasBundle(execContext, manager, request.PathValue("id"), namespace, podName, container, socket, bundle); err != nil {
 					finished <- err
 					return
 				}
+			}
+			if mode == "arthas" {
+				launcherStarted.Store(true)
 			}
 			finished <- manager.ExecPod(execContext, request.PathValue("id"), namespace, podName, options)
 		}()
@@ -175,8 +219,13 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 			case execErr := <-finished:
 				if execErr != nil && execContext.Err() == nil {
 					message := errorMessage(cluster.ErrorCode(execErr))
+					if setupErr, ok := execErr.(arthasPreparationError); ok {
+						message = setupErr.Error()
+					}
 					if mode == "arthas" && cluster.ErrorCode(execErr) == cluster.CodeConnectionFailed {
-						message = "Arthas 进程已退出或终端通道中断，请查看终端输出后重新连接。"
+						if _, setupFailure := execErr.(arthasPreparationError); !setupFailure {
+							message = "Arthas 进程已退出或终端通道中断，请查看终端输出后重新连接。"
+						}
 					}
 					_ = socket.writeJSON(map[string]string{"type": "error", "message": message})
 				}
@@ -185,9 +234,18 @@ func podExecHandler(manager clusterExecManager, enabled bool) http.HandlerFunc {
 			case <-disconnected:
 				cancel()
 				return
+			case <-execContext.Done():
+				if mode == "arthas" && execContext.Err() == context.DeadlineExceeded {
+					_ = socket.writeJSON(map[string]string{"type": "error", "message": "诊断会话已达到配置的超时时间，已结束会话。"})
+				}
+				_ = socket.writeJSON(map[string]string{"type": "closed"})
+				return
 			case message := <-messages:
 				switch message.Type {
 				case "input":
+					if mode == "arthas" && !launcherStarted.Load() {
+						continue
+					}
 					if len(message.Data) > 16*1024 {
 						continue
 					}
@@ -259,35 +317,48 @@ func hostWithoutPort(host string) string {
 }
 
 func prepareArthas(ctx context.Context, manager clusterExecManager, id, namespace, pod, container string, output io.Writer) error {
-	payload, err := arthasdist.Payload()
+	bundle, err := arthasdist.Builtin()
 	if err != nil {
 		return err
 	}
-	_, _ = io.WriteString(output, "[platform] 正在通过 Kubernetes Exec 传输内置 Arthas "+arthasdist.Version+"，无需容器联网…\r\n")
+	return prepareArthasBundle(ctx, manager, id, namespace, pod, container, output, bundle)
+}
+
+func prepareArthasBundle(ctx context.Context, manager clusterExecManager, id, namespace, pod, container string, output io.Writer, bundle arthasdist.Bundle) error {
+	source := "更新包"
+	if bundle.BuiltIn {
+		source = "平台内置版本"
+	}
+	_, _ = io.WriteString(output, "[platform] 正在通过 Kubernetes Exec 传输 Arthas "+bundle.Version+"（"+source+"），无需容器联网…\r\n")
 	script := `set -eu
 umask 077
 command -v java >/dev/null 2>&1 || { echo '目标容器缺少 java'; exit 1; }
 command -v tar >/dev/null 2>&1 || { echo '目标容器缺少 tar，无法传入离线包'; exit 1; }
 case "$(uname -m)" in x86_64|amd64|aarch64|arm64) ;; *) echo '仅支持 Linux x86_64 / ARM64'; exit 1 ;; esac
-ROOT=` + shellQuote(arthasdist.Home) + `
-if [ -s "$ROOT/arthas-core.jar" ] && [ -s "$ROOT/arthas-boot.jar" ]; then cat >/dev/null; exit 0; fi
+ROOT=` + shellQuote(bundle.Home) + `
+if [ -f "$ROOT/.ftc-complete" ] && [ -s "$ROOT/arthas-core.jar" ] && [ -s "$ROOT/arthas-boot.jar" ]; then cat >/dev/null; exit 0; fi
 STAGE=$(mktemp -d /tmp/ftc-arthas-stage.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
 tar -xzf - -C "$STAGE"
 test -s "$STAGE/arthas-core.jar"
 mkdir -p "$ROOT"
 cp -R "$STAGE"/. "$ROOT"/
+touch "$ROOT/.ftc-complete"
 `
 	transferCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	return manager.ExecPod(transferCtx, id, namespace, pod, cluster.PodExecOptions{Container: container, Command: []string{"/bin/sh", "-c", script}, DisableTTY: true, Stdin: bytes.NewReader(payload), Stdout: output, Stderr: output})
+	return manager.ExecPod(transferCtx, id, namespace, pod, cluster.PodExecOptions{Container: container, Command: []string{"/bin/sh", "-c", script}, DisableTTY: true, Stdin: bytes.NewReader(bundle.Payload), Stdout: output, Stderr: output})
 }
 
 func arthasCommand() []string {
+	return arthasBundleCommand(arthasdist.Bundle{Version: arthasdist.Version, Home: arthasdist.Home, BuiltIn: true})
+}
+
+func arthasBundleCommand(bundle arthasdist.Bundle) []string {
 	script := `set -eu
 export HOME=/tmp
-echo "[platform] 启动内置 Arthas ` + arthasdist.Version + `；请选择目标 Java 进程的编号。"
-exec java -Duser.home=/tmp -jar ` + shellQuote(arthasdist.Home+"/arthas-boot.jar") + ` --arthas-home ` + shellQuote(arthasdist.Home) + ` --use-version ` + arthasdist.Version + ` --target-ip 127.0.0.1 --http-port -1
+echo ` + shellQuote("[platform] 启动 Arthas "+bundle.Version+"；请选择目标 Java 进程的编号。") + `
+exec java -Duser.home=/tmp -jar ` + shellQuote(bundle.Home+"/arthas-boot.jar") + ` --arthas-home ` + shellQuote(bundle.Home) + ` --use-version ` + shellQuote(bundle.Version) + ` --target-ip 127.0.0.1 --http-port -1
 `
 	return []string{"/bin/sh", "-c", script}
 }
@@ -299,13 +370,19 @@ func shellQuote(value string) string {
 // Each WebSocket owns one launcher process. A dropped exec stream does not reliably
 // terminate it in Kubernetes; kill only a PID whose command line carries our token.
 func arthasSessionCommand(token string) []string {
-	command := arthasCommand()
-	command[2] = strings.Replace(command[2], "exec java -Duser.home=/tmp", "echo $$ > "+shellQuote(arthasdist.Home+"/session-"+token+".pid")+"\nexec java -Dftc.arthas.session="+token+" -Duser.home=/tmp", 1)
+	return arthasBundleSessionCommand(token, arthasdist.Bundle{Version: arthasdist.Version, Home: arthasdist.Home, BuiltIn: true})
+}
+func arthasBundleSessionCommand(token string, bundle arthasdist.Bundle) []string {
+	command := arthasBundleCommand(bundle)
+	command[2] = strings.Replace(command[2], "exec java -Duser.home=/tmp", "echo $$ > "+shellQuote(bundle.Home+"/session-"+token+".pid")+"\nexec java -Dftc.arthas.session="+shellQuote(token)+" -Duser.home=/tmp", 1)
 	return command
 }
 func cleanupArthasClient(ctx context.Context, manager clusterExecManager, id, namespace, pod, container, token string) error {
+	return cleanupArthasBundleClient(ctx, manager, id, namespace, pod, container, token, arthasdist.Home)
+}
+func cleanupArthasBundleClient(ctx context.Context, manager clusterExecManager, id, namespace, pod, container, token, home string) error {
 	script := `set -eu
-FILE=` + shellQuote(arthasdist.Home+"/session-"+token+".pid") + `
+FILE=` + shellQuote(home+"/session-"+token+".pid") + `
 TOKEN=` + shellQuote(token) + `
 [ -f "$FILE" ] || exit 0
 PID=$(cat "$FILE")

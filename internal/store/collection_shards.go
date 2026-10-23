@@ -24,6 +24,19 @@ func migrateCollectionShards(ctx context.Context, db *sql.DB, sqlite bool) error
 	}
 	return nil
 }
+
+// CountActiveCollectionShards follows the member heartbeat, which stable
+// owners renew without updating the shard epoch rows.
+func CountActiveCollectionShards(ctx context.Context, db *sql.DB, sqlite bool) (int, error) {
+	clock := `CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000 AS SIGNED)`
+	if sqlite {
+		clock = `CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)`
+	}
+	var owned int
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM collection_shards AS shards JOIN collection_members AS members ON members.owner=shards.owner WHERE shards.owner<>'' AND members.lease_until>`+clock).Scan(&owned)
+	return owned, err
+}
+
 func (s securityJobStore) syncShards(ctx context.Context, owner string, count int, lease time.Duration) ([]cluster.CollectionLease, error) {
 	if count < 1 || count > 64 || owner == "" || len(owner) > 64 || lease < 10*time.Second || lease > time.Minute {
 		return nil, cluster.ErrCollectionShardCount

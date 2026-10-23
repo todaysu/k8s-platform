@@ -35,8 +35,15 @@ const (
 // pattern registered on the API mux must appear here; newRouteRegistry
 // verifies that at startup so a route can never be added without a decision.
 var privilegedRoutes = []routeAccess{
+	// The download endpoint is intentionally outside /api and read-only. Only
+	// administrators can add or remove files exposed to managed clusters.
 	// Platform settings affect API admission, collectors and privileged tools.
 	{pattern: "PUT /api/v1/settings/{section}", minRole: roleAdmin},
+	// Reports are visible to authenticated users; generation and model secrets
+	// remain administrator operations.
+	{pattern: "POST /api/v1/reports", minRole: roleAdmin},
+	{pattern: "GET /api/v1/reports/config", minRole: roleAdmin},
+	{pattern: "PUT /api/v1/reports/config", minRole: roleAdmin},
 	// Pod terminal: operators may use it, but Arthas reaches into the
 	// container filesystem, so it is admin-only.
 	{pattern: "GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec", minRole: roleOperator, websocket: true, adminOnlyModeQuery: "mode", adminOnlyModeValue: "arthas"},

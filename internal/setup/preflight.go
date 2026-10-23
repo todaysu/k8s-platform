@@ -102,7 +102,7 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 
 	storageClasses, err := server.client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("读取 StorageClass 失败：%v", err))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("无法读取 StorageClass（外部 MySQL 部署不依赖此项）：%v", err))
 	} else {
 		for _, class := range storageClasses.Items {
 			item := PreflightStorageClass{
@@ -119,7 +119,7 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 
 	ingressClasses, err := server.client.NetworkingV1().IngressClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("读取 IngressClass 失败：%v", err))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("无法读取 IngressClass（HTTPS NodePort 不依赖此项）：%v", err))
 	} else {
 		for _, class := range ingressClasses.Items {
 			result.IngressClasses = append(result.IngressClasses, PreflightIngressClass{
@@ -129,9 +129,6 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 			})
 		}
 		sort.Slice(result.IngressClasses, func(i, j int) bool { return result.IngressClasses[i].Name < result.IngressClasses[j].Name })
-		if len(result.IngressClasses) == 0 {
-			result.Errors = append(result.Errors, "未发现 IngressClass；请先安装 ingress-nginx 并确认 hostNetwork/443 暴露方式。")
-		}
 	}
 
 	// PXC is no longer required for the external-MySQL delivery. Keep the
@@ -150,7 +147,7 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 	switch {
 	case err == nil && secret != nil:
 		result.RuntimeSecretExists = true
-		result.Warnings = append(result.Warnings, "平台已完成初始化；如需重装，请先备份并删除运行 Secret。")
+		result.Warnings = append(result.Warnings, "发现运行 Secret；如果安装曾中断，请使用同一初始化凭证查看进度并重试。")
 	case apierrors.IsNotFound(err):
 	default:
 		result.Errors = append(result.Errors, fmt.Sprintf("读取运行 Secret 失败：%v", err))

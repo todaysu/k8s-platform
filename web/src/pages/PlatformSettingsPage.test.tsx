@@ -13,15 +13,38 @@ const defaults = {
   updated_at: {},
 }
 
+const modelConfig = { endpoint: 'https://model.internal/v1', model: 'deepseek-chat', has_api_key: true }
+
+function mockSettingsFetch() {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url === '/api/v1/reports/config') {
+      const value = init?.method === 'PUT' ? { ...JSON.parse(String(init.body)), api_key: undefined, clear_api_key: undefined, has_api_key: true } : modelConfig
+      return { ok: true, json: async () => ({ data: value, error: null }) }
+    }
+    return { ok: true, json: async () => ({ data: defaults, error: null }) }
+  })
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
   window.history.replaceState({}, '', '/')
 })
 
 describe('platform settings page', () => {
+  it('uses the built-in Arthas version by default and allows an offline update package', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=java')
+    vi.stubGlobal('fetch', mockSettingsFetch())
+    render(<PlatformSettingsPage />)
+    expect(await screen.findByRole('textbox', { name: /^Arthas 更新离线包地址/ })).toHaveValue('')
+    expect(screen.getByText(/默认使用平台内置 Arthas 4.3.5/)).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: /^更新包下载超时/ })).toHaveValue(60)
+  })
+
   it('loads categories and saves the active section only', async () => {
     window.history.replaceState({}, '', '/settings/runtime')
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input) === '/api/v1/reports/config') return { ok: true, json: async () => ({ data: modelConfig, error: null }) }
       const saved = init?.method === 'PUT'
       const settings = { ...defaults, runtime: saved ? JSON.parse(String(init?.body)) : defaults.runtime, updated_at: saved ? { runtime: '2026-10-22T02:00:00Z' } : {} }
       return { ok: true, json: async () => ({ data: saved ? { settings, apply: { status: 'restarting', targets: ['ftc-platform'], message: '配置已保存，正在滚动重启 ftc-platform。' } } : settings, error: null }) }
@@ -38,7 +61,7 @@ describe('platform settings page', () => {
   })
 
   it('shows an inline reminder and blocks saving when a parameter is invalid', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: defaults, error: null }) }))
+    vi.stubGlobal('fetch', mockSettingsFetch())
     const user = userEvent.setup()
     render(<PlatformSettingsPage />)
     const input = await screen.findByRole('spinbutton', { name: /^普通查询并发/ })
@@ -50,7 +73,7 @@ describe('platform settings page', () => {
   })
 
   it('switches to the security image configuration without leaving the page shell', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: defaults, error: null }) }))
+    vi.stubGlobal('fetch', mockSettingsFetch())
     const user = userEvent.setup()
     render(<PlatformSettingsPage />)
     await screen.findByRole('heading', { name: '功能参数' })
@@ -62,5 +85,23 @@ describe('platform settings page', () => {
     expect(screen.getByText('共 9 项参数')).toBeInTheDocument()
     expect(window.location.pathname).toBe('/settings/access')
     expect(window.location.search).toBe('?tab=parameters&section=security')
+  })
+
+  it('keeps report model configuration in administrator platform settings', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=reports')
+    const fetchMock = mockSettingsFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<PlatformSettingsPage />)
+    expect(await screen.findByRole('textbox', { name: /^模型接口地址/ })).toHaveValue('https://model.internal/v1')
+    expect(screen.getByRole('textbox', { name: /^模型名称/ })).toHaveValue('deepseek-chat')
+    expect(screen.getByPlaceholderText('已保存，留空沿用')).toHaveAttribute('type', 'password')
+    expect(screen.getByText('认证密钥已加密保存；留空表示继续使用原密钥。')).toBeInTheDocument()
+    await user.clear(screen.getByRole('textbox', { name: /^模型名称/ }))
+    await user.type(screen.getByRole('textbox', { name: /^模型名称/ }), 'deepseek-v3')
+    await user.click(screen.getByRole('button', { name: '保存配置' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/reports/config', expect.objectContaining({ method: 'PUT' })))
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/^\/api\/v1\/settings\//), expect.objectContaining({ method: 'PUT' }))
+    expect(await screen.findByText('模型配置已保存，下一次生成运行报告时生效。')).toBeInTheDocument()
   })
 })

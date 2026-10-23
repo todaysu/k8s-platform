@@ -1,21 +1,25 @@
 import { Alert, Button, Card, CardBody, Spinner } from '@patternfly/react-core'
-import { CheckCircleIcon, CogIcon, DatabaseIcon, JavaIcon, OutlinedBellIcon, SecurityIcon, TachometerAltIcon } from '@patternfly/react-icons'
+import { ChartLineIcon, CheckCircleIcon, CogIcon, DatabaseIcon, JavaIcon, OutlinedBellIcon, SecurityIcon, TachometerAltIcon } from '@patternfly/react-icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { getReportModelConfig, saveReportModelConfig, type ReportModelConfig } from '../api/reports'
 import { fetchPlatformSettings, savePlatformSettings, type PlatformSettings, type SettingsApplyStatus, type SettingsSection } from '../api/settings'
 import { usePermission } from '../auth/context'
 import { validateSection, type FieldErrors } from './platformSettingsValidation'
 import './PlatformSettingsPage.css'
 
-const sectionMeta: Record<SettingsSection, { description: string; icon: typeof CogIcon; label: string }> = {
+type SettingsView = SettingsSection | 'reports'
+
+const sectionMeta: Record<SettingsView, { description: string; icon: typeof CogIcon; label: string }> = {
   runtime: { label: '接口与并发', description: '控制 API、实时会话和单集群访问的并发上限。', icon: TachometerAltIcon },
   collection: { label: '采集任务', description: '调整健康、容量和资源索引的采集频率。', icon: CogIcon },
   events: { label: '事件保留', description: '分级管理 Kubernetes Event 原始数据与汇总数据的保留时间。', icon: OutlinedBellIcon },
   security: { label: '安全扫描', description: '管理 x86/ARM kube-bench 镜像、扫描队列和超时。', icon: SecurityIcon },
   java: { label: 'Java 排障', description: '管理 Arthas 来源、诊断并发和大文件保护策略。', icon: JavaIcon },
   database: { label: '数据库运维', description: '配置备份策略、本地备份目录和磁盘阈值。', icon: DatabaseIcon },
+  reports: { label: '报告模型', description: '配置运行报告使用的内网模型接口与加密凭据。', icon: ChartLineIcon },
 }
 
-const validSections = Object.keys(sectionMeta) as SettingsSection[]
+const validSections = Object.keys(sectionMeta) as SettingsView[]
 type SaveNotice = { message: string; variant: 'success' | 'warning' | 'info' }
 
 const noticeForApply = (apply: SettingsApplyStatus): SaveNotice => {
@@ -23,9 +27,9 @@ const noticeForApply = (apply: SettingsApplyStatus): SaveNotice => {
   if (apply.status === 'failed' || apply.status === 'restart_unavailable') return { message: apply.message, variant: 'warning' }
   return { message: apply.message, variant: 'info' }
 }
-const activeSectionFromPath = (): SettingsSection => {
+const activeSectionFromPath = (): SettingsView => {
   const querySection = new URLSearchParams(window.location.search).get('section')
-  const candidate = (querySection || window.location.pathname.split('/')[2]) as SettingsSection
+  const candidate = (querySection || window.location.pathname.split('/')[2]) as SettingsView
   return validSections.includes(candidate) ? candidate : 'runtime'
 }
 
@@ -43,7 +47,7 @@ function NumberField({ error, help, label, max, min, onChange, value, wide }: Nu
   return <Field error={error} help={help} label={label} wide={wide}><NumberInput invalid={Boolean(error)} max={max} min={min} onChange={onChange} value={value} /></Field>
 }
 
-type TextFieldProps = { error?: string; help: string; label: string; onChange: (value: string) => void; placeholder?: string; type?: 'text' | 'time'; value: string; wide?: boolean }
+type TextFieldProps = { error?: string; help: string; label: string; onChange: (value: string) => void; placeholder?: string; type?: 'text' | 'time' | 'password' | 'url'; value: string; wide?: boolean }
 function TextField({ error, help, label, onChange, placeholder, type = 'text', value, wide }: TextFieldProps) {
   return <Field error={error} help={help} label={label} wide={wide}><input aria-invalid={Boolean(error) || undefined} placeholder={placeholder} type={type} value={value} onChange={(event) => onChange(event.target.value)} /></Field>
 }
@@ -51,13 +55,16 @@ function TextField({ error, help, label, onChange, placeholder, type = 'text', v
 export default function PlatformSettingsPage({ embedded = false }: { embedded?: boolean }) {
   const canConfigure = usePermission('configure')
   const formScrollRef = useRef<HTMLDivElement>(null)
-  const [active, setActive] = useState<SettingsSection>(activeSectionFromPath)
+  const [active, setActive] = useState<SettingsView>(activeSectionFromPath)
   const [settings, setSettings] = useState<PlatformSettings | null>(null)
   const [draft, setDraft] = useState<PlatformSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<SaveNotice | null>(null)
+  const [reportConfig, setReportConfig] = useState<ReportModelConfig | null>(null)
+  const [reportDraft, setReportDraft] = useState<ReportModelConfig | null>(null)
+  const [reportLoading, setReportLoading] = useState(true)
 
   useEffect(() => {
     const onPopState = () => setActive(activeSectionFromPath())
@@ -78,10 +85,20 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
     return () => { mounted = false }
   }, [])
 
-  const dirty = useMemo(() => settings && draft ? JSON.stringify(settings[active]) !== JSON.stringify(draft[active]) : false, [active, draft, settings])
-  const errors = useMemo<FieldErrors>(() => draft ? validateSection(active, draft) : {}, [active, draft])
+  useEffect(() => {
+    let mounted = true
+    void getReportModelConfig().then((value) => {
+      if (!mounted) return
+      setReportConfig(value); setReportDraft({ ...value, api_key: '', clear_api_key: false })
+    }).catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : '读取报告模型配置失败。') }).finally(() => { if (mounted) setReportLoading(false) })
+    return () => { mounted = false }
+  }, [])
+
+  const reportDirty = Boolean(reportConfig && reportDraft && (reportConfig.endpoint !== reportDraft.endpoint || reportConfig.model !== reportDraft.model || Boolean(reportDraft.api_key) || Boolean(reportDraft.clear_api_key)))
+  const dirty = useMemo(() => active === 'reports' ? reportDirty : settings && draft ? JSON.stringify(settings[active]) !== JSON.stringify(draft[active]) : false, [active, draft, reportDirty, settings])
+  const errors = useMemo<FieldErrors>(() => active === 'reports' ? validateReportConfig(reportDraft) : draft ? validateSection(active, draft) : {}, [active, draft, reportDraft])
   const errorCount = Object.keys(errors).length
-  const navigate = (section: SettingsSection) => {
+  const navigate = (section: SettingsView) => {
     window.history.pushState({ settings: section }, '', `/settings/access?tab=parameters&section=${section}`)
     setActive(section); setNotice(null); setError('')
   }
@@ -92,6 +109,13 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
     if (!draft || errorCount > 0) return
     setSaving(true); setError(''); setNotice(null)
     try {
+      if (active === 'reports') {
+        if (!reportDraft) return
+        const value = await saveReportModelConfig(reportDraft)
+        setReportConfig(value); setReportDraft({ ...value, api_key: '', clear_api_key: false })
+        setNotice({ message: '模型配置已保存，下一次生成运行报告时生效。', variant: 'success' })
+        return
+      }
       const result = await savePlatformSettings(active, draft[active])
       setSettings(result.settings); setDraft(structuredClone(result.settings)); setNotice(noticeForApply(result.apply))
       window.dispatchEvent(new CustomEvent('platform-settings-saved', { detail: result.settings }))
@@ -100,12 +124,12 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
     } finally { setSaving(false) }
   }
 
-  if (loading) return <div className="ks-settings-loading"><Spinner aria-label="正在读取平台配置" /><span>正在读取平台配置…</span></div>
+  if (loading || (active === 'reports' && reportLoading)) return <div className="ks-settings-loading"><Spinner aria-label="正在读取平台配置" /><span>正在读取平台配置…</span></div>
   if (!draft) return <Alert isInline title="配置页加载失败" variant="danger">{error}</Alert>
-  const updatedAt = settings?.updated_at?.[active]
+  const updatedAt = active === 'reports' ? undefined : settings?.updated_at?.[active]
   const activeMeta = sectionMeta[active]
   const ActiveIcon = activeMeta.icon
-  const fieldCount = Object.keys(draft[active]).length
+  const fieldCount = active === 'reports' ? 3 : Object.keys(draft[active]).length
 
   return <div className={`ks-settings-page${embedded ? ' is-embedded' : ''}`}>
     <aside className="ks-settings-nav" aria-label="参数配置分类">
@@ -134,13 +158,40 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
               {dirty && <span className="ks-settings-dirty"><span aria-hidden="true" />未保存</span>}
             </div>
           </header>
-          <div className="ks-settings-form" ref={formScrollRef}>{renderForm(active, draft, update, errors)}</div>
+          <div className="ks-settings-form" ref={formScrollRef}>{active === 'reports' ? renderReportForm(reportDraft, setReportDraft, errors) : renderForm(active, draft, update, errors)}</div>
           {!canConfigure && <p className="ks-settings-readonly">当前账号只能查看配置，修改需要平台管理员权限。</p>}
-          <footer className="ks-settings-footer"><span>{updatedAt ? <><CheckCircleIcon /> 上次保存：{new Date(updatedAt).toLocaleString('zh-CN', { hour12: false })}</> : '当前使用平台推荐默认值'}</span><Button isDisabled={!dirty || saving} onClick={() => settings && setDraft(structuredClone(settings))} variant="link">放弃修改</Button><Button isDisabled={!canConfigure || !dirty || errorCount > 0} isLoading={saving} onClick={() => void save()}>保存配置</Button></footer>
+          <footer className="ks-settings-footer"><span>{active === 'reports' ? (reportConfig?.endpoint && reportConfig.model ? <><CheckCircleIcon /> 模型服务已配置{reportConfig.has_api_key ? '，认证密钥已保存' : ''}</> : '当前未配置模型，运行报告仍可使用统计模式') : updatedAt ? <><CheckCircleIcon /> 上次保存：{new Date(updatedAt).toLocaleString('zh-CN', { hour12: false })}</> : '当前使用平台推荐默认值'}</span><Button isDisabled={!dirty || saving} onClick={() => active === 'reports' ? reportConfig && setReportDraft({ ...reportConfig, api_key: '', clear_api_key: false }) : settings && setDraft(structuredClone(settings))} variant="link">放弃修改</Button><Button isDisabled={!canConfigure || !dirty || errorCount > 0} isLoading={saving} onClick={() => void save()}>保存配置</Button></footer>
         </CardBody>
       </Card>
     </main>
   </div>
+}
+
+function validateReportConfig(value: ReportModelConfig | null): FieldErrors {
+  if (!value) return {}
+  const errors: FieldErrors = {}
+  const endpoint = value.endpoint.trim()
+  const model = value.model.trim()
+  if (!endpoint && model) errors.endpoint = '填写模型名称前，请先填写模型接口地址。'
+  if (endpoint) {
+    try {
+      const parsed = new URL(endpoint)
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) errors.endpoint = '请填写不含认证信息、查询参数和片段的 HTTP(S) 基础地址。'
+    } catch { errors.endpoint = '请输入有效的 HTTP(S) 接口地址。' }
+    if (!model) errors.model = '配置接口地址时必须填写模型名称。'
+  }
+  return errors
+}
+
+function renderReportForm(value: ReportModelConfig | null, setValue: React.Dispatch<React.SetStateAction<ReportModelConfig | null>>, errors: FieldErrors) {
+  if (!value) return <Alert isInline title="报告模型配置加载失败" variant="danger">请刷新页面后重试。</Alert>
+  const patch = (change: Partial<ReportModelConfig>) => setValue((current) => current ? { ...current, ...change } : current)
+  return <>
+    <TextField error={errors.endpoint} help="兼容 OpenAI Chat Completions 的 API 基础地址，例如 https://model.internal/v1。" label="模型接口地址" onChange={(endpoint) => patch({ endpoint })} placeholder="https://model.internal/v1" type="url" value={value.endpoint} wide />
+    <TextField error={errors.model} help="填写内网模型服务提供的模型标识。" label="模型名称" onChange={(model) => patch({ model })} placeholder="例如 deepseek-chat" value={value.model} />
+    <TextField help={value.has_api_key ? '认证密钥已加密保存；留空表示继续使用原密钥。' : '模型接口不需要认证时可以留空。'} label="API Key" onChange={(api_key) => patch({ api_key, clear_api_key: api_key ? false : value.clear_api_key })} placeholder={value.has_api_key ? '已保存，留空沿用' : '需要认证时填写'} type="password" value={value.api_key ?? ''} />
+    {value.has_api_key && <Field help="保存后删除平台已加密保存的模型认证密钥。" label="已保存密钥"><span className="ks-settings-check"><input aria-label="清除已保存的 API Key" checked={Boolean(value.clear_api_key)} onChange={(event) => patch({ clear_api_key: event.target.checked, api_key: event.target.checked ? '' : value.api_key })} type="checkbox" />清除已保存的 API Key</span></Field>}
+  </>
 }
 
 function renderForm(active: SettingsSection, value: PlatformSettings, update: <K extends SettingsSection>(section: K, patch: Partial<PlatformSettings[K]>) => void, errors: FieldErrors) {
@@ -200,9 +251,10 @@ function renderForm(active: SettingsSection, value: PlatformSettings, update: <K
   if (active === 'java') {
     const v = value.java
     return <>
-      <TextField error={errors.arthas_url} help="生产离线环境建议使用内部 HTTP 文件地址。" label="Arthas 离线包地址" onChange={(s) => update('java', { arthas_url: s })} placeholder="http://repo.internal/tools/arthas-bin.zip" value={v.arthas_url} wide />
-      <TextField help="用于报告和下载包校验。" label="Arthas 版本" onChange={(s) => update('java', { arthas_version: s })} value={v.arthas_version} />
-      <TextField error={errors.arthas_sha256} help="可选；填写后校验离线包完整性。" label="SHA-256" onChange={(s) => update('java', { arthas_sha256: s })} value={v.arthas_sha256} wide />
+      <TextField error={errors.arthas_url} help="默认使用平台内置 Arthas 4.3.5，无需填写。升级时填写内部完整 ZIP 离线包地址，由平台下载后传入容器。" label="Arthas 更新离线包地址（可选）" onChange={(s) => update('java', { arthas_url: s })} placeholder="留空使用平台内置版本" value={v.arthas_url} wide />
+      <TextField error={errors.arthas_version} help="仅更新离线包时填写对应版本；留空地址时始终使用内置 4.3.5。" label="更新包版本" onChange={(s) => update('java', { arthas_version: s })} value={v.arthas_version} />
+      <TextField error={errors.arthas_sha256} help="可选；填写更新离线包的 SHA-256 后，平台校验通过才会启动诊断。" label="更新包 SHA-256" onChange={(s) => update('java', { arthas_sha256: s })} value={v.arthas_sha256} wide />
+      <NumberField error={errors.download_timeout_seconds} help="平台获取更新离线包的最长时间；使用内置版本无需下载。" label="更新包下载超时（秒）" max={600} min={5} onChange={(n) => update('java', { download_timeout_seconds: n })} value={v.download_timeout_seconds} />
       <NumberField error={errors.max_concurrency} help="同时运行的 Java 诊断任务数。" label="诊断并发" max={20} onChange={(n) => update('java', { max_concurrency: n })} value={v.max_concurrency} />
       <NumberField error={errors.diagnostic_timeout_minutes} help="到期后终止诊断会话。" label="诊断超时（分钟）" max={240} min={5} onChange={(n) => update('java', { diagnostic_timeout_minutes: n })} value={v.diagnostic_timeout_minutes} />
       <NumberField error={errors.temporary_retention_hours} help="诊断产物的默认清理时间。" label="临时文件保留（小时）" max={168} onChange={(n) => update('java', { temporary_retention_hours: n })} value={v.temporary_retention_hours} />

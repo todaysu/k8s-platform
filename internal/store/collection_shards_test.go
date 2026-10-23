@@ -23,6 +23,38 @@ func settleShards(t *testing.T, db *SQLite, owners []string, count int) map[stri
 	}
 	return result
 }
+
+func TestActiveCollectionShardCountUsesMemberHeartbeat(t *testing.T) {
+	db := newJobTestStore(t)
+	ctx := context.Background()
+	if _, err := db.SyncCollectionShards(ctx, "owner", 16, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// A stable collector keeps its member heartbeat alive after the initial
+	// shard lease timestamp expires, while its shard epoch stays unchanged.
+	if _, err := db.db.Exec(`UPDATE collection_shards SET lease_until=0`); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := CountActiveCollectionShards(ctx, db.db, true)
+	if err != nil || owned != 16 {
+		t.Fatalf("live collector must retain all active shards: count=%d err=%v", owned, err)
+	}
+	if _, err := db.db.Exec(`UPDATE collection_members SET lease_until=0 WHERE owner='owner'`); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = CountActiveCollectionShards(ctx, db.db, true)
+	if err != nil || owned != 0 {
+		t.Fatalf("expired collector must not count as active: count=%d err=%v", owned, err)
+	}
+	if _, err := db.db.Exec(`DELETE FROM collection_members`); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = CountActiveCollectionShards(ctx, db.db, true)
+	if err != nil || owned != 0 {
+		t.Fatalf("orphaned shard must not count as active: count=%d err=%v", owned, err)
+	}
+}
+
 func TestCollectionShardBalanceTakeoverAndEpochFencing(t *testing.T) {
 	db := newJobTestStore(t)
 	ctx := context.Background()

@@ -13,6 +13,7 @@ import (
 	"example.com/k8s-platform/internal/auth"
 	"example.com/k8s-platform/internal/cluster"
 	"example.com/k8s-platform/internal/platformsettings"
+	reportsvc "example.com/k8s-platform/internal/reports"
 )
 
 type response struct {
@@ -106,6 +107,7 @@ type RouterOptions struct {
 	SettingsRestarter  settingsRestarter
 	Admission          AdmissionLimits
 	PodExecEnabled     bool
+	Reports            *reportsvc.Service
 	// Authenticator receives the route authorization table. When nil the
 	// middleware keeps its own conservative default.
 	Authenticator routeAuthenticator
@@ -158,6 +160,12 @@ func NewRouterWithOptions(version string, options RouterOptions, validators ...c
 	})
 	handle("GET /api/v1/settings", getPlatformSettings(options.SettingsRepository))
 	handle("PUT /api/v1/settings/{section}", savePlatformSettings(options.SettingsRepository, options.SettingsRestarter))
+	handle("GET /api/v1/reports", listReports(options.Reports))
+	handle("POST /api/v1/reports", generateReport(options.Reports))
+	handle("GET /api/v1/reports/config", getReportModelConfig(options.Reports))
+	handle("PUT /api/v1/reports/config", saveReportModelConfig(options.Reports))
+	handle("GET /api/v1/reports/{id}", getReport(options.Reports))
+	handle("GET /api/v1/reports/{id}/html", getReportHTML(options.Reports))
 	handle("POST /api/v1/clusters/validate", validateCluster(validator))
 	handle("GET /api/v1/clusters/{id}/monitoring", monitoringHandler(validator))
 	handle("POST /api/v1/clusters/{id}/kubectl", runClusterKubectl(validator))
@@ -176,7 +184,7 @@ func NewRouterWithOptions(version string, options RouterOptions, validators ...c
 	handle("GET /api/v1/clusters/{id}/pods", getClusterPods(manager))
 	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}", getClusterPod(manager))
 	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/logs", getClusterPodLogs(manager))
-	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec", podExecHandler(execManager, options.PodExecEnabled))
+	handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec", podExecHandler(execManager, options.PodExecEnabled, options.SettingsRepository))
 	handle("GET /api/v1/clusters/{id}/workloads", getClusterWorkloads(manager))
 	handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}", getClusterWorkload(manager))
 	handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/yaml", getClusterWorkloadYAML(yamlManager))

@@ -1,5 +1,7 @@
 # Kubernetes 多集群管理平台
 
+> 当前发布版本：`v1.0.0`
+
 一个参考 CNCF Headlamp 技术架构、聚焦集群稳定性的轻量多集群管理平台。
 
 当前正在实现第一个纵向功能：使用集群名称和上传的 Kubeconfig 纳管已有 Kubernetes 集群。
@@ -66,11 +68,7 @@ make dev-backend
 
 本地开发不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到 SQLite。`deploy/mysql.yaml` 仅用于本地/单副本开发，不是交付版高可用方案。
 
-Kubernetes 生产交付**不依赖 Helm，也不在集群内安装 MySQL**：使用已有的外部 MySQL 8.0+，通过 [`deploy/install.yaml`](deploy/install.yaml)（已包含 ingress-nginx hostNetwork）+ 浏览器初始化向导创建表结构、管理员、自签 CA/HTTPS Ingress 和运行 Deployment。一个人有 kubeconfig 和外部 MySQL 即可完成，不再需要 3 个 worker、本地盘、PXC Operator 或 HAProxy。
-
-- 运维详细版：[`docs/deployment/install.md`](docs/deployment/install.md)（Step 0–12、资源清单、排错、备份/升级/卸载）
-- 小白流程图版：[`docs/deployment/install-beginner.md`](docs/deployment/install-beginner.md)（按图操作，不需要懂 Kubernetes）
-- 版本升级/回滚：[`docs/deployment/upgrade.md`](docs/deployment/upgrade.md)（无 Helm、外部 MySQL）
+Kubernetes 交付使用已有 MySQL 8.0+、平台自身 HTTPS 和 NodePort，无需 Ingress。当前工作区已生成私有的 `data/delivery/install.yaml`：修改其中唯一的平台镜像地址后执行 `kubectl apply -f data/delivery/install.yaml`。打开 `https://<节点IP>:30080` 完成初始化，之后在 `https://<自定义域名>:30443` 使用平台。后续交付包可用 `go run ./cmd/installer` 生成新的私有清单。详见 [`docs/deployment/install.md`](docs/deployment/install.md)。
 
 后端启动后，可访问健康检查接口：
 
@@ -89,15 +87,26 @@ make dev-frontend
 
 历史模块设计与开发步骤位于 [`docs/plans`](docs/plans)。
 
-Kubernetes 本地开发/调试（单副本 MySQL、Pod Exec）见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)；生产交付按 [`docs/deployment/install.md`](docs/deployment/install.md) 执行。
+Kubernetes 本地开发资料见 [`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md)；新环境交付按 [`docs/deployment/install.md`](docs/deployment/install.md) 执行。
+
+三节点 Kind 本地验收环境、AMD64/ARM64 离线镜像打包与部署步骤见 [`deploy/kind/README.md`](deploy/kind/README.md)。
 
 设置 `METRICS_ADDR`（例如 `:9090`）后，平台在独立端口暴露 Prometheus 文本指标：采集轮次/错误/耗时、事件 List/Watch 重连、API 请求量与 5xx、托管集群数。该端口不经过登录认证，生产环境只应通过内网 Service 或 NetworkPolicy 暴露。
 
 ### Arthas 离线诊断
 
 Arthas 4.3.5 完整发行包随平台二进制内置，经 Kubernetes Exec 传入目标容器，不依赖容器出网或新增 Service。支持 Linux x86_64 / ARM64；目标需 JDK8+、sh、tar、可写 `/tmp`，并与 JVM 同用户运行。详细来源与校验信息见 `internal/arthasdist/README.md`。
+平台管理的 Java 排障参数默认使用该内置版本；只有管理员需要升级时，才配置内网 HTTP/HTTPS 完整 ZIP 离线包地址、版本和可选 SHA-256。平台下载校验后经 Exec 传入 Pod，目标容器仍无需出网。
 
 运维工具中先选集群、命名空间、Pod 和容器，再启动会话。故障向导默认折叠，内置社区用户排障案例。test01 的 myapp 已部署 arthas-demo，构建与复现方式见 `deploy/examples/arthas-demo/README.md`。
+
+### 运行报告
+
+一级“运行报告”页面可按自然周、自然月或自然季度生成报告，并按环境与 G01/OCP 资源池筛选。报告只读取数据库中已保存的 Event 小时聚合、安全扫描记录和生成时最新健康/容量快照，不会同时请求所有纳管集群。
+
+生成结果以平台内的独立 HTML 图表页保存，支持页内预览、新窗口打开和复制直达链接，访问仍需登录平台。不配置模型也可生成事实图表与规则建议；管理员可选配置内网 OpenAI Chat Completions 兼容接口进行 AI 总结，API Key 加密保存且不在页面回显。模型不可用时，已聚合的事实报告仍会保留。
+
+如需查看不污染数据库的高数据量演示页，执行 `go run ./cmd/reportdemo`，结果位于 `data/demo/operational-report-v1.html`。
 
 ## 集群规模与验证
 

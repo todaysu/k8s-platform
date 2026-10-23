@@ -947,6 +947,8 @@
 .ks-arthas-target-note .pf-v6-c-check__label { font-size:12px; }
 .ks-arthas-target-card select:disabled { opacity:1; color:#526477; }
 .ks-arthas-scroll-region { gap:12px; }
+.ks-arthas-package-hint { color:var(--pf-t--global--text--color--subtle); font-size:12px; line-height:1.4; margin:0; }
+.ks-arthas-package-hint button { background:none; border:0; color:var(--pf-t--global--color--brand--default); cursor:pointer; font:inherit; padding:0 2px; text-decoration:underline; }
 .ks-arthas-switch { position:relative; }
 .ks-arthas-switch-dismiss { position:fixed; inset:0; z-index:80; border:0; background:transparent; cursor:default; }
 .ks-arthas-switch-confirm { position:absolute; right:0; top:calc(100% + 8px); z-index:81; width:280px; padding:16px; background:#fff; border:1px solid #d5deea; border-radius:6px; box-shadow:0 8px 24px #162b4626; }
