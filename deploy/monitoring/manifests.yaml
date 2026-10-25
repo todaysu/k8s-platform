@@ -90,6 +90,10 @@ data:
           - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
             regex: node-exporter;metrics
             action: keep
+          # 暴露节点名，平台监控页用 node 标签区分主机；
+          # 缺失时前端回退为去掉端口的采集地址。
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
 
       # kube-state-metrics：Deployment/Pod/Node 等对象状态
       - job_name: kube-state-metrics

@@ -4,6 +4,7 @@ export const metricValue=(value:number|null,unit:string)=>{if(value===null||!Num
 export const seriesName=(labels:Record<string,string>)=>{
  const kinds:Record<string,string>={readOnly:'只读请求',mutating:'写入请求'}
  const kind=labels.request_kind?(kinds[labels.request_kind]||labels.request_kind):''
- const resource=labels.pod?`${labels.namespace}/${labels.pod}`:Object.entries(labels).filter(([key])=>key!=='__name__'&&key!=='request_kind').map(([key,value])=>`${key}=${value}`).join(' · ')
+ // 节点级面板由采集配置注入 node 标签，优先显示主机名而不是采集地址。
+ const resource=labels.node||(labels.pod?`${labels.namespace}/${labels.pod}`:Object.entries(labels).filter(([key])=>key!=='__name__'&&key!=='request_kind').map(([key,value])=>`${key}=${value}`).join(' · '))
  return `${kind?`${kind} · `:''}${resource||'集群合计'}`
 }

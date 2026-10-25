@@ -8,7 +8,7 @@ import ResourceCombobox from '../monitoring/ResourceCombobox'
 import type {MonitoringSnapshot} from '../monitoring/types'
 import './FleetMonitoringPage.css'
 type Cluster={id:string;name:string;environment:string;status:string;cpuUtilization:number|null;memoryUtilization:number|null;metricsAvailable:boolean;nodes:{ready:number;total:number}|null;lastChecked:string}
-const views=[['overview','总览'],['pods','Pod 资源'],['apiserver','API Server'],['etcd','etcd']] as const
+const views=[['overview','总览'],['nodes','节点性能'],['pods','Pod 资源'],['apiserver','API Server'],['etcd','etcd']] as const
 export default function FleetMonitoringPage({clusters,onOpenCluster}:{clusters:Cluster[];onOpenCluster:(id:string)=>void;onRefresh:()=>void}){
  const initial=new URLSearchParams(location.search)
  const [selected,setSelected]=useState(initial.get('cluster')||''),[view,setView]=useState(initial.get('view')||'overview'),[hours,setHours]=useState(initial.get('from')&&initial.get('to')?'custom':initial.get('hours')||'1'),[namespace,setNamespace]=useState(initial.get('namespace')||''),[pod,setPod]=useState(initial.get('pod')||''),[refresh,setRefresh]=useState(0),[auto,setAuto]=useState('0')

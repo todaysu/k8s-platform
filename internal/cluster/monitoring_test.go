@@ -85,3 +85,46 @@ func TestPodMonitoringUsesIOInsteadOfStaticRequests(t *testing.T) {
 		t.Fatal(specs)
 	}
 }
+
+// 节点性能视图需要覆盖 CPU、内存、文件系统、磁盘 I/O 与网络，
+// 并且按节点分组，否则多台主机会合并成一条无法定位的曲线。
+func TestNodeMonitoringViewExposesHostPanels(t *testing.T) {
+	now := time.Now()
+	q := MonitoringQuery{View: "nodes", Start: now.Add(-time.Hour), End: now}
+	if err := ValidateMonitoringQuery(q); err != nil {
+		t.Fatalf("nodes view must be accepted: %v", err)
+	}
+	specs := monitoringSpecs(q)
+	queries := map[string]string{}
+	for _, spec := range specs {
+		queries[spec.id] = spec.query
+		if spec.title == "" || spec.unit == "" || spec.hint == "" || spec.query == "" {
+			t.Errorf("panel %s must describe itself: %#v", spec.id, spec)
+		}
+		if !strings.Contains(spec.query, "by(node,instance)") {
+			t.Errorf("panel %s must group by node and instance: %s", spec.id, spec.query)
+		}
+		// 不同发行版的 node-exporter job 名不一致，绑定 job 会让面板在健康集群上空白。
+		if strings.Contains(spec.query, "job=") {
+			t.Errorf("panel %s must not pin the job label: %s", spec.id, spec.query)
+		}
+	}
+	for _, required := range []string{
+		"node_cpu_usage", "node_load1", "node_memory_usage", "node_filesystem_usage",
+		"node_disk_read", "node_disk_write", "node_disk_iops", "node_disk_utilization",
+		"node_network_receive", "node_network_transmit", "node_network_errors",
+	} {
+		if _, ok := queries[required]; !ok {
+			t.Errorf("missing host panel %s", required)
+		}
+	}
+	// 虚拟文件系统与 CNI 设备参与计算会严重失真，排除条件必须存在。
+	if !strings.Contains(queries["node_filesystem_usage"], "fstype!~") {
+		t.Error("filesystem panel must exclude virtual filesystems")
+	}
+	for _, id := range []string{"node_network_receive", "node_network_transmit", "node_network_errors"} {
+		if !strings.Contains(queries[id], "device!~") {
+			t.Errorf("%s must exclude virtual network devices", id)
+		}
+	}
+}

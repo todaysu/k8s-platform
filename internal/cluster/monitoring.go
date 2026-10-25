@@ -79,7 +79,7 @@ var monitorCache = struct {
 }{items: map[string]monitorCacheEntry{}}
 
 func ValidateMonitoringQuery(q MonitoringQuery) error {
-	if !contains([]string{"overview", "pods", "apiserver", "etcd"}, q.View) || q.Start.IsZero() || q.End.IsZero() || !q.End.After(q.Start) || q.End.Sub(q.Start) > 7*24*time.Hour || q.End.After(time.Now().Add(time.Minute)) {
+	if !contains([]string{"overview", "pods", "nodes", "apiserver", "etcd"}, q.View) || q.Start.IsZero() || q.End.IsZero() || !q.End.After(q.Start) || q.End.Sub(q.Start) > 7*24*time.Hour || q.End.After(time.Now().Add(time.Minute)) {
 		return fmt.Errorf("invalid monitoring time range or view")
 	}
 	if q.Namespace != "" && len(validation.IsDNS1123Label(q.Namespace)) > 0 {
@@ -121,6 +121,9 @@ func monitoringSpecs(q MonitoringQuery) []monitoringSpec {
 	if q.View == "etcd" {
 		return etcd
 	}
+	if q.View == "nodes" {
+		return nodeSpecs()
+	}
 	if q.View == "overview" {
 		return []monitoringSpec{{"cpu", "Pod CPU 使用总量", "cores", "容器 CPU 使用核数合计，不是主机 CPU 利用率。", `sum(` + cpu + `)`}, {"memory", "Pod 内存工作集总量", "bytes", "容器工作集合计，不是主机内存利用率。", `sum(` + memory + `)`}, api[1], etcd[0]}
 	}
@@ -133,6 +136,35 @@ func monitoringSpecs(q MonitoringQuery) []monitoringSpec {
 		{"pod_disk_write_iops", "Pod 磁盘写入 IOPS", "IOPS", "每秒写入操作次数，取 5 分钟平均；未采集不按零显示。", `sum by(namespace,pod)(rate(container_fs_writes_total{` + selector + `}[5m]))`},
 	}
 
+}
+
+// nodeSpecs returns host-level panels backed by node-exporter.
+//
+// The queries deliberately omit a job selector. node-exporter is deployed under
+// different job names across environments (kube-prometheus-stack uses its own),
+// and the node_* metric names are unique to node-exporter, so filtering on job
+// would make these panels silently empty on otherwise healthy clusters.
+func nodeSpecs() []monitoringSpec {
+	// Virtual filesystems report memory usage or container layers rather than
+	// real disk pressure; counting them would distort the usage percentage.
+	const realFilesystems = `fstype!~"tmpfs|ramfs|overlay|squashfs|iso9660|nfs.*|cifs|autofs"`
+	// Loopback and CNI devices carry node-local traffic only. Counting them
+	// would multiply real throughput by the number of local pods.
+	const realDevices = `device!~"lo|veth.*|tunl.*|erspan.*|gre.*|sit.*|ip6.*|docker.*|br-.*|cni.*|flannel.*|cali.*"`
+	byNode := "by(node,instance)"
+	return []monitoringSpec{
+		{"node_cpu_usage", "节点 CPU 使用率", "%", "按节点汇总所有核心的非 idle 占比；与 Pod CPU 之和不相等，差值来自系统进程。", `100 - (avg ` + byNode + `(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)`},
+		{"node_load1", "节点 1 分钟负载", "load", "负载包含不可中断 I/O 等待；需结合核心数判断，16 核负载 8 与 2 核负载 8 含义不同。", `max ` + byNode + `(node_load1)`},
+		{"node_memory_usage", "节点内存使用率", "%", "基于 MemAvailable 而非 MemFree，已计入可回收缓存，比 free 更接近真实压力。", `100 * (1 - sum ` + byNode + `(node_memory_MemAvailable_bytes) / sum ` + byNode + `(node_memory_MemTotal_bytes))`},
+		{"node_filesystem_usage", "节点磁盘空间使用率", "%", "排除 tmpfs/overlay 等虚拟文件系统后按节点合计；单分区环境即根分区使用率。", `100 * (1 - sum ` + byNode + `(node_filesystem_avail_bytes{` + realFilesystems + `}) / sum ` + byNode + `(node_filesystem_size_bytes{` + realFilesystems + `}))`},
+		{"node_disk_read", "节点磁盘读取吞吐量", "bytes/s", "5 分钟平均，按节点汇总全部块设备；含内核预读，可能高于应用实际读取量。", `sum ` + byNode + `(rate(node_disk_read_bytes_total[5m]))`},
+		{"node_disk_write", "节点磁盘写入吞吐量", "bytes/s", "5 分钟平均，按节点汇总全部块设备。", `sum ` + byNode + `(rate(node_disk_written_bytes_total[5m]))`},
+		{"node_disk_iops", "节点磁盘 IOPS", "IOPS", "读写操作合计速率；小文件密集场景比吞吐量更能反映压力。", `sum ` + byNode + `(rate(node_disk_reads_completed_total[5m]) + rate(node_disk_writes_completed_total[5m]))`},
+		{"node_disk_utilization", "节点磁盘 I/O 利用率", "%", "设备处于忙碌状态的时间占比；持续接近 100% 表示磁盘成为瓶颈，多盘软 RAID 会相互掩盖。", `100 * max ` + byNode + `(rate(node_disk_io_time_seconds_total[5m]))`},
+		{"node_network_receive", "节点网络接收速率", "bytes/s", "排除回环与 CNI 虚拟设备，避免把 Pod 间流量重复计入物理网卡。", `sum ` + byNode + `(rate(node_network_receive_bytes_total{` + realDevices + `}[5m]))`},
+		{"node_network_transmit", "节点网络发送速率", "bytes/s", "排除回环与 CNI 虚拟设备。", `sum ` + byNode + `(rate(node_network_transmit_bytes_total{` + realDevices + `}[5m]))`},
+		{"node_network_errors", "节点网络错误速率", "pps", "收发错误与丢包合计；持续非零需检查网卡、MTU 与对端链路。", `sum ` + byNode + `(rate(node_network_receive_errs_total{` + realDevices + `}[5m]) + rate(node_network_transmit_errs_total{` + realDevices + `}[5m]))`},
+	}
 }
 func (service *OnboardingService) GetMonitoring(ctx context.Context, id string, q MonitoringQuery) (MonitoringSnapshot, error) {
 	if err := ValidateMonitoringQuery(q); err != nil {
