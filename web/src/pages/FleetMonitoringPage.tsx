@@ -1,17 +1,17 @@
-import {useEffect,useRef,useState} from 'react'
+import {Fragment,useEffect,useMemo,useRef,useState} from 'react'
 import {createPortal} from 'react-dom'
 import {useFullscreenPanel} from '../monitoring/useFullscreenPanel'
 import {validateTimeRange,localDateTime,type TimeRange} from '../monitoring/timeRange'
 import {Alert,Button} from '@patternfly/react-core'
 import MetricChart from '../monitoring/MetricChart'
 import ResourceCombobox from '../monitoring/ResourceCombobox'
-import type {MonitoringSnapshot} from '../monitoring/types'
+import type {MonitoringPanel,MonitoringSnapshot} from '../monitoring/types'
 import './FleetMonitoringPage.css'
 type Cluster={id:string;name:string;environment:string;status:string;cpuUtilization:number|null;memoryUtilization:number|null;metricsAvailable:boolean;nodes:{ready:number;total:number}|null;lastChecked:string}
 const views=[['overview','总览'],['nodes','节点性能'],['pods','Pod 资源'],['apiserver','API Server'],['etcd','etcd']] as const
 export default function FleetMonitoringPage({clusters,onOpenCluster}:{clusters:Cluster[];onOpenCluster:(id:string)=>void;onRefresh:()=>void}){
  const initial=new URLSearchParams(location.search)
- const [selected,setSelected]=useState(initial.get('cluster')||''),[view,setView]=useState(initial.get('view')||'overview'),[hours,setHours]=useState(initial.get('from')&&initial.get('to')?'custom':initial.get('hours')||'1'),[namespace,setNamespace]=useState(initial.get('namespace')||''),[pod,setPod]=useState(initial.get('pod')||''),[refresh,setRefresh]=useState(0),[auto,setAuto]=useState('0')
+ const [selected,setSelected]=useState(initial.get('cluster')||''),[view,setView]=useState(initial.get('view')||'overview'),[hours,setHours]=useState(initial.get('from')&&initial.get('to')?'custom':initial.get('hours')||'1'),[namespace,setNamespace]=useState(initial.get('namespace')||''),[pod,setPod]=useState(initial.get('pod')||''),[node,setNode]=useState(initial.get('node')||''),[refresh,setRefresh]=useState(0),[auto,setAuto]=useState('0')
  const [data,setData]=useState<MonitoringSnapshot|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[errorCode,setErrorCode]=useState(''),[pods,setPods]=useState<{name:string;namespace:string}[]>([]),[resourceError,setResourceError]=useState('')
  const [absolute,setAbsolute]=useState<TimeRange|null>(initial.get('from')&&initial.get('to')?{start:initial.get('from')!,end:initial.get('to')!}:null)
  const [fullscreen,setFullscreen]=useState(false)
@@ -20,12 +20,17 @@ export default function FleetMonitoringPage({clusters,onOpenCluster}:{clusters:C
  const applyRange=(start:number,end:number)=>{setAbsolute({start:new Date(start*1000).toISOString(),end:new Date(end*1000).toISOString()});setHours('custom');setAuto('0')}
  const scopeRef=useRef('')
  const requestRef=useRef<AbortController|null>(null)
- useEffect(()=>{const restore=()=>{const params=new URLSearchParams(location.search);setSelected(params.get('cluster')||'');setView(params.get('view')||'overview');setHours(params.get('from')&&params.get('to')?'custom':params.get('hours')||'1');setAbsolute(params.get('from')&&params.get('to')?{start:params.get('from')!,end:params.get('to')!}:null);setNamespace(params.get('namespace')||'');setPod(params.get('pod')||'')};window.addEventListener('popstate',restore);return()=>window.removeEventListener('popstate',restore)},[])
+ useEffect(()=>{const restore=()=>{const params=new URLSearchParams(location.search);setSelected(params.get('cluster')||'');setView(params.get('view')||'overview');setHours(params.get('from')&&params.get('to')?'custom':params.get('hours')||'1');setAbsolute(params.get('from')&&params.get('to')?{start:params.get('from')!,end:params.get('to')!}:null);setNamespace(params.get('namespace')||'');setPod(params.get('pod')||'');setNode(params.get('node')||'')};window.addEventListener('popstate',restore);return()=>window.removeEventListener('popstate',restore)},[])
  const preferredCluster=clusters.find(c=>c.metricsAvailable&&c.status!=='unreachable')
  const clusterID=selected||preferredCluster?.id||clusters[0]?.id||''
  const cluster=clusters.find(c=>c.id===clusterID)
  const effectiveView=views.some(v=>v[0]===view)?view:'overview'
  const effectiveHours=['1','6','24','168'].includes(hours)?Number(hours):1
+ // 节点选项只来自实际返回的曲线标签：采集配置未注入 node 标签时无法按节点过滤，
+ // 此时不渲染选择器，比给出一个点了没反应的选项更清楚。
+ const nodeOptions=useMemo(()=>{const found=new Set<string>();for(const panel of data?.panels||[])for(const series of panel.series)if(series.labels.node)found.add(series.labels.node);return [...found].sort()},[data])
+ // 已按节点分组返回，前端过滤零额外请求，切换节点不需要重新查询历史。
+ const filteredPanels=useMemo(()=>{if(!node)return data?.panels||[];return (data?.panels||[]).map(panel=>({...panel,series:panel.series.filter(series=>series.labels.node===node)}))},[data,node])
  // Synchronize resource loading state with the external cluster request.
  // eslint-disable-next-line react/set-state-in-effect
  useEffect(()=>{if(!clusterID||effectiveView!=='pods')return;const controller=new AbortController();setResourceError('');void fetch(`/api/v1/clusters/${encodeURIComponent(clusterID)}/pods`,{signal:controller.signal}).then(async r=>{const body=await r.json();if(!r.ok||body.error)throw new Error();if(!controller.signal.aborted)setPods(body.data||[])}).catch(()=>{if(!controller.signal.aborted){setPods([]);setResourceError('无法读取 Pod 列表，可手动填写命名空间和 Pod。')}});return()=>controller.abort()},[clusterID,effectiveView])
@@ -46,8 +51,9 @@ export default function FleetMonitoringPage({clusters,onOpenCluster}:{clusters:C
  {hours==='custom'&&absolute&&<TimeRangeForm key={`${absolute.start}/${absolute.end}`} range={absolute} onApply={range=>{setAbsolute(range);setAuto('0')}}/>}
  {!clusters.length?<div className="ks-monitor-empty">暂无集群，请先纳管集群。</div>:<><div className="ks-monitor-context"><span>{cluster?.name||clusterID}</span><span>节点 Ready {cluster?.nodes?`${cluster.nodes.ready} / ${cluster.nodes.total}`:'未获取'}</span><span>集群连接：{cluster?.status==='unreachable'?'异常':'可达'}</span><span>指标查询独立判断，集群可达不代表采集完整</span></div><div role="tablist" aria-label="监控视图" className="ks-monitor-tabs">{views.map(([key,label])=><button key={key} role="tab" aria-selected={effectiveView===key} onClick={()=>setView(key)}>{label}</button>)}</div>
  {effectiveView==='pods'&&<PodFilters key={`${clusterID}/${namespace}/${pod}`} namespace={namespace} pod={pod} pods={pods} onApply={(ns,name)=>{setNamespace(ns);setPod(name)}}/>}
+ {effectiveView==='nodes'&&nodeOptions.length>1&&<div className="ks-monitor-node-filter"><label>节点<select aria-label="监控节点" value={node} onChange={e=>{const next=e.target.value;setNode(next);const params=new URLSearchParams(location.search);if(next)params.set('node',next);else params.delete('node');history.replaceState({},'',`/monitoring?${params}`)}}><option value="">全部节点（{nodeOptions.length}）</option>{nodeOptions.map(name=><option key={name} value={name}>{name}</option>)}</select></label><span>切换节点只改变图表显示，不重新查询历史数据。</span>{node&&<Button variant="link" onClick={()=>{setNode('');const params=new URLSearchParams(location.search);params.delete('node');history.replaceState({},'',`/monitoring?${params}`)}}>显示全部节点</Button>}</div>}
  {resourceError&&effectiveView==='pods'&&<Alert isInline variant="warning" title={resourceError}/>}{error&&<Alert isInline variant={errorCode==='MONITORING_NOT_CONFIGURED'?'info':'danger'} title={`${cluster?.name||clusterID}：${error}`}/>} {loading&&<div role="status" className="ks-monitor-loading">正在查询历史指标…</div>}
- {data&&<><div className="ks-monitor-source"><span>数据源：{data.source}</span><span>{data.panels.filter(p=>p.status==='available').length} / {data.panels.length} 个面板有样本</span><span>采样间隔 {data.step} 秒 · 查询于 {new Date(data.collected_at).toLocaleTimeString('zh-CN',{hour12:false})}</span></div>{data.panels.some(p=>p.status!=='available')&&<Alert isInline variant="info" title="部分面板缺少数据或查询失败">缺少样本不代表健康。请检查采集目标、指标、资源筛选及历史保留期；磁盘 I/O 需 cAdvisor 对应指标，etcd 需自身指标。</Alert>}<div className={`ks-monitor-charts${loading?' is-refreshing':''}`} aria-busy={loading}>{data.panels.map(panel=><MetricChart key={`${clusterID}/${effectiveView}/${panel.id}`} panel={panel} start={Date.parse(data.start)/1000} end={Date.parse(data.end)/1000} step={data.step} onZoom={loading?undefined:applyRange}/>)}</div><p className="ks-monitor-footnote">曲线表示历史采样。零值、无样本和查询失败分别展示，不据单个指标自动判定根因。</p></>}
+ {data&&<><div className="ks-monitor-source"><span>数据源：{data.source}</span><span>{filteredPanels.filter(p=>p.status==='available').length} / {filteredPanels.length} 个面板有样本</span><span>采样间隔 {data.step} 秒 · 查询于 {new Date(data.collected_at).toLocaleTimeString('zh-CN',{hour12:false})}</span>{node&&<span>已筛选节点：{node}</span>}</div>{filteredPanels.some(p=>p.status!=='available')&&<Alert isInline variant="info" title="部分面板缺少数据或查询失败">缺少样本不代表健康。请检查采集目标、指标、资源筛选及历史保留期；磁盘 I/O 需 cAdvisor 对应指标，etcd 需自身指标。</Alert>}<div className={`ks-monitor-charts${loading?' is-refreshing':''}`} aria-busy={loading}>{effectiveView==='nodes'?groupNodePanels(filteredPanels).map(group=><Fragment key={group.title}><h4 className="ks-monitor-group">{group.title}<small>{group.panels.length} 项</small></h4>{group.panels.map(panel=>chartFor(panel,data,clusterID,effectiveView,loading,applyRange))}</Fragment>):filteredPanels.map(panel=>chartFor(panel,data,clusterID,effectiveView,loading,applyRange))}</div><p className="ks-monitor-footnote">曲线表示历史采样。零值、无样本和查询失败分别展示，不据单个指标自动判定根因。</p></>}
  </>}
  </div>
  return fullscreen?createPortal(content,document.body):content
@@ -61,4 +67,28 @@ function PodFilters({namespace,pod,pods,onApply}:{namespace:string;pod:string;po
 function TimeRangeForm({range,onApply}:{range:TimeRange;onApply:(range:TimeRange)=>void}){
  const [start,setStart]=useState(localDateTime(range.start)),[end,setEnd]=useState(localDateTime(range.end)),[error,setError]=useState('')
  return <form className="ks-monitor-time-range" onSubmit={event=>{event.preventDefault();const next={start,end};const message=validateTimeRange(next);setError(message);if(!message)onApply({start:new Date(start).toISOString(),end:new Date(end).toISOString()})}}><label>开始时间<input aria-label="监控开始时间" type="datetime-local" step="1" required value={start} onChange={event=>setStart(event.target.value)}/></label><label>结束时间<input aria-label="监控结束时间" type="datetime-local" step="1" required value={end} onChange={event=>setEnd(event.target.value)}/></label><Button type="submit" variant="primary">按时间查询</Button><span>本地时间 · 最少 30 秒，最多 7 天 · 固定时间范围暂停自动刷新</span>{error&&<p role="alert">{error}</p>}</form>
+}
+
+// 节点面板按观察角度分组。11 个面板平铺时很难快速定位，
+// 分组后按「先看水位、再看磁盘、最后网络」的排查顺序浏览。
+const nodePanelGroups:[string,string[]][]=[
+ ['资源水位',['node_cpu_usage','node_load1','node_memory_usage','node_filesystem_usage']],
+ ['磁盘 I/O',['node_disk_read','node_disk_write','node_disk_iops','node_disk_utilization']],
+ ['网络',['node_network_receive','node_network_transmit','node_network_errors']],
+]
+
+// 未登记在分组表里的面板单独归入「其他」，避免后端新增面板后
+// 因为前端分组表未同步而整块消失。
+function groupNodePanels(panels:MonitoringPanel[]){
+ const assigned=new Set<string>()
+ const groups=nodePanelGroups
+  .map(([title,ids])=>{const items=panels.filter(panel=>ids.includes(panel.id));items.forEach(panel=>assigned.add(panel.id));return {title,panels:items}})
+  .filter(group=>group.panels.length>0)
+ const rest=panels.filter(panel=>!assigned.has(panel.id))
+ if(rest.length)groups.push({title:'其他',panels:rest})
+ return groups
+}
+
+function chartFor(panel:MonitoringPanel,snapshot:MonitoringSnapshot,clusterID:string,view:string,loading:boolean,onZoom:(start:number,end:number)=>void){
+ return <MetricChart key={`${clusterID}/${view}/${panel.id}`} panel={panel} start={Date.parse(snapshot.start)/1000} end={Date.parse(snapshot.end)/1000} step={snapshot.step} onZoom={loading?undefined:onZoom}/>
 }
