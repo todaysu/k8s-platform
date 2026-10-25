@@ -4,9 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import PlatformSettingsPage from './PlatformSettingsPage'
 
 const defaults = {
-  runtime: { query_concurrency: 64, realtime_concurrency: 20, monitoring_concurrency: 8, session_concurrency: 10, per_cluster_concurrency: 2, auto_refresh_seconds: 30 },
+  runtime: { query_concurrency: 64, realtime_concurrency: 20, monitoring_concurrency: 8, session_concurrency: 10, per_cluster_concurrency: 2, auto_refresh_seconds: 30, operational_reports_enabled: false },
   collection: { health_interval_seconds: 60, health_timeout_seconds: 20, health_workers: 5, capacity_interval_seconds: 300, capacity_timeout_seconds: 45, capacity_workers: 3, resource_interval_seconds: 600, resource_timeout_seconds: 30, resource_workers: 2 },
   events: { normal_retention_days: 7, warning_retention_days: 30, rollup_retention_days: 365, daily_retention_days: 31, cleanup_batch_size: 5000 },
+  alerts: { resolved_retention_days: 180, cleanup_batch_size: 5000 },
   security: { kube_bench_image: 'repo/kube-bench:v1', kube_bench_image_amd64: '', kube_bench_image_arm64: '', image_pull_secret: '', namespace: 'kube-system', scan_workers: 2, host_workers: 5, scan_timeout_minutes: 30, pod_startup_timeout_minutes: 5 },
   java: { arthas_url: '', arthas_version: '4.3.5', arthas_sha256: '', download_timeout_seconds: 60, diagnostic_timeout_minutes: 30, max_concurrency: 2, heap_dump_enabled: false, heap_dump_max_gib: 4, temporary_retention_hours: 24 },
   database: { backup_enabled: false, backup_time: '02:00', backup_retention_days: 30, backup_target_node: '', backup_target_path: '', space_warning_percent: 80, space_critical_percent: 90, connection_check_seconds: 30 },
@@ -87,6 +88,15 @@ describe('platform settings page', () => {
     expect(window.location.search).toBe('?tab=parameters&section=security')
   })
 
+  it('configures resolved alert retention separately from Kubernetes Events', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=alerts')
+    vi.stubGlobal('fetch', mockSettingsFetch())
+    render(<PlatformSettingsPage />)
+    expect(await screen.findByRole('spinbutton', { name: /^已恢复告警保留/ })).toHaveValue(180)
+    expect(screen.getByRole('spinbutton', { name: /^单次清理批次/ })).toHaveValue(5000)
+    expect(screen.getByText(/当前 firing 和 suppressed 告警不会因到期删除/)).toBeInTheDocument()
+  })
+
   it('keeps report model configuration in administrator platform settings', async () => {
     window.history.replaceState({}, '', '/settings/access?tab=parameters&section=reports')
     const fetchMock = mockSettingsFetch()
@@ -102,6 +112,30 @@ describe('platform settings page', () => {
     await user.click(screen.getByRole('button', { name: '保存配置' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/reports/config', expect.objectContaining({ method: 'PUT' })))
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/^\/api\/v1\/settings\//), expect.objectContaining({ method: 'PUT' }))
-    expect(await screen.findByText('模型配置已保存，下一次生成运行报告时生效。')).toBeInTheDocument()
+    expect(await screen.findByText('AI 报告模型配置已保存，报告入口状态已更新。')).toBeInTheDocument()
+  })
+
+  it('saves the report entry switch together with the AI report model', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=reports')
+    const fetchMock = mockSettingsFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<PlatformSettingsPage />)
+    await user.click(await screen.findByRole('checkbox', { name: '在主页面启用运行报告' }))
+    await user.click(screen.getByRole('button', { name: '保存配置' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/settings/runtime', expect.objectContaining({ method: 'PUT' })))
+    const runtimeRequest = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/v1/settings/runtime' && init?.method === 'PUT')
+    expect(JSON.parse(String(runtimeRequest?.[1]?.body))).toMatchObject({ operational_reports_enabled: true })
+  })
+
+  it('允许清空数字参数后重新输入', async () => {
+    vi.stubGlobal('fetch', mockSettingsFetch())
+    const user = userEvent.setup()
+    render(<PlatformSettingsPage />)
+    const input = await screen.findByRole('spinbutton', { name: /^普通查询并发/ })
+    await user.clear(input)
+    expect(input).toHaveValue(null)
+    await user.type(input, '80')
+    expect(input).toHaveValue(80)
   })
 })

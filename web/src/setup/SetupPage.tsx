@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
   Card,
   CardBody,
-  Form,
   FormGroup,
   FormSelect,
   FormSelectOption,
@@ -92,8 +91,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return readResponse<T>(response, '初始化请求失败。')
 }
 
-async function getInstallStatus(token: string): Promise<InstallStatus> {
-  const response = await fetch('/api/v1/setup/install', { headers: { 'X-Setup-Token': token } })
+async function getInstallStatus(): Promise<InstallStatus> {
+  const response = await fetch('/api/v1/setup/install')
   return readResponse<InstallStatus>(response, '读取安装进度失败。')
 }
 
@@ -101,10 +100,10 @@ const formatMemory = (bytes: number) => `${Math.round(bytes / 1024 / 1024 / 1024
 const formatCPU = (millis: number) => `${(millis / 1000).toFixed(millis % 1000 === 0 ? 0 : 1)} 核`
 
 const domainPattern = /^(?=.{1,253}$)([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
+const urlHost = (ip: string) => ip.includes(':') ? `[${ip}]` : ip
 
 export default function SetupPage() {
   const [step, setStep] = useState(1)
-  const [token, setToken] = useState('')
   const [preflight, setPreflight] = useState<Preflight | null>(null)
   const [checking, setChecking] = useState(false)
   const [database, setDatabase] = useState<ExternalDatabase>({
@@ -129,10 +128,10 @@ export default function SetupPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!installing || !token) return
+    if (!installing) return
     let active = true
     const timer = window.setInterval(() => {
-      void getInstallStatus(token).then(next => {
+      void getInstallStatus().then(next => {
         if (!active) return
         setInstallStatus(next)
         if (next.state === 'completed' || next.state === 'failed') setInstalling(false)
@@ -143,18 +142,18 @@ export default function SetupPage() {
       })
     }, 2500)
     return () => { active = false; window.clearInterval(timer) }
-  }, [installing, token])
+  }, [installing])
 
   const preflightErrors = preflight?.errors ?? []
   const preflightWarnings = preflight?.warnings ?? []
+  const nodeIPs = preflight?.nodes.flatMap(node => node.internal_ips) ?? []
 
-  const runPreflight = async () => {
-    if (!token.trim()) { setError('请先填写初始化凭证。'); return }
+  const runPreflight = useCallback(async () => {
     setChecking(true); setError('')
     try {
-      const result = await post<Preflight>('/api/v1/setup/preflight', { token })
+      const result = await post<Preflight>('/api/v1/setup/preflight', {})
       setPreflight(result)
-      const previous = await getInstallStatus(token)
+      const previous = await getInstallStatus()
       if (previous.state !== 'idle') {
         setInstallStatus(previous)
         setStep(4)
@@ -170,7 +169,9 @@ export default function SetupPage() {
     } finally {
       setChecking(false)
     }
-  }
+  }, [])
+
+  useEffect(() => { void runPreflight() }, [runPreflight])
 
   const databaseError = useMemo(() => {
     if (!database.host.trim()) return '请填写外部 MySQL 地址。'
@@ -186,7 +187,7 @@ export default function SetupPage() {
     if (!domainPattern.test(domain.trim().toLowerCase())) return '请输入合法的内部域名，例如 ftc-platform.cmb.local。'
     if (!Number.isInteger(nodePort) || nodePort < 30000 || nodePort > 32767) return 'HTTPS NodePort 必须在 30000–32767 之间。'
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$/.test(adminUsername)) return '管理员用户名格式无效。'
-    if (adminPassword.length < 12 || adminPassword.length > 72) return '管理员密码需要 12–72 字节。'
+    if (adminPassword.length < 6 || new TextEncoder().encode(adminPassword).length > 72) return '管理员密码至少 6 个字符，且不能超过 72 字节。'
     if (adminPassword !== adminConfirm) return '两次管理员密码不一致。'
     return ''
   }, [adminConfirm, adminPassword, adminUsername, domain, nodePort])
@@ -228,7 +229,6 @@ export default function SetupPage() {
     setTestingDatabase(true)
     try {
       await post('/api/v1/setup/test', {
-        token,
         mode: 'external',
         host: database.host.trim(),
         port: database.port.trim(),
@@ -253,7 +253,6 @@ export default function SetupPage() {
     setInstallStatus(null)
     try {
       const result = await post<InstallStatus>('/api/v1/setup/install', {
-        token,
         domain: domain.trim().toLowerCase(),
         node_port: nodePort,
         external_database: {
@@ -277,7 +276,7 @@ export default function SetupPage() {
   const finishInstall = async () => {
     setFinishing(true); setError('')
     try {
-      const result = await post<InstallStatus>('/api/v1/setup/finish', { token, confirmed })
+      const result = await post<InstallStatus>('/api/v1/setup/finish', { confirmed })
       setInstallStatus(result)
     } catch (cause) { setError(cause instanceof Error ? cause.message : '关闭初始化入口失败。') }
     finally { setFinishing(false) }
@@ -287,8 +286,14 @@ export default function SetupPage() {
   const failed = installStatus?.state === 'failed'
 
   return <Page className="ks-setup-page">
+    <header className="ks-setup-topbar">
+      <div className="ks-setup-topbar-inner">
+        <PlatformBrand variant="login" />
+        <span className="ks-setup-topbar-divider" aria-hidden="true" />
+        <span className="ks-setup-topbar-label">首次部署</span>
+      </div>
+    </header>
     <PageSection className="ks-setup-shell">
-      <div className="ks-setup-brand"><PlatformBrand variant="login" /></div>
       <Card className="ks-setup-card">
         <CardBody className="ks-setup-card-body">
           <header className="ks-setup-head">
@@ -300,29 +305,32 @@ export default function SetupPage() {
             <span className={`ks-setup-mode${preflight ? ' is-ready' : ''}`}>{preflight ? '环境已检查' : '等待初始化'}</span>
           </header>
 
-          <ol className="ks-setup-steps" aria-label="初始化步骤">
-            {setupSteps.map((label, index) => <li className={step === index + 1 ? 'is-active' : step > index + 1 ? 'is-done' : ''} key={label}>
-              <span className="ks-setup-step-number">{step > index + 1 ? '✓' : index + 1}</span>
-              <span>{label}</span>
-            </li>)}
-          </ol>
+          <div className="ks-setup-workspace">
+            <aside className="ks-setup-rail">
+              <span className="ks-setup-rail-label">初始化进度</span>
+              <ol className="ks-setup-steps" aria-label="初始化步骤">
+                {setupSteps.map((label, index) => <li className={step === index + 1 ? 'is-active' : step > index + 1 ? 'is-done' : ''} key={label}>
+                  <span className="ks-setup-step-number">{step > index + 1 ? '✓' : index + 1}</span>
+                  <span className="ks-setup-step-copy"><b>{label}</b><small>{index === 0 ? '检查节点与安装状态' : index === 1 ? '验证数据库连接' : index === 2 ? '设置域名与管理员' : '确认并执行安装'}</small></span>
+                </li>)}
+              </ol>
+              <div className="ks-setup-rail-note">
+                <b>配置仅保存在平台内</b>
+                <span>安装完成后会自动回收初始化权限。</span>
+              </div>
+            </aside>
 
-          <div className="ks-setup-content">
+            <div className="ks-setup-stage">
+              <div className="ks-setup-content">
           {error && <Alert isInline title={error} variant="danger" />}
 
           {step === 1 && <>
             <section className="ks-setup-panel">
               <h2>检查运行环境</h2>
-              <p className="ks-setup-panel-lead">初始化凭证保存在本地安装清单的 setup-token 字段。平台会检查节点和已有安装状态。</p>
-              <Form onSubmit={event => { event.preventDefault(); void runPreflight() }}>
-                <FormGroup label="初始化凭证" isRequired fieldId="setup-token">
-                  <TextInput aria-label="初始化凭证" id="setup-token" type="password" value={token} onChange={(_, value) => setToken(value)} isDisabled={checking || installing} />
-                  <small className="ks-setup-hint">从 deploy/install.yaml 的 ftc-platform-bootstrap Secret 中读取 setup-token。请保管好安装清单。</small>
-                </FormGroup>
-                <div className="ks-setup-inline-actions">
-                  <Button type="submit" variant="secondary" isLoading={checking} isDisabled={checking || installing}>检查环境</Button>
-                </div>
-              </Form>
+              <p className="ks-setup-panel-lead">平台正在检查节点、存储和已有安装状态，无需初始化凭证。</p>
+              <div className="ks-setup-inline-actions">
+                <Button variant="secondary" isLoading={checking} isDisabled={checking || installing} onClick={() => void runPreflight()}>重新检查</Button>
+              </div>
             </section>
 
             {preflight && <section className="ks-setup-report" aria-live="polite">
@@ -342,6 +350,8 @@ export default function SetupPage() {
                   <h4>安装状态</h4>
                   <p><b>已有运行 Secret：</b>{preflight.runtime_secret_exists ? '是' : '否'}</p>
                   <p><b>访问方式：</b>平台 HTTPS + NodePort</p>
+                  <p><b>初始化访问地址：</b>{nodeIPs.length ? `https://${urlHost(nodeIPs[0])}:30080` : '无可用节点 IP'}</p>
+                  <small>请使用客户端可达的节点 IP，不使用 127.0.0.1。</small>
                   <p><b>MySQL：</b>下一步填写外部 MySQL 连接信息</p>
                 </div>
               </div>
@@ -412,7 +422,7 @@ FLUSH PRIVILEGES;`}</pre>
                 <FormGroup label="管理员用户名" isRequired fieldId="setup-admin-user">
                   <TextInput id="setup-admin-user" value={adminUsername} onChange={(_, value) => setAdminUsername(value)} />
                 </FormGroup>
-                <FormGroup label="管理员密码（12–72 字节）" isRequired fieldId="setup-admin-password">
+                <FormGroup label="管理员密码（至少 6 个字符）" isRequired fieldId="setup-admin-password">
                   <TextInput id="setup-admin-password" type="password" value={adminPassword} onChange={(_, value) => setAdminPassword(value)} />
                 </FormGroup>
                 <FormGroup label="确认管理员密码" isRequired fieldId="setup-admin-confirm">
@@ -452,22 +462,24 @@ FLUSH PRIVILEGES;`}</pre>
             </section>
           </>}
 
-          </div>
-          <footer className="ks-setup-footer">
-            <span>{step > 1 ? <Button variant="link" isDisabled={installing} onClick={back}>上一步</Button> : null}</span>
-            <div className="ks-setup-inline-actions">
-              {step < 4 && <Button variant="primary" isDisabled={!canContinue || installing || checking} onClick={next}>下一步</Button>}
-              {step === 4 && !installStatus && <Button variant="primary" isDisabled={!canContinue || installing} isLoading={installing} onClick={() => void startInstall()}>开始安装</Button>}
-              {step === 4 && failed && <Button variant="secondary" isDisabled={installing} onClick={() => void startInstall()}>重新尝试</Button>}
-              {step === 4 && completed && <>
-                <Button variant="secondary" onClick={() => window.open(installStatus?.url ?? '/', '_blank')}>打开平台</Button>
-                {!installStatus?.permissions_revoked && <>
-                  <label className="ks-setup-finish-confirm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /> 已确认能登录正式平台</label>
-                  <Button variant="primary" isDisabled={!confirmed || finishing} isLoading={finishing} onClick={() => void finishInstall()}>完成并关闭初始化入口</Button>
-                </>}
-              </>}
+              </div>
+              <footer className="ks-setup-footer">
+                <span>{step > 1 ? <Button variant="link" isDisabled={installing} onClick={back}>上一步</Button> : <span className="ks-setup-footer-hint">第 {step} 步，共 4 步</span>}</span>
+                <div className="ks-setup-inline-actions">
+                  {step < 4 && <Button variant="primary" isDisabled={!canContinue || installing || checking} onClick={next}>下一步</Button>}
+                  {step === 4 && !installStatus && <Button variant="primary" isDisabled={!canContinue || installing} isLoading={installing} onClick={() => void startInstall()}>开始安装</Button>}
+                  {step === 4 && failed && <Button variant="secondary" isDisabled={installing} onClick={() => void startInstall()}>重新尝试</Button>}
+                  {step === 4 && completed && <>
+                    <Button variant="secondary" onClick={() => window.open(installStatus?.url ?? '/', '_blank')}>打开平台</Button>
+                    {!installStatus?.permissions_revoked && <>
+                      <label className="ks-setup-finish-confirm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /> 已确认能登录正式平台</label>
+                      <Button variant="primary" isDisabled={!confirmed || finishing} isLoading={finishing} onClick={() => void finishInstall()}>完成并关闭初始化入口</Button>
+                    </>}
+                  </>}
+                </div>
+              </footer>
             </div>
-          </footer>
+          </div>
         </CardBody>
       </Card>
     </PageSection>

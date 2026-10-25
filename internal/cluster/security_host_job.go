@@ -52,8 +52,9 @@ func (connector *KubernetesConnector) SetSecurityPodStartupTimeout(timeout time.
 }
 
 type securityNodeTarget struct {
-	name string
-	arch string
+	name         string
+	arch         string
+	controlPlane bool
 }
 
 // RunSecurityHostBenchmark creates one short-lived Job per node. Each Job is
@@ -69,14 +70,17 @@ func (connector *KubernetesConnector) RunSecurityHostBenchmark(ctx context.Conte
 	}
 	// Node discovery is paginated: a 200-node cluster must not be read as one
 	// unbounded response. Only the name and architecture label are retained.
-	type nodeTarget struct{ name, arch string }
+	type nodeTarget struct {
+		name, arch   string
+		controlPlane bool
+	}
 	targets := make([]nodeTarget, 0, 256)
 	if err := visitNodes(ctx, clientset, func(node *corev1.Node) error {
 		arch := node.Labels[corev1.LabelArchStable]
 		if arch == "" {
 			arch = node.Status.NodeInfo.Architecture
 		}
-		targets = append(targets, nodeTarget{name: node.Name, arch: arch})
+		targets = append(targets, nodeTarget{name: node.Name, arch: arch, controlPlane: isControlPlaneNode(*node)})
 		return nil
 	}); err != nil {
 		return nil, err
@@ -106,7 +110,7 @@ func (connector *KubernetesConnector) RunSecurityHostBenchmark(ctx context.Conte
 		go func() {
 			defer group.Done()
 			for node := range jobs {
-				data, scanErr := connector.runKubeBenchNodeJob(runCtx, clientset, node.name, node.arch)
+				data, scanErr := connector.runKubeBenchNodeJob(runCtx, clientset, node.name, node.arch, node.controlPlane)
 				results <- result{output: SecurityHostBenchmarkOutput{Node: node.name, Data: data}, err: scanErr}
 				if scanErr != nil {
 					cancel()
@@ -118,7 +122,7 @@ func (connector *KubernetesConnector) RunSecurityHostBenchmark(ctx context.Conte
 		defer close(jobs)
 		for _, target := range targets {
 			select {
-			case jobs <- securityNodeTarget{name: target.name, arch: target.arch}:
+			case jobs <- securityNodeTarget{name: target.name, arch: target.arch, controlPlane: target.controlPlane}:
 			case <-runCtx.Done():
 				return
 			}
@@ -151,7 +155,7 @@ func (connector *KubernetesConnector) RunSecurityHostBenchmark(ctx context.Conte
 	return outputs, nil
 }
 
-func (connector *KubernetesConnector) runKubeBenchNodeJob(ctx context.Context, clientset *kubernetes.Clientset, node, arch string) ([]byte, error) {
+func (connector *KubernetesConnector) runKubeBenchNodeJob(ctx context.Context, clientset *kubernetes.Clientset, node, arch string, controlPlane bool) ([]byte, error) {
 	namespace := connector.securityScannerNamespace
 	if namespace == "" {
 		namespace = "kube-system"
@@ -193,7 +197,7 @@ func (connector *KubernetesConnector) runKubeBenchNodeJob(ctx context.Context, c
 				Tolerations:     []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 				Containers: []corev1.Container{{
 					Name: "kube-bench", Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
-					Args:            kubeBenchArgs(ctx),
+					Args:            kubeBenchArgs(ctx, controlPlane),
 					SecurityContext: &corev1.SecurityContext{RunAsUser: &runAsUser, Privileged: &privileged, ReadOnlyRootFilesystem: &readOnly},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "host-etc", MountPath: "/etc", ReadOnly: true},
@@ -222,12 +226,25 @@ func (connector *KubernetesConnector) runKubeBenchNodeJob(ctx context.Context, c
 	return waitForSecurityJob(ctx, clientset, namespace, name, node, "kube-bench", maxHostReportBytes, startupTimeout)
 }
 
-func kubeBenchArgs(ctx context.Context) []string {
-	args := []string{"run", "--json"}
+func kubeBenchArgs(ctx context.Context, controlPlane bool) []string {
+	targets := "node"
+	if controlPlane {
+		targets = "master,node,etcd,policies"
+	}
+	args := []string{"run", "--json", "--targets", targets}
 	if benchmark := securityBenchmarkFromContext(ctx); benchmark != "" {
 		args = append(args, "--benchmark", benchmark)
 	}
 	return args
+}
+
+func isControlPlaneNode(node corev1.Node) bool {
+	for label := range node.Labels {
+		if label == "node-role.kubernetes.io/control-plane" || label == "node-role.kubernetes.io/master" {
+			return true
+		}
+	}
+	return false
 }
 
 func (connector *KubernetesConnector) kubeBenchImageForArch(arch string) string {

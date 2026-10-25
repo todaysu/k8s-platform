@@ -48,7 +48,7 @@ func BuildRuntimeConfigMap(plan RuntimePlan) *corev1.ConfigMap {
 			"SECURE_COOKIES":                     "true",
 			"TRUST_PROXY_HEADERS":                "false",
 			"ALLOW_LOOPBACK_WS_ORIGIN":           "false",
-			"ENABLE_POD_EXEC":                    "false",
+			"ENABLE_POD_EXEC":                    "true",
 			"LEADER_ELECTION_ENABLED":            "true",
 			"LEADER_ELECTION_NAMESPACE":          namespace,
 			"LEADER_ELECTION_NAME":               "ftc-platform-collectors",

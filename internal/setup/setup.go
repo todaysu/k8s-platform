@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"example.com/k8s-platform/internal/auth"
 	"example.com/k8s-platform/internal/store"
@@ -30,6 +31,11 @@ import (
 )
 
 var adminUsernamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$`)
+
+const (
+	minAdminPasswordLength = 6
+	maxAdminPasswordLength = 72
+)
 
 type Config struct {
 	Token         string
@@ -142,7 +148,10 @@ const minSetupTokenLength = 16
 func validateSetupToken(token string) error {
 	trimmed := strings.TrimSpace(token)
 	if trimmed == "" {
-		return errors.New("setup token is required")
+		// A missing token enables the simplified one-shot installation flow.
+		// The setup Service and its elevated RBAC are removed as soon as the
+		// operator confirms that the runtime is reachable.
+		return nil
 	}
 	for _, placeholder := range placeholderTokens {
 		if strings.EqualFold(trimmed, placeholder) {
@@ -167,9 +176,6 @@ func New(config Config) (*Server, error) {
 	}
 	if config.RuntimeSecret == "" {
 		config.RuntimeSecret = "ftc-platform-runtime"
-	}
-	if config.DefaultDBHost == "" {
-		config.DefaultDBHost = "platform-mysql.ftc-platform.svc"
 	}
 	if config.DefaultDBName == "" {
 		config.DefaultDBName = "ftc_platform"
@@ -294,7 +300,7 @@ func (server *Server) initialize(writer http.ResponseWriter, request *http.Reque
 	if !server.validToken(writer, request, payload.Token) {
 		return
 	}
-	if !adminUsernamePattern.MatchString(payload.AdminUsername) || len(payload.AdminPassword) < 12 || len(payload.AdminPassword) > 72 {
+	if !adminUsernamePattern.MatchString(payload.AdminUsername) || utf8.RuneCountInString(payload.AdminPassword) < minAdminPasswordLength || len(payload.AdminPassword) > maxAdminPasswordLength {
 		writeError(writer, http.StatusBadRequest, "INVALID_ADMIN_CREDENTIALS", "管理员用户名或密码格式无效。")
 		return
 	}
@@ -358,6 +364,9 @@ func (server *Server) initialize(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *Server) validToken(writer http.ResponseWriter, request *http.Request, token string) bool {
+	if strings.TrimSpace(server.config.Token) == "" {
+		return true
+	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(server.config.Token)) != 1 {
 		if server.limited(request) {
 			writeError(writer, http.StatusTooManyRequests, "SETUP_RATE_LIMITED", "尝试过于频繁，请稍后再试。")
@@ -376,11 +385,8 @@ func (server *Server) connectionDSN(writer http.ResponseWriter, payload connecti
 	}
 	host := strings.TrimSpace(payload.Host)
 	if host == "" {
-		if payload.Mode == "external" {
-			writeError(writer, http.StatusBadRequest, "DATABASE_HOST_REQUIRED", "请输入数据库地址。")
-			return "", false
-		}
-		host = server.config.DefaultDBHost
+		writeError(writer, http.StatusBadRequest, "DATABASE_HOST_REQUIRED", "请输入外部 MySQL 地址。")
+		return "", false
 	}
 	databaseName := strings.TrimSpace(payload.Database)
 	if databaseName == "" {

@@ -126,7 +126,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	podExecEnabled, err := envBool("ENABLE_POD_EXEC", false)
+	podExecEnabled, err := envBool("ENABLE_POD_EXEC", true)
 	if err != nil {
 		return Config{}, err
 	}
@@ -229,7 +229,7 @@ func Load() (Config, error) {
 		SetupMode:                  setupMode,
 		SetupToken:                 os.Getenv("SETUP_TOKEN"),
 		SetupRuntimeSecret:         envOrDefault("SETUP_RUNTIME_SECRET", "ftc-platform-runtime"),
-		SetupDefaultDBHost:         envOrDefault("SETUP_DEFAULT_DB_HOST", "platform-mysql.ftc-platform.svc"),
+		SetupDefaultDBHost:         strings.TrimSpace(os.Getenv("SETUP_DEFAULT_DB_HOST")),
 		SetupDefaultDBName:         envOrDefault("SETUP_DEFAULT_DB_NAME", "ftc_platform"),
 		EventDatabaseDSN:           os.Getenv("EVENT_DATABASE_DSN"),
 		BootstrapTokenPath:         envOrDefault("BOOTSTRAP_TOKEN_PATH", "./data/bootstrap-token"),
@@ -293,9 +293,6 @@ func Load() (Config, error) {
 		return Config{}, errors.New("sharded collection requires HEALTH_INSTANCE_SOURCE=workloads")
 	}
 	setupWithoutDatabase := cfg.SetupMode && cfg.PlatformDatabaseDSN == ""
-	if setupWithoutDatabase && cfg.SetupToken == "" {
-		return Config{}, errors.New("SETUP_TOKEN is required when SETUP_MODE is enabled without a database")
-	}
 	if cfg.RuntimeRole != "all" && cfg.PlatformDatabaseDSN == "" && !(cfg.RuntimeRole == "api" && setupWithoutDatabase) {
 		return Config{}, errors.New("split roles require PLATFORM_DATABASE_DSN or PLATFORM_DB_HOST")
 	}

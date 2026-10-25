@@ -1,4 +1,4 @@
-> **交付版提示**：当前交付已改为**外部 MySQL**，不使用 PXC/本地盘，也不再需要 3 个 worker。请以 [外部 MySQL 交付手册](install.md) 为准；本文保留为早期生产部署的历史参考。
+> **历史文档提示**：本文保留的是早期 Token/PXC 生产方案，不能用于当前 `v1.0.1` 首次测试。当前测试交付使用无 Token 单 YAML，请以 [当前安装手册](install.md) 为准。生产 HA MySQL 方案将在测试验收后单独收敛。
 
 # FTC 集群运维平台 · 生产部署手册
 
@@ -542,7 +542,7 @@ kubectl -n kube-system create secret docker-registry ftc-scanner-pull \
 | `SECURE_COOKIES` | `true` | Cookie 的 Secure 标记（生产 HTTPS 必须为 true） |
 | `ALLOW_LOOPBACK_WS_ORIGIN` | `false` | **仅本地开发**，允许 loopback 跨端口 WebSocket |
 | `TRUST_PROXY_HEADERS` | `false` | 信任 `X-Forwarded-For`（仅当有可信代理时开启） |
-| `ENABLE_POD_EXEC` | `false` | 是否允许 Pod 终端 |
+| `ENABLE_POD_EXEC` | `true` | 是否允许 Pod 终端；纳管凭据仍需具有 `pods/exec` 权限 |
 | `DATABASE_PATH` | `./data/platform.db` | SQLite 路径（仅单角色本地模式） |
 
 ### 7.4 安全扫描

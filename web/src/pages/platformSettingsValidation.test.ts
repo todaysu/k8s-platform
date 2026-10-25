@@ -3,9 +3,10 @@ import type { PlatformSettings } from '../api/settings'
 import { validateSection } from './platformSettingsValidation'
 
 const base = (): PlatformSettings => ({
-  runtime: { query_concurrency: 64, realtime_concurrency: 20, monitoring_concurrency: 8, session_concurrency: 10, per_cluster_concurrency: 2, auto_refresh_seconds: 30 },
+  runtime: { query_concurrency: 64, realtime_concurrency: 20, monitoring_concurrency: 8, session_concurrency: 10, per_cluster_concurrency: 2, auto_refresh_seconds: 30, operational_reports_enabled: false },
   collection: { health_interval_seconds: 60, health_timeout_seconds: 20, health_workers: 5, capacity_interval_seconds: 300, capacity_timeout_seconds: 45, capacity_workers: 3, resource_interval_seconds: 600, resource_timeout_seconds: 30, resource_workers: 2 },
   events: { normal_retention_days: 7, warning_retention_days: 30, rollup_retention_days: 365, daily_retention_days: 31, cleanup_batch_size: 5000 },
+  alerts: { resolved_retention_days: 180, cleanup_batch_size: 5000 },
   security: { kube_bench_image: 'repo/kube-bench:v1', kube_bench_image_amd64: '', kube_bench_image_arm64: '', image_pull_secret: '', namespace: 'kube-system', scan_workers: 2, host_workers: 5, scan_timeout_minutes: 30, pod_startup_timeout_minutes: 5 },
   java: { arthas_url: 'http://repo.internal/tools/arthas-bin.zip', arthas_version: '4.3.5', arthas_sha256: '', download_timeout_seconds: 60, diagnostic_timeout_minutes: 30, max_concurrency: 2, heap_dump_enabled: false, heap_dump_max_gib: 4, temporary_retention_hours: 24 },
   database: { backup_enabled: false, backup_time: '02:00', backup_retention_days: 30, backup_target_node: '', backup_target_path: '', space_warning_percent: 80, space_critical_percent: 90, connection_check_seconds: 30 },
@@ -14,9 +15,19 @@ const base = (): PlatformSettings => ({
 
 describe('platform settings validation', () => {
   it('accepts the recommended defaults for every section', () => {
-    for (const section of ['runtime', 'collection', 'events', 'security', 'java', 'database'] as const) {
+    for (const section of ['runtime', 'collection', 'events', 'alerts', 'security', 'java', 'database'] as const) {
       expect(validateSection(section, base())).toEqual({})
     }
+  })
+
+  it('validates alert history retention and cleanup batches', () => {
+    const settings = base()
+    settings.alerts.resolved_retention_days = 0
+    settings.alerts.cleanup_batch_size = 10
+    expect(validateSection('alerts', settings)).toEqual({
+      resolved_retention_days: '请输入 1–3650 之间的整数。',
+      cleanup_batch_size: '请输入 100–50000 之间的整数。',
+    })
   })
 
   it('reports out-of-range and non-integer runtime values', () => {

@@ -19,12 +19,13 @@ const (
 	SectionRuntime    = "runtime"
 	SectionCollection = "collection"
 	SectionEvents     = "events"
+	SectionAlerts     = "alerts"
 	SectionSecurity   = "security"
 	SectionJava       = "java"
 	SectionDatabase   = "database"
 )
 
-var sections = []string{SectionRuntime, SectionCollection, SectionEvents, SectionSecurity, SectionJava, SectionDatabase}
+var sections = []string{SectionRuntime, SectionCollection, SectionEvents, SectionAlerts, SectionSecurity, SectionJava, SectionDatabase}
 
 type Record struct {
 	Section   string
@@ -38,12 +39,13 @@ type Repository interface {
 }
 
 type Runtime struct {
-	QueryConcurrency      int `json:"query_concurrency"`
-	RealtimeConcurrency   int `json:"realtime_concurrency"`
-	MonitoringConcurrency int `json:"monitoring_concurrency"`
-	SessionConcurrency    int `json:"session_concurrency"`
-	PerClusterConcurrency int `json:"per_cluster_concurrency"`
-	AutoRefreshSeconds    int `json:"auto_refresh_seconds"`
+	QueryConcurrency          int  `json:"query_concurrency"`
+	RealtimeConcurrency       int  `json:"realtime_concurrency"`
+	MonitoringConcurrency     int  `json:"monitoring_concurrency"`
+	SessionConcurrency        int  `json:"session_concurrency"`
+	PerClusterConcurrency     int  `json:"per_cluster_concurrency"`
+	AutoRefreshSeconds        int  `json:"auto_refresh_seconds"`
+	OperationalReportsEnabled bool `json:"operational_reports_enabled"`
 }
 
 type Collection struct {
@@ -64,6 +66,11 @@ type Events struct {
 	RollupRetentionDays  int `json:"rollup_retention_days"`
 	DailyRetentionDays   int `json:"daily_retention_days"`
 	CleanupBatchSize     int `json:"cleanup_batch_size"`
+}
+
+type Alerts struct {
+	ResolvedRetentionDays int `json:"resolved_retention_days"`
+	CleanupBatchSize      int `json:"cleanup_batch_size"`
 }
 
 type Security struct {
@@ -105,6 +112,7 @@ type Settings struct {
 	Runtime    Runtime           `json:"runtime"`
 	Collection Collection        `json:"collection"`
 	Events     Events            `json:"events"`
+	Alerts     Alerts            `json:"alerts"`
 	Security   Security          `json:"security"`
 	Java       Java              `json:"java"`
 	Database   Database          `json:"database"`
@@ -124,9 +132,10 @@ type SaveResult struct {
 
 func Defaults() Settings {
 	return Settings{
-		Runtime:    Runtime{QueryConcurrency: 64, RealtimeConcurrency: 20, MonitoringConcurrency: 8, SessionConcurrency: 10, PerClusterConcurrency: 2, AutoRefreshSeconds: 30},
+		Runtime:    Runtime{QueryConcurrency: 64, RealtimeConcurrency: 20, MonitoringConcurrency: 8, SessionConcurrency: 10, PerClusterConcurrency: 2, AutoRefreshSeconds: 30, OperationalReportsEnabled: false},
 		Collection: Collection{HealthIntervalSeconds: 60, HealthTimeoutSeconds: 20, HealthWorkers: 5, CapacityIntervalSeconds: 300, CapacityTimeoutSeconds: 45, CapacityWorkers: 3, ResourceIntervalSeconds: 600, ResourceTimeoutSeconds: 30, ResourceWorkers: 2},
 		Events:     Events{NormalRetentionDays: 7, WarningRetentionDays: 30, RollupRetentionDays: 365, DailyRetentionDays: 31, CleanupBatchSize: 5000},
+		Alerts:     Alerts{ResolvedRetentionDays: 180, CleanupBatchSize: 5000},
 		Security:   Security{KubeBenchImage: "docker.io/aquasec/kube-bench:v0.16.0", Namespace: "kube-system", ScanWorkers: 2, HostWorkers: 5, ScanTimeoutMinutes: 30, PodStartupMinutes: 5},
 		Java:       Java{ArthasVersion: "4.3.5", DownloadTimeoutSeconds: 60, DiagnosticTimeoutMinutes: 30, MaxConcurrency: 2, HeapDumpMaxGiB: 4, TemporaryRetentionHours: 24},
 		Database:   Database{BackupEnabled: false, BackupTime: "02:00", BackupRetentionDays: 30, SpaceWarningPercent: 80, SpaceCriticalPercent: 90, ConnectionCheckSeconds: 30},
@@ -195,6 +204,8 @@ func decodeInto(value *Settings, section string, payload []byte) error {
 		target = &value.Collection
 	case SectionEvents:
 		target = &value.Events
+	case SectionAlerts:
+		target = &value.Alerts
 	case SectionSecurity:
 		target = &value.Security
 	case SectionJava:
@@ -224,6 +235,8 @@ func sectionJSON(value Settings, section string) ([]byte, error) {
 		return json.Marshal(value.Collection)
 	case SectionEvents:
 		return json.Marshal(value.Events)
+	case SectionAlerts:
+		return json.Marshal(value.Alerts)
 	case SectionSecurity:
 		return json.Marshal(value.Security)
 	case SectionJava:
@@ -275,6 +288,16 @@ func validate(value Settings, section string) error {
 		}
 		if value.Events.WarningRetentionDays < value.Events.NormalRetentionDays {
 			return errors.New("warning_retention_days cannot be shorter than normal_retention_days")
+		}
+	case SectionAlerts:
+		checks := []struct {
+			name            string
+			value, min, max int
+		}{{"resolved_retention_days", value.Alerts.ResolvedRetentionDays, 1, 3650}, {"cleanup_batch_size", value.Alerts.CleanupBatchSize, 100, 50000}}
+		for _, item := range checks {
+			if err := rangeCheck(item.name, item.value, item.min, item.max); err != nil {
+				return err
+			}
 		}
 	case SectionSecurity:
 		if strings.TrimSpace(value.Security.KubeBenchImage) == "" && strings.TrimSpace(value.Security.KubeBenchImageAMD64) == "" {

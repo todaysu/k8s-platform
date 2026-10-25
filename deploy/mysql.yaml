@@ -17,10 +17,13 @@ metadata:
   name: platform-mysql
   namespace: ftc-platform
 spec:
+  # NodePort 便于从集群外部直连数据库排查问题；
+  # 端口须在 30000-32767 范围内，且不能与已有 NodePort 冲突。
+  type: NodePort
   selector:
     app.kubernetes.io/name: platform-mysql
   ports:
-    - { name: mysql, port: 3306, targetPort: mysql }
+    - { name: mysql, port: 3306, targetPort: mysql, nodePort: 32066 }
 ---
 apiVersion: apps/v1
 kind: StatefulSet

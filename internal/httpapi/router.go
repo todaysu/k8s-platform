@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	alertsvc "example.com/k8s-platform/internal/alerts"
 	"example.com/k8s-platform/internal/auth"
 	"example.com/k8s-platform/internal/cluster"
 	"example.com/k8s-platform/internal/platformsettings"
@@ -108,6 +109,7 @@ type RouterOptions struct {
 	Admission          AdmissionLimits
 	PodExecEnabled     bool
 	Reports            *reportsvc.Service
+	Alerts             *alertsvc.Service
 	// Authenticator receives the route authorization table. When nil the
 	// middleware keeps its own conservative default.
 	Authenticator routeAuthenticator
@@ -161,6 +163,7 @@ func NewRouterWithOptions(version string, options RouterOptions, validators ...c
 	handle("GET /api/v1/settings", getPlatformSettings(options.SettingsRepository))
 	handle("PUT /api/v1/settings/{section}", savePlatformSettings(options.SettingsRepository, options.SettingsRestarter))
 	handle("GET /api/v1/reports", listReports(options.Reports))
+	handle("GET /api/v1/alerts", listAlerts(options.Alerts))
 	handle("POST /api/v1/reports", generateReport(options.Reports))
 	handle("GET /api/v1/reports/config", getReportModelConfig(options.Reports))
 	handle("PUT /api/v1/reports/config", saveReportModelConfig(options.Reports))

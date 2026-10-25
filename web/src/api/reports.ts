@@ -32,6 +32,7 @@ export type OperationalReport = {
 }
 
 export type ReportModelConfig = {
+  enabled: boolean
   endpoint: string
   model: string
   api_key?: string
@@ -71,14 +72,17 @@ export function createReport(value: ReportRequest): Promise<OperationalReport> {
   })
 }
 
-export function getReportModelConfig(): Promise<ReportModelConfig> {
-  return request('/api/v1/reports/config', '读取模型配置失败。')
+export async function getReportModelConfig(): Promise<ReportModelConfig> {
+  const value = await request<Omit<ReportModelConfig, 'enabled'>>('/api/v1/reports/config', '读取模型配置失败。')
+  return { ...value, enabled: false }
 }
 
-export function saveReportModelConfig(value: ReportModelConfig): Promise<ReportModelConfig> {
-  return request('/api/v1/reports/config', '保存模型配置失败。', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value),
+export async function saveReportModelConfig(value: ReportModelConfig): Promise<ReportModelConfig> {
+  const { enabled, ...payload } = value
+  const saved = await request<Omit<ReportModelConfig, 'enabled'>>('/api/v1/reports/config', '保存模型配置失败。', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   })
+  return { ...saved, enabled }
 }
 
 // Report links always stay on the platform, including when old records contain

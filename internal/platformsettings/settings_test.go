@@ -73,6 +73,21 @@ func TestSaveRejectsInvalidEventRetention(t *testing.T) {
 	}
 }
 
+func TestSaveValidatesAlertRetention(t *testing.T) {
+	repository := &memoryRepository{}
+	payload := []byte(`{"resolved_retention_days":90,"cleanup_batch_size":1000}`)
+	value, err := Save(context.Background(), repository, SectionAlerts, payload, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Alerts.ResolvedRetentionDays != 90 || value.Alerts.CleanupBatchSize != 1000 {
+		t.Fatalf("unexpected alert retention: %#v", value.Alerts)
+	}
+	if _, err = Save(context.Background(), repository, SectionAlerts, []byte(`{"resolved_retention_days":0,"cleanup_batch_size":10}`), time.Now()); err == nil {
+		t.Fatal("expected invalid alert retention to be rejected")
+	}
+}
+
 func TestJavaDefaultsToBuiltinAndValidatesOfflineOverride(t *testing.T) {
 	value := Defaults()
 	if value.Java.ArthasURL != "" || value.Java.ArthasVersion != "4.3.5" {

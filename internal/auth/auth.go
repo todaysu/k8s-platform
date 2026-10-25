@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
@@ -194,6 +195,11 @@ type Service struct {
 }
 
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$`)
+
+const (
+	minPasswordLength = 6
+	maxPasswordLength = 72
+)
 
 func New(path, username, hash string, secure bool, ttl time.Duration) (*Service, error) {
 	db, err := sql.Open("sqlite", path)
@@ -378,7 +384,9 @@ func (s *Service) issue(w http.ResponseWriter, u User) error {
 	http.SetCookie(w, &http.Cookie{Name: "kubescope_session", Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode, MaxAge: int(s.ttl.Seconds())})
 	return nil
 }
-func validPassword(p string) bool { return len(p) >= 12 && len(p) <= 72 }
+func validPassword(p string) bool {
+	return utf8.RuneCountInString(p) >= minPasswordLength && len(p) <= maxPasswordLength
+}
 func (s *Service) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

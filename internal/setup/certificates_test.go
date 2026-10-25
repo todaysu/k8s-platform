@@ -64,6 +64,46 @@ func TestEnsureTLSRenewsChangedHostAndIPSANUsingSameCA(t *testing.T) {
 	verifyCertificate(t, updated, ca, "10.0.0.2")
 }
 
+func TestBootstrapTLSUsesNodeIPAndExcludesLoopback(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: platformBootstrapSecret, Namespace: "ftc-platform"}},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "127.0.0.1"},
+				{Type: corev1.NodeInternalIP, Address: "10.20.30.40"},
+			}},
+		},
+	)
+	server := &Server{config: Config{Namespace: "ftc-platform"}, client: client}
+	config, err := server.BootstrapTLS(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(config.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.VerifyHostname("10.20.30.40"); err != nil {
+		t.Fatalf("node IP is missing from setup certificate: %v", err)
+	}
+	if err := leaf.VerifyHostname("127.0.0.1"); err == nil {
+		t.Fatal("loopback address must not be included in setup certificate")
+	}
+}
+
+func TestBootstrapTLSRejectsClusterWithoutNodeIP(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: platformBootstrapSecret, Namespace: "ftc-platform"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}},
+	)
+	server := &Server{config: Config{Namespace: "ftc-platform"}, client: client}
+	if _, err := server.BootstrapTLS(context.Background()); err == nil {
+		t.Fatal("expected missing node IP to be rejected")
+	}
+}
+
 func verifyCertificate(t *testing.T, secret, ca *corev1.Secret, host string) {
 	t.Helper()
 	pair, err := tls.X509KeyPair(secret.Data["tls.crt"], secret.Data["tls.key"])

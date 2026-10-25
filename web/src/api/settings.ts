@@ -5,6 +5,7 @@ export type RuntimeSettings = {
   session_concurrency: number
   per_cluster_concurrency: number
   auto_refresh_seconds: number
+  operational_reports_enabled: boolean
 }
 
 export type CollectionSettings = {
@@ -24,6 +25,11 @@ export type EventSettings = {
   warning_retention_days: number
   rollup_retention_days: number
   daily_retention_days: number
+  cleanup_batch_size: number
+}
+
+export type AlertSettings = {
+  resolved_retention_days: number
   cleanup_batch_size: number
 }
 
@@ -66,6 +72,7 @@ export type PlatformSettings = {
   runtime: RuntimeSettings
   collection: CollectionSettings
   events: EventSettings
+  alerts: AlertSettings
   security: SecuritySettings
   java: JavaSettings
   database: DatabaseSettings

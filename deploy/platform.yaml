@@ -100,7 +100,7 @@ data:
   # 否则登录限流可被伪造的 X-Forwarded-For 绕过。
   TRUST_PROXY_HEADERS: "false"
   SESSION_TTL: 8h
-  ENABLE_POD_EXEC: "false"
+  ENABLE_POD_EXEC: "true"
 
   # ---------------------------------------------------------------------
   # 安全扫描镜像（kube-bench CIS 节点基线）

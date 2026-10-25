@@ -1,5 +1,5 @@
 import { Alert, Button, Card, CardBody, Spinner } from '@patternfly/react-core'
-import { ChartLineIcon, CheckCircleIcon, CogIcon, DatabaseIcon, JavaIcon, OutlinedBellIcon, SecurityIcon, TachometerAltIcon } from '@patternfly/react-icons'
+import { BellIcon, ChartLineIcon, CheckCircleIcon, CogIcon, DatabaseIcon, JavaIcon, OutlinedBellIcon, SecurityIcon, TachometerAltIcon } from '@patternfly/react-icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getReportModelConfig, saveReportModelConfig, type ReportModelConfig } from '../api/reports'
 import { fetchPlatformSettings, savePlatformSettings, type PlatformSettings, type SettingsApplyStatus, type SettingsSection } from '../api/settings'
@@ -13,10 +13,11 @@ const sectionMeta: Record<SettingsView, { description: string; icon: typeof CogI
   runtime: { label: '接口与并发', description: '控制 API、实时会话和单集群访问的并发上限。', icon: TachometerAltIcon },
   collection: { label: '采集任务', description: '调整健康、容量和资源索引的采集频率。', icon: CogIcon },
   events: { label: '事件保留', description: '分级管理 Kubernetes Event 原始数据与汇总数据的保留时间。', icon: OutlinedBellIcon },
+  alerts: { label: '告警保留', description: '管理已恢复告警的保留时间和数据库清理批次。', icon: BellIcon },
   security: { label: '安全扫描', description: '管理 x86/ARM kube-bench 镜像、扫描队列和超时。', icon: SecurityIcon },
   java: { label: 'Java 排障', description: '管理 Arthas 来源、诊断并发和大文件保护策略。', icon: JavaIcon },
   database: { label: '数据库运维', description: '配置备份策略、本地备份目录和磁盘阈值。', icon: DatabaseIcon },
-  reports: { label: '报告模型', description: '配置运行报告使用的内网模型接口与加密凭据。', icon: ChartLineIcon },
+  reports: { label: 'AI 报告模型', description: '启用运行报告，并配置内网 AI 模型与加密凭据。', icon: ChartLineIcon },
 }
 
 const validSections = Object.keys(sectionMeta) as SettingsView[]
@@ -39,7 +40,7 @@ function Field({ children, error, help, label, wide }: FieldProps) {
 }
 
 function NumberInput({ value, onChange, min = 1, max, invalid }: { value: number; onChange: (value: number) => void; min?: number; max?: number; invalid?: boolean }) {
-  return <input aria-invalid={invalid || undefined} max={max} min={min} onChange={(event) => onChange(Number(event.target.value))} type="number" value={value} />
+  return <input aria-invalid={invalid || undefined} max={max} min={min} onChange={(event) => onChange(event.target.value === '' ? 0 : Number(event.target.value))} type="number" value={value === 0 ? '' : value} />
 }
 
 type NumberFieldProps = { error?: string; help: string; label: string; max?: number; min?: number; onChange: (value: number) => void; value: number; wide?: boolean }
@@ -78,23 +79,18 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
 
   useEffect(() => {
     let mounted = true
-    void fetchPlatformSettings().then((value) => {
+    void Promise.all([fetchPlatformSettings(), getReportModelConfig()]).then(([platformValue, modelValue]) => {
       if (!mounted) return
-      setSettings(value); setDraft(structuredClone(value)); setError('')
-    }).catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : '读取配置失败。') }).finally(() => { if (mounted) setLoading(false) })
+      const model = { ...modelValue, enabled: platformValue.runtime.operational_reports_enabled }
+      setSettings(platformValue); setDraft(structuredClone(platformValue)); setError('')
+      setReportConfig(model); setReportDraft({ ...model, api_key: '', clear_api_key: false })
+    }).catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : '读取平台配置失败。') }).finally(() => {
+      if (mounted) { setLoading(false); setReportLoading(false) }
+    })
     return () => { mounted = false }
   }, [])
 
-  useEffect(() => {
-    let mounted = true
-    void getReportModelConfig().then((value) => {
-      if (!mounted) return
-      setReportConfig(value); setReportDraft({ ...value, api_key: '', clear_api_key: false })
-    }).catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : '读取报告模型配置失败。') }).finally(() => { if (mounted) setReportLoading(false) })
-    return () => { mounted = false }
-  }, [])
-
-  const reportDirty = Boolean(reportConfig && reportDraft && (reportConfig.endpoint !== reportDraft.endpoint || reportConfig.model !== reportDraft.model || Boolean(reportDraft.api_key) || Boolean(reportDraft.clear_api_key)))
+  const reportDirty = Boolean(reportConfig && reportDraft && (reportConfig.enabled !== reportDraft.enabled || reportConfig.endpoint !== reportDraft.endpoint || reportConfig.model !== reportDraft.model || Boolean(reportDraft.api_key) || Boolean(reportDraft.clear_api_key)))
   const dirty = useMemo(() => active === 'reports' ? reportDirty : settings && draft ? JSON.stringify(settings[active]) !== JSON.stringify(draft[active]) : false, [active, draft, reportDirty, settings])
   const errors = useMemo<FieldErrors>(() => active === 'reports' ? validateReportConfig(reportDraft) : draft ? validateSection(active, draft) : {}, [active, draft, reportDraft])
   const errorCount = Object.keys(errors).length
@@ -110,10 +106,18 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
     setSaving(true); setError(''); setNotice(null)
     try {
       if (active === 'reports') {
-        if (!reportDraft) return
-        const value = await saveReportModelConfig(reportDraft)
-        setReportConfig(value); setReportDraft({ ...value, api_key: '', clear_api_key: false })
-        setNotice({ message: '模型配置已保存，下一次生成运行报告时生效。', variant: 'success' })
+        if (!reportDraft || !settings) return
+        const nextRuntime = { ...settings.runtime, operational_reports_enabled: reportDraft.enabled }
+        const [value, runtimeResult] = await Promise.all([
+          saveReportModelConfig(reportDraft),
+          reportConfig?.enabled === reportDraft.enabled ? Promise.resolve(null) : savePlatformSettings('runtime', nextRuntime),
+        ])
+        const nextSettings = runtimeResult?.settings ?? settings
+        const merged = { ...value, enabled: reportDraft.enabled }
+        setSettings(nextSettings); setDraft(structuredClone(nextSettings))
+        setReportConfig(merged); setReportDraft({ ...merged, api_key: '', clear_api_key: false })
+        if (runtimeResult) window.dispatchEvent(new CustomEvent('platform-settings-saved', { detail: nextSettings }))
+        setNotice({ message: 'AI 报告模型配置已保存，报告入口状态已更新。', variant: 'success' })
         return
       }
       const result = await savePlatformSettings(active, draft[active])
@@ -129,7 +133,7 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
   const updatedAt = active === 'reports' ? undefined : settings?.updated_at?.[active]
   const activeMeta = sectionMeta[active]
   const ActiveIcon = activeMeta.icon
-  const fieldCount = active === 'reports' ? 3 : Object.keys(draft[active]).length
+  const fieldCount = active === 'reports' ? 4 : active === 'runtime' ? Object.keys(draft.runtime).length - 1 : Object.keys(draft[active]).length
 
   return <div className={`ks-settings-page${embedded ? ' is-embedded' : ''}`}>
     <aside className="ks-settings-nav" aria-label="参数配置分类">
@@ -160,7 +164,7 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
           </header>
           <div className="ks-settings-form" ref={formScrollRef}>{active === 'reports' ? renderReportForm(reportDraft, setReportDraft, errors) : renderForm(active, draft, update, errors)}</div>
           {!canConfigure && <p className="ks-settings-readonly">当前账号只能查看配置，修改需要平台管理员权限。</p>}
-          <footer className="ks-settings-footer"><span>{active === 'reports' ? (reportConfig?.endpoint && reportConfig.model ? <><CheckCircleIcon /> 模型服务已配置{reportConfig.has_api_key ? '，认证密钥已保存' : ''}</> : '当前未配置模型，运行报告仍可使用统计模式') : updatedAt ? <><CheckCircleIcon /> 上次保存：{new Date(updatedAt).toLocaleString('zh-CN', { hour12: false })}</> : '当前使用平台推荐默认值'}</span><Button isDisabled={!dirty || saving} onClick={() => active === 'reports' ? reportConfig && setReportDraft({ ...reportConfig, api_key: '', clear_api_key: false }) : settings && setDraft(structuredClone(settings))} variant="link">放弃修改</Button><Button isDisabled={!canConfigure || !dirty || errorCount > 0} isLoading={saving} onClick={() => void save()}>保存配置</Button></footer>
+          <footer className="ks-settings-footer"><span>{active === 'reports' ? (reportConfig?.enabled ? (reportConfig.endpoint && reportConfig.model ? <><CheckCircleIcon /> AI 运行报告已启用，模型服务已配置{reportConfig.has_api_key ? '，认证密钥已保存' : ''}</> : 'AI 运行报告已启用，当前使用统计模式') : '运行报告入口当前已关闭') : updatedAt ? <><CheckCircleIcon /> 上次保存：{new Date(updatedAt).toLocaleString('zh-CN', { hour12: false })}</> : '当前使用平台推荐默认值'}</span><Button isDisabled={!dirty || saving} onClick={() => active === 'reports' ? reportConfig && setReportDraft({ ...reportConfig, api_key: '', clear_api_key: false }) : settings && setDraft(structuredClone(settings))} variant="link">放弃修改</Button><Button isDisabled={!canConfigure || !dirty || errorCount > 0} isLoading={saving} onClick={() => void save()}>保存配置</Button></footer>
         </CardBody>
       </Card>
     </main>
@@ -184,9 +188,10 @@ function validateReportConfig(value: ReportModelConfig | null): FieldErrors {
 }
 
 function renderReportForm(value: ReportModelConfig | null, setValue: React.Dispatch<React.SetStateAction<ReportModelConfig | null>>, errors: FieldErrors) {
-  if (!value) return <Alert isInline title="报告模型配置加载失败" variant="danger">请刷新页面后重试。</Alert>
+  if (!value) return <Alert isInline title="AI 报告模型配置加载失败" variant="danger">请刷新页面后重试。</Alert>
   const patch = (change: Partial<ReportModelConfig>) => setValue((current) => current ? { ...current, ...change } : current)
   return <>
+    <Field help="开启后在平台主导航显示运行报告；关闭不会删除已生成的报告。" label="运行报告"><span className="ks-settings-check"><input aria-label="在主页面启用运行报告" checked={value.enabled} onChange={(event) => patch({ enabled: event.target.checked })} type="checkbox" />在主页面启用运行报告</span></Field>
     <TextField error={errors.endpoint} help="兼容 OpenAI Chat Completions 的 API 基础地址，例如 https://model.internal/v1。" label="模型接口地址" onChange={(endpoint) => patch({ endpoint })} placeholder="https://model.internal/v1" type="url" value={value.endpoint} wide />
     <TextField error={errors.model} help="填写内网模型服务提供的模型标识。" label="模型名称" onChange={(model) => patch({ model })} placeholder="例如 deepseek-chat" value={value.model} />
     <TextField help={value.has_api_key ? '认证密钥已加密保存；留空表示继续使用原密钥。' : '模型接口不需要认证时可以留空。'} label="API Key" onChange={(api_key) => patch({ api_key, clear_api_key: api_key ? false : value.clear_api_key })} placeholder={value.has_api_key ? '已保存，留空沿用' : '需要认证时填写'} type="password" value={value.api_key ?? ''} />
@@ -230,6 +235,14 @@ function renderForm(active: SettingsSection, value: PlatformSettings, update: <K
       <NumberField error={errors.rollup_retention_days} help="支撑长期趋势分析，不保留全部原始明细。" label="小时汇总保留（天）" max={3650} min={30} onChange={(n) => update('events', { rollup_retention_days: n })} value={v.rollup_retention_days} />
       <NumberField error={errors.daily_retention_days} help="用于平台趋势与报表。" label="日汇总保留（天）" max={730} min={7} onChange={(n) => update('events', { daily_retention_days: n })} value={v.daily_retention_days} />
       <NumberField error={errors.cleanup_batch_size} help="每次删除的最大记录数，避免长事务。" label="清理批次" max={50000} min={100} onChange={(n) => update('events', { cleanup_batch_size: n })} value={v.cleanup_batch_size} />
+    </>
+  }
+
+  if (active === 'alerts') {
+    const v = value.alerts
+    return <>
+      <NumberField error={errors.resolved_retention_days} help="只清理已恢复告警；当前 firing 和 suppressed 告警不会因到期删除。" label="已恢复告警保留（天）" max={3650} onChange={(n) => update('alerts', { resolved_retention_days: n })} value={v.resolved_retention_days} />
+      <NumberField error={errors.cleanup_batch_size} help="每轮最多删除的告警记录数，避免大表清理形成长事务。" label="单次清理批次" max={50000} min={100} onChange={(n) => update('alerts', { cleanup_batch_size: n })} value={v.cleanup_batch_size} />
     </>
   }
 

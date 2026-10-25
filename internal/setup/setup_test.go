@@ -11,10 +11,10 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestConnectionDSNUsesDefaultsAndEncodesPassword(t *testing.T) {
-	server := &Server{config: Config{DefaultDBHost: "platform-mysql.ftc-platform.svc", DefaultDBName: "ftc_platform"}}
+func TestConnectionDSNUsesExternalHostAndEncodesPassword(t *testing.T) {
+	server := &Server{config: Config{DefaultDBName: "ftc_platform"}}
 	recorder := httptest.NewRecorder()
-	dsn, ok := server.connectionDSN(recorder, connectionRequest{Password: "p@ss:w/rd", User: "ftc"})
+	dsn, ok := server.connectionDSN(recorder, connectionRequest{Host: "mysql.external.example", Password: "p@ss:w/rd", User: "ftc"})
 	if !ok {
 		t.Fatalf("connectionDSN failed: %s", recorder.Body.String())
 	}
@@ -22,7 +22,7 @@ func TestConnectionDSNUsesDefaultsAndEncodesPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.User != "ftc" || parsed.Passwd != "p@ss:w/rd" || parsed.Addr != "platform-mysql.ftc-platform.svc:3306" || parsed.DBName != "ftc_platform" {
+	if parsed.User != "ftc" || parsed.Passwd != "p@ss:w/rd" || parsed.Addr != "mysql.external.example:3306" || parsed.DBName != "ftc_platform" {
 		t.Fatalf("unexpected DSN: %#v", parsed)
 	}
 }
@@ -30,8 +30,8 @@ func TestConnectionDSNUsesDefaultsAndEncodesPassword(t *testing.T) {
 func TestConnectionDSNRejectsMissingPasswordAndInvalidPort(t *testing.T) {
 	server := &Server{config: Config{DefaultDBHost: "mysql", DefaultDBName: "ftc_platform"}}
 	for _, payload := range []connectionRequest{
-		{User: "ftc"},
-		{User: "ftc", Password: "secret", Port: "not-a-port"},
+		{Host: "mysql", User: "ftc"},
+		{Host: "mysql", User: "ftc", Password: "secret", Port: "not-a-port"},
 	} {
 		recorder := httptest.NewRecorder()
 		if _, ok := server.connectionDSN(recorder, payload); ok {
@@ -63,6 +63,15 @@ func TestSetupTokenComparison(t *testing.T) {
 		}
 	}
 	t.Fatal("setup token guessing was never throttled")
+}
+
+func TestTokenlessSetupAllowsRequests(t *testing.T) {
+	server := &Server{config: Config{}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("POST", "http://localhost/api/v1/setup/preflight", nil)
+	if !server.validToken(recorder, request, "") {
+		t.Fatalf("tokenless setup request rejected: %d %s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestWriteRuntimeSecretCreatesAndUpdates(t *testing.T) {

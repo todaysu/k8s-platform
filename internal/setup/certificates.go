@@ -162,15 +162,23 @@ func (server *Server) BootstrapTLS(ctx context.Context) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	ips := []net.IP{net.ParseIP("127.0.0.1")}
+	ips := make([]net.IP, 0, len(nodes.Items))
+	seen := map[string]struct{}{}
 	for _, node := range nodes.Items {
 		for _, address := range node.Status.Addresses {
 			if address.Type == corev1.NodeInternalIP || address.Type == corev1.NodeExternalIP {
-				if ip := net.ParseIP(address.Address); ip != nil {
-					ips = append(ips, ip)
+				if ip := net.ParseIP(address.Address); ip != nil && !ip.IsLoopback() {
+					key := ip.String()
+					if _, exists := seen[key]; !exists {
+						seen[key] = struct{}{}
+						ips = append(ips, ip)
+					}
 				}
 			}
 		}
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no non-loopback Kubernetes node IP is available for the setup certificate")
 	}
 	secret, err := server.EnsureTLS(ctx, "ftc-platform-setup-ca", "ftc-platform-setup-tls", "setup.ftc.internal", ips)
 	if err != nil {

@@ -36,14 +36,27 @@ for arch in amd64 arm64; do
   cp -R web/dist/. "${rootfs}/app/web/"
   cp "${ca_bundle}" "${rootfs}/etc/ssl/certs/ca-certificates.crt"
 
-  kubectl_url="https://dl.k8s.io/release/${kubectl_version}/bin/linux/${arch}/kubectl"
-  curl --fail --location --retry 3 --output "${rootfs}/usr/local/bin/kubectl" "${kubectl_url}"
-  curl --fail --location --retry 3 --output "${rootfs}/kubectl.sha256" "${kubectl_url}.sha256"
-  expected="$(tr -d '[:space:]' < "${rootfs}/kubectl.sha256")"
-  actual="$(shasum -a 256 "${rootfs}/usr/local/bin/kubectl" | awk '{print $1}')"
-  if [[ "${expected}" != "${actual}" ]]; then
-    echo "kubectl ${arch} checksum mismatch" >&2
-    exit 1
+  if [[ "${arch}" == "amd64" ]]; then
+    local_kubectl="${KUBECTL_AMD64:-}"
+  else
+    local_kubectl="${KUBECTL_ARM64:-}"
+  fi
+  if [[ -n "${local_kubectl}" ]]; then
+    if [[ ! -f "${local_kubectl}" ]]; then
+      echo "local kubectl for ${arch} does not exist: ${local_kubectl}" >&2
+      exit 1
+    fi
+    cp "${local_kubectl}" "${rootfs}/usr/local/bin/kubectl"
+  else
+    kubectl_url="https://dl.k8s.io/release/${kubectl_version}/bin/linux/${arch}/kubectl"
+    curl --fail --location --retry 3 --output "${rootfs}/usr/local/bin/kubectl" "${kubectl_url}"
+    curl --fail --location --retry 3 --output "${rootfs}/kubectl.sha256" "${kubectl_url}.sha256"
+    expected="$(tr -d '[:space:]' < "${rootfs}/kubectl.sha256")"
+    actual="$(shasum -a 256 "${rootfs}/usr/local/bin/kubectl" | awk '{print $1}')"
+    if [[ "${expected}" != "${actual}" ]]; then
+      echo "kubectl ${arch} checksum mismatch" >&2
+      exit 1
+    fi
   fi
   chmod 0755 "${rootfs}/app/ftc-platform" "${rootfs}/usr/local/bin/kubectl"
 

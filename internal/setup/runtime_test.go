@@ -17,7 +17,7 @@ func runtimePlan() RuntimePlan {
 
 func TestBuildRuntimeResources(t *testing.T) {
 	config := BuildRuntimeConfigMap(runtimePlan())
-	if config.Namespace != "ftc-platform" || config.Data["SETUP_MODE"] != "false" || config.Data["TRUST_PROXY_HEADERS"] != "false" || config.Data["COLLECTION_SHARDS"] != "16" {
+	if config.Namespace != "ftc-platform" || config.Data["SETUP_MODE"] != "false" || config.Data["TRUST_PROXY_HEADERS"] != "false" || config.Data["COLLECTION_SHARDS"] != "16" || config.Data["ENABLE_POD_EXEC"] != "true" {
 		t.Fatalf("unexpected runtime config: %#v", config.Data)
 	}
 	deployments, err := BuildRuntimeDeployments(runtimePlan())

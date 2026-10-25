@@ -29,6 +29,18 @@ func TestLoadParsesSystemNamespaces(t *testing.T) {
 	}
 }
 
+func TestLoadEnablesPodExecByDefault(t *testing.T) {
+	t.Setenv("ADMIN_PASSWORD_HASH", "hash")
+	t.Setenv("CREDENTIAL_ENCRYPTION_KEY", "key")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.PodExecEnabled {
+		t.Fatal("Pod Exec should be enabled by default")
+	}
+}
+
 func TestLoadParsesHealthCollectionLimits(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD_HASH", "hash")
 	t.Setenv("CREDENTIAL_ENCRYPTION_KEY", "key")
@@ -115,14 +127,18 @@ func TestLoadAllowsSetupModeWithoutAdminHash(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresSetupTokenInSetupMode(t *testing.T) {
+func TestLoadAllowsTokenlessSetupMode(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD_HASH", "")
 	t.Setenv("CREDENTIAL_ENCRYPTION_KEY", "key")
 	t.Setenv("SETUP_MODE", "true")
 	t.Setenv("SETUP_TOKEN", "")
 	t.Setenv("PLATFORM_DATABASE_DSN", "")
-	if _, err := Load(); err == nil {
-		t.Fatal("expected setup token error")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SetupMode || cfg.SetupToken != "" {
+		t.Fatalf("unexpected setup config: %#v", cfg)
 	}
 }
 

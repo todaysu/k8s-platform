@@ -66,7 +66,7 @@ func restartTargets(section string) (primary, fallback string, executable bool) 
 	switch section {
 	case platformsettings.SectionRuntime:
 		return "ftc-platform", "", true
-	case platformsettings.SectionCollection, platformsettings.SectionEvents:
+	case platformsettings.SectionCollection, platformsettings.SectionEvents, platformsettings.SectionAlerts:
 		return "ftc-platform-collector", "ftc-platform", true
 	case platformsettings.SectionSecurity:
 		return "ftc-platform-worker", "ftc-platform", true

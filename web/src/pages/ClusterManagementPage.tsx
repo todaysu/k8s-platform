@@ -1,5 +1,6 @@
 import OperationsToolsPage from './OperationsToolsPage'
 import FleetMonitoringPage from './FleetMonitoringPage'
+import FleetAlertsPage from './FleetAlertsPage'
 import PlatformAccessPage from './PlatformAccessPage'
 import SecurityBaselinePage from './SecurityBaselinePage'
 import OperationalReportsPage from './OperationalReportsPage'
@@ -68,6 +69,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchClusters, fetchFleetCapacity, type FleetCapacity, type GlobalResourceResult, type ManagedCluster } from '../api/clusters'
+import { fetchCurrentFleetAlerts, type ClusterAlertPage } from '../api/alerts'
 import { fetchPlatformSettings, type PlatformSettings } from '../api/settings'
 import AddClusterDialog from '../components/AddClusterDialog'
 import GlobalResourceSearch from '../components/GlobalResourceSearch'
@@ -161,12 +163,13 @@ const statusMeta: Record<ClusterStatus, {
   unreachable: { icon: ExclamationCircleIcon, label: '连接失败', status: 'danger' },
 }
 
-type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'inspections' | 'reports' | 'security' | 'access' | 'tools' | 'monitoring'
+type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'alerts' | 'inspections' | 'reports' | 'security' | 'access' | 'tools' | 'monitoring'
 
 const navItems = [
   { icon: TachometerAltIcon, id: 'overview' as const, label: '概览' },
   { icon: ServerIcon, id: 'clusters' as const, label: '集群' },
   { icon: ChartLineIcon, id: 'monitoring' as const, label: '监控' },
+  { icon: BellIcon, id: 'alerts' as const, label: '告警' },
   { icon: ChartPieIcon, id: 'capacity' as const, label: '容量' },
   { icon: BellIcon, id: 'events' as const, label: '跨集群事件' },
   { icon: SearchIcon, id: 'inspections' as const, label: '巡检分析' },
@@ -249,11 +252,13 @@ function AppMasthead({ onOpenSearch, refreshedAt }: { onOpenSearch: () => void; 
 function AppSidebar({
   activeSection,
   isCollapsed,
+  reportsEnabled,
   onNavigate,
   onToggle,
 }: {
   activeSection: NavigationSection
   isCollapsed: boolean
+  reportsEnabled: boolean | null
   onNavigate: (section: NavigationSection) => void
   onToggle: () => void
 }) {
@@ -263,7 +268,7 @@ function AppSidebar({
         <Nav aria-label="全局导航">
           <NavGroup title="多集群运维">
             <NavList>
-              {navItems.map((item) => {
+              {navItems.filter((item) => item.id !== 'reports' || reportsEnabled === true).map((item) => {
                 const Icon = item.icon
                 return (
                   <NavItem
@@ -424,6 +429,76 @@ function AttentionCard({ findings, onSelect, onViewAll }: {
   )
 }
 
+const alertDuration = (from: string) => {
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(from)) / 1000))
+  if (!Number.isFinite(seconds)) return '时间未知'
+  if (seconds >= 86400) return `${Math.floor(seconds / 86400)} 天 ${Math.floor(seconds % 86400 / 3600)} 小时`
+  if (seconds >= 3600) return `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
+  return `${Math.max(1, Math.floor(seconds / 60))} 分`
+}
+
+function FleetAlertsOverviewCard({ alerts, clusters, error, isLoading, onOpenAlerts, onOpenCluster, onRefresh }: {
+  alerts: ClusterAlertPage | null
+  clusters: Cluster[]
+  error: string
+  isLoading: boolean
+  onOpenAlerts: () => void
+  onOpenCluster: (clusterId: string) => void
+  onRefresh: () => void
+}) {
+  const coverageMap = new Map((alerts?.coverage ?? []).map((item) => [item.cluster_id, item]))
+  const coverageHealthy = clusters.filter((cluster) => {
+    const item = coverageMap.get(cluster.id)
+    return item?.status === 'ok' && Boolean(item.collected_at) && Date.now() - Date.parse(item.collected_at ?? '') < 10 * 60_000
+  }).length
+  const coverageIncomplete = Math.max(0, clusters.length - coverageHealthy)
+  const highestSeverity = (alerts?.items ?? [])[0]?.severity || (alerts?.total === 0 ? '无' : '—')
+  const visibleAlerts = (alerts?.items ?? []).slice(0, 5)
+  const clusterName = (clusterId: string) => clusters.find((cluster) => cluster.id === clusterId)?.name || clusterId
+  const severityStatus = (severity: string) => severity === 'critical' ? 'danger' : severity === 'warning' ? 'warning' : 'info'
+
+  return (
+    <Card className={`ks-fleet-alert-overview${(alerts?.total ?? 0) > 0 || coverageIncomplete > 0 ? ' is-attention' : ''}`}>
+      <CardHeader actions={{ actions: <Button isInline onClick={onOpenAlerts} variant="link">进入告警中心</Button>, hasNoOffset: false }}>
+        <CardTitle>
+          <Title headingLevel="h2" size="lg">全局告警态势</Title>
+          <span>汇总全部纳管集群的 Alertmanager 当前告警</span>
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        {isLoading && !alerts ? (
+          <div className="ks-fleet-alert-overview__loading"><span className="ks-capacity-overview__pulse" /><span>正在汇总所有集群告警…</span></div>
+        ) : error && !alerts ? (
+          <Alert actionLinks={<AlertActionLink onClick={onRefresh}>重新读取</AlertActionLink>} isInline title="全局告警暂时不可用" variant="warning">{error}</Alert>
+        ) : (
+          <>
+            <div className="ks-fleet-alert-overview__metrics">
+              <div className={(alerts?.total ?? 0) > 0 ? 'is-danger' : ''}><span>未恢复告警</span><strong>{alerts?.total ?? '—'}</strong><small>所有集群当前告警</small></div>
+              <div><span>最高级别</span><strong className={`is-${highestSeverity}`}>{highestSeverity === 'critical' ? 'Critical' : highestSeverity === 'warning' ? 'Warning' : highestSeverity === '无' ? '无' : 'Info'}</strong><small>按风险优先排序</small></div>
+              <div><span>采集正常</span><strong>{coverageHealthy} / {clusters.length}</strong><small>近 10 分钟成功采集</small></div>
+              <div className={coverageIncomplete > 0 ? 'is-warning' : ''}><span>采集异常或待采集</span><strong>{coverageIncomplete}</strong><small>不能视为零告警</small></div>
+            </div>
+            {error && <div className="ks-fleet-alert-overview__notice"><ExclamationTriangleIcon /><span>自动刷新失败，当前显示上一次成功数据：{error}</span></div>}
+            {coverageIncomplete > 0 && !error && <div className="ks-fleet-alert-overview__notice"><ExclamationTriangleIcon /><span>{coverageIncomplete} 套集群的告警采集异常、过期或等待首次采集。</span></div>}
+            <div className="ks-fleet-alert-overview__list">
+              {visibleAlerts.map((item) => (
+                <button key={item.id} onClick={() => onOpenCluster(item.cluster_id)} type="button">
+                  <Label isCompact status={severityStatus(item.severity)}>{item.severity || '未标注'}</Label>
+                  <span className="ks-fleet-alert-overview__alert-name"><strong>{item.name || '未命名告警'}</strong><small>{item.resource_kind ? `${item.resource_kind} / ${item.resource_name || '未标注'}` : item.summary || '未标注资源'}</small></span>
+                  <span className="ks-fleet-alert-overview__cluster"><strong>{clusterName(item.cluster_id)}</strong><small>{item.namespace || '集群级'} · 持续 {alertDuration(item.starts_at)}</small></span>
+                  <AngleRightIcon />
+                </button>
+              ))}
+              {visibleAlerts.length === 0 && <div className={`ks-fleet-alert-overview__empty${coverageIncomplete > 0 ? ' is-unknown' : ''}`}>{coverageIncomplete > 0 ? '当前未读取到告警，但采集尚未完整，不能判定全部集群无告警。' : '所有已覆盖集群当前没有未恢复告警。'}</div>}
+            </div>
+            {(alerts?.total ?? 0) > visibleAlerts.length && <Button className="ks-fleet-alert-overview__more" isInline onClick={onOpenAlerts} variant="link">还有 {(alerts?.total ?? 0) - visibleAlerts.length} 条，查看全部</Button>}
+          </>
+        )}
+      </CardBody>
+    </Card>
+  )
+}
+
 const capacityPercent = (value: number, total: number) => total > 0 ? value / total * 100 : 0
 
 function CapacityOverviewCard({ capacity, error, isLoading, onRefresh, onViewCapacity }: {
@@ -488,6 +563,7 @@ function navigationSectionFromLocation(): NavigationSection {
  if (window.location.pathname === '/security' || window.location.pathname === '/tools/security-baseline') return 'security'
  if (window.location.pathname === '/tools' || window.location.pathname.startsWith('/tools/')) return 'tools'
  if (window.location.pathname === '/monitoring') return 'monitoring'
+ if (window.location.pathname === '/alerts') return 'alerts'
   if (window.location.pathname === '/settings' || window.location.pathname.startsWith('/settings/')) return 'access'
   if (window.location.pathname === '/capacity') return 'capacity'
   if (window.location.pathname === '/events') return 'events'
@@ -507,6 +583,9 @@ function ClusterManagementPage() {
   const [fleetCapacity, setFleetCapacity] = useState<FleetCapacity | null>(null)
   const [capacityError, setCapacityError] = useState('')
   const [capacityLoading, setCapacityLoading] = useState(false)
+  const [fleetAlerts, setFleetAlerts] = useState<ClusterAlertPage | null>(null)
+  const [fleetAlertsError, setFleetAlertsError] = useState('')
+  const [fleetAlertsLoading, setFleetAlertsLoading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [environment, setEnvironment] = useState('ALL')
   const [clusterType, setClusterType] = useState('ALL')
@@ -519,6 +598,7 @@ function ClusterManagementPage() {
   const [query, setQuery] = useState('')
   const [refreshedAt, setRefreshedAt] = useState('—')
   const [clusterRefreshSeconds, setClusterRefreshSeconds] = useState(30)
+  const [reportsEnabled, setReportsEnabled] = useState<boolean | null>(null)
 
   const [status, setStatus] = useState<'ALL' | ClusterStatus>('ALL')
   const [technologyStack, setTechnologyStack] = useState('ALL')
@@ -552,13 +632,36 @@ function ClusterManagementPage() {
     finally { setCapacityLoading(false) }
   }, [])
 
+  const loadFleetAlerts = useCallback(async () => {
+    setFleetAlertsLoading(true)
+    setFleetAlertsError('')
+    try { setFleetAlerts(await fetchCurrentFleetAlerts()) }
+    catch (requestError) { setFleetAlertsError(requestError instanceof Error ? requestError.message : '读取全局告警失败。') }
+    finally { setFleetAlertsLoading(false) }
+  }, [])
+
   useEffect(() => {
     let mounted = true
-    void fetchPlatformSettings().then((value) => { if (mounted) setClusterRefreshSeconds(value.runtime.auto_refresh_seconds) }).catch(() => undefined)
-    const onSettingsSaved = (event: Event) => setClusterRefreshSeconds((event as CustomEvent<PlatformSettings>).detail.runtime.auto_refresh_seconds)
+    void fetchPlatformSettings().then((value) => {
+      if (!mounted) return
+      setClusterRefreshSeconds(value.runtime.auto_refresh_seconds)
+      setReportsEnabled(value.runtime.operational_reports_enabled)
+    }).catch(() => undefined)
+    const onSettingsSaved = (event: Event) => {
+      const value = (event as CustomEvent<PlatformSettings>).detail
+      setClusterRefreshSeconds(value.runtime.auto_refresh_seconds)
+      setReportsEnabled(value.runtime.operational_reports_enabled)
+    }
     window.addEventListener('platform-settings-saved', onSettingsSaved)
     return () => { mounted = false; window.removeEventListener('platform-settings-saved', onSettingsSaved) }
   }, [])
+
+  useEffect(() => {
+    if (reportsEnabled === false && activeSection === 'reports') {
+      window.history.replaceState({ section: 'overview' }, '', '/')
+      setActiveSection('overview')
+    }
+  }, [activeSection, reportsEnabled])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => void loadClusters(), 0)
@@ -575,6 +678,13 @@ function ClusterManagementPage() {
     const intervalId = window.setInterval(() => { if (!document.hidden) void loadCapacity() }, 60_000)
     return () => { window.clearTimeout(timeoutId); window.clearInterval(intervalId) }
   }, [activeSection, loadCapacity])
+
+  useEffect(() => {
+    if (activeSection !== 'overview') return undefined
+    const timeoutId = window.setTimeout(() => void loadFleetAlerts(), 0)
+    const intervalId = window.setInterval(() => { if (!document.hidden) void loadFleetAlerts() }, 60_000)
+    return () => { window.clearTimeout(timeoutId); window.clearInterval(intervalId) }
+  }, [activeSection, loadFleetAlerts])
 
   useEffect(() => {
     const handlePopState = () => {
@@ -672,7 +782,7 @@ function ClusterManagementPage() {
   }
 
   const navigateFromSidebar = (section: NavigationSection) => {
- if (section === 'tools' || section === 'monitoring' || section === 'security' || section === 'reports') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
+ if (section === 'tools' || section === 'monitoring' || section === 'alerts' || section === 'security' || section === 'reports') { window.history.pushState({section},'',`/${section}`); setActiveClusterID(null); setActiveSection(section); window.dispatchEvent(new PopStateEvent('popstate')); return }
     if (section === 'access') { window.history.pushState({ section }, '', '/settings/access'); setActiveClusterID(null); setActiveSection('access'); return }
     if (section === 'clusters') {
       showClusterList('ALL')
@@ -708,6 +818,7 @@ function ClusterManagementPage() {
     <AppSidebar
       activeSection={activeSection}
       isCollapsed={isSidebarCollapsed}
+      reportsEnabled={reportsEnabled}
       onNavigate={navigateFromSidebar}
       onToggle={() => setIsSidebarCollapsed((current) => !current)}
     />
@@ -741,13 +852,13 @@ function ClusterManagementPage() {
               <div className="ks-title-row">
                 <div>
                   <Title headingLevel="h1" size="2xl">
-                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'reports' ? '运行报告' : activeSection === 'security' ? '安全扫描' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? toolTitle : activeSection === 'monitoring' ? '监控' : '集群'}
+                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'alerts' ? '告警' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'reports' ? '运行报告' : activeSection === 'security' ? '安全扫描' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? toolTitle : activeSection === 'monitoring' ? '监控' : '集群'}
                   </Title>
 
                 </div>
                 {(activeSection === 'overview' || activeSection === 'clusters' || activeSection === 'inspections') && (
                   <div className="ks-title-actions">
-                    <Button icon={<SyncAltIcon />} isLoading={isLoading || (activeSection === 'inspections' && capacityLoading)} onClick={() => { void loadClusters(); if (activeSection === 'inspections') void loadCapacity() }} variant="secondary">{activeSection === 'inspections' ? '重新巡检' : '刷新状态'}</Button>
+                    <Button icon={<SyncAltIcon />} isLoading={isLoading || ((activeSection === 'overview' || activeSection === 'inspections') && capacityLoading) || (activeSection === 'overview' && fleetAlertsLoading)} onClick={() => { void loadClusters(); if (activeSection === 'overview' || activeSection === 'inspections') void loadCapacity(); if (activeSection === 'overview') void loadFleetAlerts() }} variant="secondary">{activeSection === 'inspections' ? '重新巡检' : '刷新状态'}</Button>
                     {activeSection === 'clusters' && canConfigure && (
                       <Button icon={<PlusIcon />} onClick={() => setDialogOpen(true)} variant="primary">添加集群</Button>
                     )}
@@ -796,6 +907,7 @@ function ClusterManagementPage() {
                   />
                 </GridItem>
               </Grid>
+              <FleetAlertsOverviewCard alerts={fleetAlerts} clusters={clusters} error={fleetAlertsError} isLoading={fleetAlertsLoading} onOpenAlerts={() => navigateFromSidebar('alerts')} onOpenCluster={openCluster} onRefresh={() => void loadFleetAlerts()} />
               <div className="ks-capacity-overview-wrap"><CapacityOverviewCard capacity={fleetCapacity} error={capacityError} isLoading={capacityLoading} onRefresh={() => void loadCapacity()} onViewCapacity={() => navigateFromSidebar('capacity')} /></div>
               </div> : activeSection === 'capacity' ? (
                 <FleetCapacityPage onOpenCluster={openClusterCapacity} />
@@ -805,6 +917,8 @@ function ClusterManagementPage() {
  <SecurityBaselinePage />
  ) : activeSection === 'monitoring' ? (
  <FleetMonitoringPage clusters={clusters} onOpenCluster={openCluster} onRefresh={()=>void loadClusters()}/>
+ ) : activeSection === 'alerts' ? (
+ <FleetAlertsPage clusters={clusters} />
  ) : activeSection === 'access' ? (
                 <PlatformAccessPage />
               ) : activeSection === 'events' ? (

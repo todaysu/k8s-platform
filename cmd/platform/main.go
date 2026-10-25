@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"example.com/k8s-platform/internal/alerts"
 	"example.com/k8s-platform/internal/auth"
 	"example.com/k8s-platform/internal/cluster"
 	"example.com/k8s-platform/internal/config"
@@ -26,7 +27,19 @@ import (
 	"example.com/k8s-platform/internal/tlsserver"
 )
 
-var platformVersion = "v1.0.0"
+var platformVersion = "v1.0.1"
+
+type alertCollectorSource struct {
+	repository cluster.ClusterRepository
+	manager    *cluster.OnboardingService
+}
+
+func (source alertCollectorSource) ListRecords(ctx context.Context) ([]cluster.ClusterRecord, error) {
+	return source.repository.ListRecords(ctx)
+}
+func (source alertCollectorSource) GetClusterAlerts(ctx context.Context, id string) (cluster.AlertSnapshot, error) {
+	return source.manager.GetClusterAlerts(ctx, id)
+}
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "renew-certificate" {
@@ -95,6 +108,13 @@ func main() {
 
 	applicationContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	alertsContext, cancelAlerts := context.WithTimeout(applicationContext, 10*time.Second)
+	alertService, alertsErr := alerts.New(alertsContext, database.SQLDB(), alertCollectorSource{database, manager})
+	cancelAlerts()
+	if alertsErr != nil {
+		log.Fatalf("initialize alerts: %v", alertsErr)
+	}
+	alertService.ConfigureRetention(storedSettings.Alerts.ResolvedRetentionDays, storedSettings.Alerts.CleanupBatchSize)
 	if cfg.RunsWorker() {
 		go manager.RunSecurityWorker(applicationContext, os.Getenv("POD_NAME"))
 	}
@@ -107,7 +127,8 @@ func main() {
 		}
 		runCollectors := func(leaderContext context.Context) {
 			var collectors sync.WaitGroup
-			collectors.Add(4)
+			collectors.Add(5)
+			go func() { defer collectors.Done(); alertService.Run(leaderContext) }()
 			go func() {
 				defer collectors.Done()
 				cluster.NewHealthCollector(manager, cfg.HealthCollectionInterval, cfg.HealthCollectionWorkers, cfg.HealthCollectionTimeout).Run(leaderContext)
@@ -178,7 +199,7 @@ func main() {
 		if reportErr != nil {
 			log.Fatalf("initialize operational reports: %v", reportErr)
 		}
-		routerOptions := httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled, Reports: reportService, Authenticator: authentication, SettingsRepository: database, Admission: httpapi.AdmissionLimits{Queries: cfg.HTTPQueryConcurrency, Realtime: cfg.HTTPRealtimeConcurrency, Monitoring: cfg.HTTPMonitoringConcurrency, Sessions: cfg.HTTPSessionConcurrency, PerCluster: cfg.HTTPClusterConcurrency}}
+		routerOptions := httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled, Reports: reportService, Alerts: alertService, Authenticator: authentication, SettingsRepository: database, Admission: httpapi.AdmissionLimits{Queries: cfg.HTTPQueryConcurrency, Realtime: cfg.HTTPRealtimeConcurrency, Monitoring: cfg.HTTPMonitoringConcurrency, Sessions: cfg.HTTPSessionConcurrency, PerCluster: cfg.HTTPClusterConcurrency}}
 		if restartErr == nil {
 			routerOptions.SettingsRestarter = restarter
 		}

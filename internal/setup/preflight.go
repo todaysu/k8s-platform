@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -71,6 +72,7 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 		result.Errors = append(result.Errors, fmt.Sprintf("读取节点失败：%v", err))
 	} else {
 		schedulable := 0
+		accessIPs := 0
 		for _, node := range nodes.Items {
 			item := PreflightNode{
 				Name:        node.Name,
@@ -83,7 +85,10 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 			}
 			for _, address := range node.Status.Addresses {
 				if address.Type == corev1.NodeInternalIP {
-					item.InternalIPs = append(item.InternalIPs, address.Address)
+					if ip := net.ParseIP(address.Address); ip != nil && !ip.IsLoopback() {
+						item.InternalIPs = append(item.InternalIPs, ip.String())
+						accessIPs++
+					}
 				}
 			}
 			sort.Strings(item.InternalIPs)
@@ -97,6 +102,9 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 			result.Errors = append(result.Errors, "未发现 Kubernetes 节点。")
 		} else if schedulable == 0 {
 			result.Errors = append(result.Errors, "没有可调度节点；请解除节点污点或增加 worker。")
+		}
+		if len(result.Nodes) > 0 && accessIPs == 0 {
+			result.Errors = append(result.Errors, "节点没有可用的非回环 InternalIP，无法生成节点 IP 初始化地址。")
 		}
 	}
 
@@ -147,7 +155,7 @@ func (server *Server) preflight(ctx context.Context) PreflightResult {
 	switch {
 	case err == nil && secret != nil:
 		result.RuntimeSecretExists = true
-		result.Warnings = append(result.Warnings, "发现运行 Secret；如果安装曾中断，请使用同一初始化凭证查看进度并重试。")
+		result.Warnings = append(result.Warnings, "发现运行 Secret；如果安装曾中断，页面将读取已保存的进度并允许继续处理。")
 	case apierrors.IsNotFound(err):
 	default:
 		result.Errors = append(result.Errors, fmt.Sprintf("读取运行 Secret 失败：%v", err))

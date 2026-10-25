@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"example.com/k8s-platform/internal/store"
 	corev1 "k8s.io/api/core/v1"
@@ -462,7 +463,7 @@ func waitForShards(ctx context.Context, dsn string, expected int, timeout time.D
 }
 
 func validAdminCredentials(username, password string) bool {
-	return adminUsernamePattern.MatchString(username) && len(password) >= 12 && len(password) <= 72
+	return adminUsernamePattern.MatchString(username) && utf8.RuneCountInString(password) >= minAdminPasswordLength && len(password) <= maxAdminPasswordLength
 }
 
 func (server *Server) handleInstall(writer http.ResponseWriter, request *http.Request) {

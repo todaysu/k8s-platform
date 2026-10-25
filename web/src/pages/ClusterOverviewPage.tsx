@@ -48,6 +48,7 @@ import {
   type ClusterNode,
   type ManagedCluster,
 } from '../api/clusters'
+import { fetchCurrentClusterAlerts, type ClusterAlertPage } from '../api/alerts'
 import './ClusterOverviewPage.css'
 import ClusterWorkloadsPage from './ClusterWorkloadsPage'
 import ClusterEventsPage from './ClusterEventsPage'
@@ -83,6 +84,14 @@ function percent(value: number | null) {
 function formatTime(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function alertDuration(value: string) {
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 1000))
+  if (!Number.isFinite(seconds)) return '—'
+  if (seconds >= 86400) return `${Math.floor(seconds / 86400)} 天 ${Math.floor(seconds % 86400 / 3600)} 小时`
+  if (seconds >= 3600) return `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
+  return `${Math.max(1, Math.floor(seconds / 60))} 分`
 }
 
 function detailTabFromPath(): DetailTab {
@@ -136,6 +145,9 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
   const [nodes, setNodes] = useState<ClusterNode[]>([])
   const [nodesError, setNodesError] = useState('')
   const [nodesQuery, setNodesQuery] = useState('')
+  const [alerts, setAlerts] = useState<ClusterAlertPage | null>(null)
+  const [alertsError, setAlertsError] = useState('')
+  const [alertsLoading, setAlertsLoading] = useState(false)
 
   const load = useCallback(async (refresh = false) => {
     setIsLoading(true)
@@ -158,6 +170,18 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
       setNodesError(requestError instanceof Error ? requestError.message : '读取节点列表失败，请稍后重试。')
     } finally {
       setIsNodesLoading(false)
+    }
+  }, [clusterId])
+
+  const loadAlerts = useCallback(async () => {
+    setAlertsLoading(true)
+    setAlertsError('')
+    try {
+      setAlerts(await fetchCurrentClusterAlerts(clusterId))
+    } catch (requestError) {
+      setAlertsError(requestError instanceof Error ? requestError.message : '读取集群告警失败。')
+    } finally {
+      setAlertsLoading(false)
     }
   }, [clusterId])
 
@@ -186,7 +210,20 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
     }
   }, [activeTab, loadNodes])
 
+  useEffect(() => {
+    if (activeTab !== 'overview') return
+    const timeout = window.setTimeout(() => void loadAlerts(), 0)
+    const interval = window.setInterval(() => { if (!document.hidden) void loadAlerts() }, 60_000)
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [activeTab, loadAlerts])
+
   const health = useMemo(() => cluster ? clusterHealth(cluster) : 'healthy', [cluster])
+  const alertCoverage = useMemo(() => (alerts?.coverage ?? []).find((item) => item.cluster_id === clusterId), [alerts, clusterId])
+  const alertCoverageFresh = Boolean(alertCoverage?.status === 'ok' && alertCoverage.collected_at && Date.now() - Date.parse(alertCoverage.collected_at) < 10 * 60_000)
+  const highestAlertSeverity = (alerts?.items ?? [])[0]?.severity || ''
   const issues = useMemo(() => {
     if (!cluster) return []
     const values: Array<{ action?: string; detail: string; target?: DetailTab | 'workloads_attention' | 'system_pods'; title: string }> = []
@@ -259,6 +296,11 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
     setActiveTab(tab)
   }
 
+  const openClusterAlerts = () => {
+    window.history.pushState({ clusterID: clusterId }, '', `/alerts?cluster=${encodeURIComponent(clusterId)}&view=current&page=1`)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+
   const visibleNodes = useMemo(() => {
     const normalized = nodesQuery.trim().toLowerCase()
     if (!normalized) return nodes
@@ -315,8 +357,14 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
           <div className="ks-cluster-detail-actions">
             <Button
               icon={<SyncAltIcon />}
-              isLoading={activeTab === 'nodes' ? isNodesLoading : isLoading}
-              onClick={() => void (activeTab === 'nodes' ? loadNodes() : load(true))}
+              isLoading={activeTab === 'nodes' ? isNodesLoading : isLoading || (activeTab === 'overview' && alertsLoading)}
+              onClick={() => {
+                if (activeTab === 'nodes') void loadNodes()
+                else {
+                  void load(true)
+                  if (activeTab === 'overview') void loadAlerts()
+                }
+              }}
               variant="secondary"
             >
               刷新状态
@@ -356,6 +404,34 @@ export default function ClusterOverviewPage({ clusterId, onBack, onRemoved }: Pr
         </Grid>
 
         <Grid className="ks-cluster-detail-grid" hasGutter>
+          <GridItem span={12}>
+            <Card className={`ks-cluster-alert-card${highestAlertSeverity ? ` is-${highestAlertSeverity}` : ''}`}>
+              <CardHeader actions={{ actions: <Button isInline onClick={openClusterAlerts} variant="link">查看全部告警<AngleRightIcon /></Button> }}>
+                <CardTitle><Title headingLevel="h2" size="lg">当前告警</Title></CardTitle>
+              </CardHeader>
+              <CardBody>
+                {alertsError && <Alert actionLinks={<Button isInline onClick={() => void loadAlerts()} variant="link">重新读取</Button>} isInline title="告警数据读取失败" variant="danger">{alertsError}</Alert>}
+                {!alerts && alertsLoading ? <div className="ks-cluster-alert-loading"><Spinner size="lg" /><span>正在读取告警…</span></div> : alerts && <>
+                  {!alertCoverageFresh && <Alert isInline title="告警采集未完整" variant="warning">{alertCoverage?.message || '正在等待首次采集，当前数量不能代表集群无告警。'}</Alert>}
+                  {(alerts.items ?? []).length === 0 ? <div className="ks-cluster-alert-empty">
+                    <CheckCircleIcon /><div><strong>{alertCoverageFresh ? '当前没有未恢复告警' : '尚无可用的告警结果'}</strong><span>{alertCoverageFresh ? `最近采集：${formatTime(alertCoverage?.collected_at || '')}` : '采集恢复后会自动显示当前告警。'}</span></div>
+                  </div> : <>
+                    <div className="ks-cluster-alert-summary">
+                      <div><strong>{alerts.total}</strong><span>未恢复告警</span></div>
+                      <div><Label isCompact status={highestAlertSeverity === 'critical' ? 'danger' : highestAlertSeverity === 'warning' ? 'warning' : 'info'}>{highestAlertSeverity || '未标注'}</Label><span>最高级别</span></div>
+                      <div><strong>{alertCoverage?.collected_at ? formatTime(alertCoverage.collected_at) : '—'}</strong><span>最近成功采集</span></div>
+                    </div>
+                    <ul className="ks-cluster-alert-list">{(alerts.items ?? []).slice(0, 3).map((item) => <li key={item.id}>
+                      <Label isCompact status={item.severity === 'critical' ? 'danger' : item.severity === 'warning' ? 'warning' : 'info'}>{item.severity || '未标注'}</Label>
+                      <div><strong>{item.name || '未命名告警'}</strong><span>{item.resource_kind && item.resource_name ? `${item.resource_kind} / ${item.resource_name}` : item.summary || '未标注受影响资源'}</span></div>
+                      <time>{alertDuration(item.starts_at)}</time>
+                    </li>)}</ul>
+                    {alerts.total > 3 && <Button isInline onClick={openClusterAlerts} variant="link">还有 {alerts.total - 3} 条告警<AngleRightIcon /></Button>}
+                  </>}
+                </>}
+              </CardBody>
+            </Card>
+          </GridItem>
           <GridItem lg={6} span={12}>
             <Card isFullHeight>
               <CardHeader><CardTitle><Title headingLevel="h2" size="lg">资源使用</Title></CardTitle></CardHeader>

@@ -1,6 +1,6 @@
 # Kubernetes 多集群管理平台
 
-> 当前发布版本：`v1.0.0`
+> 当前发布版本：`v1.0.1`
 
 一个参考 CNCF Headlamp 技术架构、聚焦集群稳定性的轻量多集群管理平台。
 
@@ -64,11 +64,11 @@ export CREDENTIAL_ENCRYPTION_KEY="仅限本地学习的占位值"
 make dev-backend
 ```
 
-`make dev-backend` 仅在本地开发时默认开启 Pod Exec。如需关闭，使用 `ENABLE_POD_EXEC=false make dev-backend`。直接运行 `go run ./cmd/platform` 时 Pod Exec 仍默认关闭。
+Pod Exec 在本地开发和 Kubernetes 新部署中默认开启。如需临时禁用，使用 `ENABLE_POD_EXEC=false make dev-backend` 或在部署配置中显式设为 `false`。
 
 本地开发不设置 `PLATFORM_DATABASE_DSN` 时全部数据保存到 SQLite。`deploy/mysql.yaml` 仅用于本地/单副本开发，不是交付版高可用方案。
 
-Kubernetes 交付使用已有 MySQL 8.0+、平台自身 HTTPS 和 NodePort，无需 Ingress。当前工作区已生成私有的 `data/delivery/install.yaml`：修改其中唯一的平台镜像地址后执行 `kubectl apply -f data/delivery/install.yaml`。打开 `https://<节点IP>:30080` 完成初始化，之后在 `https://<自定义域名>:30443` 使用平台。后续交付包可用 `go run ./cmd/installer` 生成新的私有清单。详见 [`docs/deployment/install.md`](docs/deployment/install.md)。
+Kubernetes 交付使用单一清单、平台自身 HTTPS 和 NodePort，无需 Ingress，也不需要生成私有清单或填写初始化 Token。执行 `kubectl apply -f deploy/install.yaml` 后打开 `https://<节点IP>:30080`，页面会自动预检；完成初始化后通过 `https://<自定义域名>:30443` 使用平台。MySQL 是必需的外部依赖，部署清单不会在集群内创建 MySQL 或 PVC。详见 [`docs/deployment/install.md`](docs/deployment/install.md)。
 
 后端启动后，可访问健康检查接口：
 

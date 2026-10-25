@@ -59,6 +59,13 @@ export function validateSection(section: SettingsSection, settings: PlatformSett
     return errors
   }
 
+  if (section === 'alerts') {
+    const value = settings.alerts
+    integer(errors, 'resolved_retention_days', value.resolved_retention_days, 1, 3650)
+    integer(errors, 'cleanup_batch_size', value.cleanup_batch_size, 100, 50000)
+    return errors
+  }
+
   if (section === 'security') {
     const value = settings.security
     if (!value.kube_bench_image.trim() && !value.kube_bench_image_amd64.trim()) {

@@ -328,6 +328,35 @@
 }
 
 .ks-capacity-overview-wrap { margin-block-start: 0; }
+.ks-fleet-alert-overview { border-inline-start: 4px solid var(--ks-success); }
+.ks-fleet-alert-overview.is-attention { border-inline-start-color: var(--ks-warning); }
+.ks-fleet-alert-overview .pf-v6-c-card__header { align-items: center; border-block-end: 1px solid var(--pf-t--global--border--color--default); }
+.ks-fleet-alert-overview .pf-v6-c-card__title > span { color: var(--pf-t--global--text--color--subtle); display: block; font-size: var(--pf-t--global--font--size--body--sm); font-weight: 400; margin-block-start: var(--pf-t--global--spacer--xs); }
+.ks-fleet-alert-overview__metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ks-fleet-alert-overview__metrics > div { border-inline-end: 1px solid var(--pf-t--global--border--color--default); padding-inline: var(--pf-t--global--spacer--lg); }
+.ks-fleet-alert-overview__metrics > div:first-child { padding-inline-start: 0; }
+.ks-fleet-alert-overview__metrics > div:last-child { border-inline-end: 0; padding-inline-end: 0; }
+.ks-fleet-alert-overview__metrics span,
+.ks-fleet-alert-overview__metrics small { color: var(--pf-t--global--text--color--subtle); display: block; }
+.ks-fleet-alert-overview__metrics strong { color: var(--pf-t--global--text--color--regular); display: block; font-family: var(--acm-font-display); font-size: 1.75rem; line-height: 1.2; margin-block: var(--pf-t--global--spacer--xs); }
+.ks-fleet-alert-overview__metrics .is-danger strong,
+.ks-fleet-alert-overview__metrics strong.is-critical { color: var(--ks-danger); }
+.ks-fleet-alert-overview__metrics .is-warning strong,
+.ks-fleet-alert-overview__metrics strong.is-warning { color: #8f6200; }
+.ks-fleet-alert-overview__notice { align-items: center; border-block-start: 1px solid var(--pf-t--global--border--color--default); color: #8f6200; display: flex; gap: var(--pf-t--global--spacer--sm); margin-block-start: var(--pf-t--global--spacer--lg); padding-block-start: var(--pf-t--global--spacer--md); }
+.ks-fleet-alert-overview__list { border-block-start: 1px solid var(--pf-t--global--border--color--default); margin-block-start: var(--pf-t--global--spacer--lg); }
+.ks-fleet-alert-overview__list > button { align-items: center; background: transparent; border: 0; border-block-end: 1px solid var(--pf-t--global--border--color--default); color: inherit; cursor: pointer; display: grid; gap: var(--pf-t--global--spacer--md); grid-template-columns: minmax(5.5rem, auto) minmax(12rem, 1.4fr) minmax(12rem, 1fr) auto; padding: var(--pf-t--global--spacer--md) 0; text-align: start; width: 100%; }
+.ks-fleet-alert-overview__list > button:hover strong { color: var(--pf-t--global--color--brand--default); }
+.ks-fleet-alert-overview__alert-name,
+.ks-fleet-alert-overview__cluster { min-width: 0; }
+.ks-fleet-alert-overview__alert-name strong,
+.ks-fleet-alert-overview__cluster strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ks-fleet-alert-overview__alert-name small,
+.ks-fleet-alert-overview__cluster small { color: var(--pf-t--global--text--color--subtle); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ks-fleet-alert-overview__empty { color: var(--ks-success); padding-block: var(--pf-t--global--spacer--lg); }
+.ks-fleet-alert-overview__empty.is-unknown { color: #8f6200; }
+.ks-fleet-alert-overview__more { margin-block-start: var(--pf-t--global--spacer--md); }
+.ks-fleet-alert-overview__loading { align-items: center; color: var(--pf-t--global--text--color--subtle); display: flex; gap: var(--pf-t--global--spacer--md); min-height: 7rem; }
 .ks-capacity-overview { border-inline-start: 4px solid var(--ks-success); }
 .ks-capacity-overview.is-attention { border-inline-start-color: var(--ks-warning); }
 .ks-capacity-overview .pf-v6-c-card__header { align-items: center; border-block-end: 1px solid var(--pf-t--global--border--color--default); }
@@ -346,6 +375,11 @@
 @keyframes ks-capacity-pulse { 50% { opacity: .3; transform: scale(.75); } }
 
 @media (max-width: 48rem) {
+  .ks-fleet-alert-overview__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--pf-t--global--spacer--lg); }
+  .ks-fleet-alert-overview__metrics > div:nth-child(2) { border-inline-end: 0; }
+  .ks-fleet-alert-overview__metrics > div:nth-child(3) { padding-inline-start: 0; }
+  .ks-fleet-alert-overview__list > button { grid-template-columns: auto 1fr auto; }
+  .ks-fleet-alert-overview__cluster { grid-column: 2; }
   .ks-capacity-overview__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--pf-t--global--spacer--lg); }
   .ks-capacity-overview__metrics > div:nth-child(2) { border-inline-end: 0; }
   .ks-capacity-overview__metrics > div:nth-child(3) { padding-inline-start: 0; }

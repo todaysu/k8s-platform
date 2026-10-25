@@ -27,10 +27,9 @@ func TestNewInstallStatusStartsPending(t *testing.T) {
 	}
 }
 
-func TestInstallStatusEndpointRequiresToken(t *testing.T) {
-	server := &Server{config: Config{Token: "setup-token-value"}}
+func TestInstallStatusEndpointSupportsTokenlessSetup(t *testing.T) {
+	server := &Server{config: Config{}}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/setup/install", nil)
-	request.Header.Set("X-Setup-Token", "setup-token-value")
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -44,12 +43,6 @@ func TestInstallStatusEndpointRequiresToken(t *testing.T) {
 	}
 	if payload.Data.State != "idle" {
 		t.Fatalf("expected idle state, got %#v", payload.Data)
-	}
-	bad := httptest.NewRequest(http.MethodGet, "/api/v1/setup/install", nil)
-	badRecorder := httptest.NewRecorder()
-	server.ServeHTTP(badRecorder, bad)
-	if badRecorder.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 without token, got %d", badRecorder.Code)
 	}
 }
 
@@ -128,5 +121,17 @@ func TestHandleInstallRejectsInvalidExternalDatabase(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "INVALID_DATABASE") {
 		t.Fatalf("unexpected response: %s", recorder.Body.String())
+	}
+}
+
+func TestValidAdminCredentialsAllowsSixCharacters(t *testing.T) {
+	if !validAdminCredentials("admin", "123456") {
+		t.Fatal("expected a six-character administrator password to be accepted")
+	}
+	if !validAdminCredentials("admin", "甲乙丙丁戊己") {
+		t.Fatal("expected six Unicode characters to be accepted")
+	}
+	if validAdminCredentials("admin", "12345") {
+		t.Fatal("expected a five-byte administrator password to be rejected")
 	}
 }

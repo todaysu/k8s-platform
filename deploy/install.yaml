@@ -1,6 +1,6 @@
-# FTC Platform: ordinary Kubernetes, HTTPS NodePort, existing MySQL 8+.
-# Generate a private data/delivery/install.yaml with: go run ./cmd/installer
-# Edit the single image below, then: kubectl apply -f data/delivery/install.yaml
+# FTC Platform v1.0.1 x86 deployment bundle.
+# Apply directly with: kubectl apply -f deploy/install.yaml
+# MySQL is an external prerequisite and is not installed by this manifest.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -12,8 +12,6 @@ metadata:
   name: ftc-platform-bootstrap
   namespace: ftc-platform
 type: Opaque
-stringData:
-  setup-token: REPLACE_WITH_SETUP_TOKEN
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -140,6 +138,12 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterrolebindings"]
     resourceNames: ["ftc-platform-setup"]
@@ -184,7 +188,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: setup
-          image: REPLACE_WITH_PLATFORM_IMAGE
+          image: ftc-platform:v1.0.1-amd64
           imagePullPolicy: IfNotPresent
           env:
             - name: SETUP_MODE
@@ -201,8 +205,6 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-            - name: SETUP_TOKEN
-              valueFrom: { secretKeyRef: { name: ftc-platform-bootstrap, key: setup-token } }
           ports:
             - name: https
               containerPort: 8443

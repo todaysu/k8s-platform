@@ -98,7 +98,7 @@ export default function PodTerminal({ clusterId, containers, namespace, podName,
       </div>
     </div>
     <CardBody>
-      {execAvailable===false&&<Alert isInline title="平台未开启 Pod Exec" variant="danger">{capabilityError||'本地开发请重新执行 make dev-backend；Kubernetes 部署请设置 ENABLE_POD_EXEC=true 后重启平台。'}</Alert>}
+      {execAvailable===false&&<Alert isInline title="Pod Exec 当前不可用" variant="danger">{capabilityError||'Pod Exec 在新部署中默认开启。请检查平台实例是否已更新，以及纳管凭据是否具有 pods/exec 权限。'}</Alert>}
       {!running&&<Alert isInline title="Pod 不是 Running 状态" variant="danger">只有正在运行的 Pod 才能打开终端。</Alert>}
       {error&&<Alert isInline title="终端连接失败" variant="danger">{error}</Alert>}
       <div aria-label="Pod 交互式终端" className="ks-pod-terminal" ref={host}/>

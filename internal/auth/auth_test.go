@@ -14,6 +14,18 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func TestPasswordLengthAllowsSixCharacters(t *testing.T) {
+	if !validPassword("123456") {
+		t.Fatal("expected a six-character password to be accepted")
+	}
+	if !validPassword("甲乙丙丁戊己") {
+		t.Fatal("expected six Unicode characters to be accepted")
+	}
+	if validPassword("12345") {
+		t.Fatal("expected a five-byte password to be rejected")
+	}
+}
+
 func TestAuthenticationBootstrapRBACAndRevocation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.db")
 	s, err := New(path, "admin", "placeholder", false, time.Hour)

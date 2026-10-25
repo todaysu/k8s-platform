@@ -299,12 +299,21 @@ func (repository *securityTestRepository) DeleteSecurityWhitelist(_ context.Cont
 }
 
 func TestKubeBenchArgsUsesSelectedBenchmark(t *testing.T) {
-	args := kubeBenchArgs(WithSecurityBenchmark(context.Background(), "cis-1.24"))
-	if len(args) != 4 || args[0] != "run" || args[1] != "--json" || args[2] != "--benchmark" || args[3] != "cis-1.24" {
+	args := kubeBenchArgs(WithSecurityBenchmark(context.Background(), "cis-1.24"), true)
+	if strings.Join(args, " ") != "run --json --targets master,node,etcd,policies --benchmark cis-1.24" {
 		t.Fatalf("unexpected args: %#v", args)
 	}
-	if auto := kubeBenchArgs(context.Background()); len(auto) != 2 {
+	if auto := kubeBenchArgs(context.Background(), false); strings.Join(auto, " ") != "run --json --targets node" {
 		t.Fatalf("auto-detect should not add --benchmark: %#v", auto)
+	}
+}
+
+func TestControlPlaneNodeDetection(t *testing.T) {
+	worker := corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"kubernetes.io/arch": "amd64"}}}
+	master := corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"node-role.kubernetes.io/master": ""}}}
+	controlPlane := corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"node-role.kubernetes.io/control-plane": ""}}}
+	if isControlPlaneNode(worker) || !isControlPlaneNode(master) || !isControlPlaneNode(controlPlane) {
+		t.Fatal("node roles were not classified correctly")
 	}
 }
 

@@ -6,7 +6,7 @@ GO ?= $(firstword $(wildcard /opt/homebrew/bin/go) go)
 #   make build-image-amd64 REGISTRY=registry.cmbchina.com/ops IMAGE_TAG=0.2.0
 REGISTRY ?= your-registry.example.com
 IMAGE_NAME ?= ftc-platform
-VERSION ?= v1.0.0
+VERSION ?= v1.0.1
 IMAGE_TAG ?= $(VERSION)
 FULL_IMAGE ?= $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 LOCAL_IMAGE ?= ftc-platform:$(VERSION)
@@ -66,9 +66,7 @@ kind-create:
 
 kind-load:
 	kind load docker-image $(LOCAL_IMAGE)-arm64 --name ftc-v1
-	kind load docker-image mysql:8.0 --name ftc-v1
 
 kind-deploy:
-	kubectl --context kind-ftc-v1 apply -f deploy/kind/mysql.yaml
-	kubectl --context kind-ftc-v1 -n ftc-platform rollout status statefulset/platform-mysql --timeout=5m
-	sed 's|REPLACE_WITH_PLATFORM_IMAGE|$(LOCAL_IMAGE)-arm64|' data/delivery/install.yaml | kubectl --context kind-ftc-v1 apply -f -
+	sed 's|ftc-platform:v1.0.1-amd64|$(LOCAL_IMAGE)-arm64|' deploy/install.yaml | kubectl --context kind-ftc-v1 apply -f -
+	kubectl --context kind-ftc-v1 -n ftc-platform rollout status deployment/ftc-platform-setup --timeout=5m
