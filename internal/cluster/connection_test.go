@@ -522,3 +522,83 @@ func TestPodShellCommandUsesPodPrompt(t *testing.T) {
 		t.Fatalf("prompt was not shell-quoted: %#v", quoted)
 	}
 }
+
+// 未配置业务命名空间时，业务范围的 PromQL 求和必然落在空集上。
+// 空集的和是 0，不是一个采集失败，平台侧数值不应因此被丢弃。
+func TestCapacityUsageTreatsEmptyBusinessScopeAsZero(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/namespaces":
+			w.Write([]byte(`{"items":[{"metadata":{"name":"addon"}}]}`))
+		case "/api/v1/nodes", "/api/v1/pods":
+			w.Write([]byte(`{"items":[]}`))
+		case "/api/v1/services":
+			w.Write([]byte(`{"items":[{"metadata":{"namespace":"monitoring","name":"prometheus","labels":{"app":"prometheus"}},"spec":{"ports":[{"name":"web","port":9090}]}}]}`))
+		case "/api/v1/namespaces/monitoring/services/http:prometheus:web/proxy/api/v1/query":
+			query := r.URL.Query().Get("query")
+			// 业务范围为空集：Prometheus 返回 success 且 result 为空数组。
+			if strings.Contains(query, "namespace=~") {
+				w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+				return
+			}
+			value := "2"
+			if strings.Contains(query, "memory_working_set") {
+				value = "2000"
+			}
+			w.Write([]byte(`{"status":"success","data":{"result":[{"value":[1,"` + value + `"]}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	snapshot, err := NewKubernetesConnector(time.Second).Capacity(context.Background(), ParsedKubeconfig{APIServer: server.URL, CAData: ca, Token: "token"}, CapacityRule{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.MetricsAvailable {
+		t.Fatal("platform metrics must stay available when only the business scope is empty")
+	}
+	if snapshot.Platform.CPUUsageMilli == nil || *snapshot.Platform.CPUUsageMilli != 2000 {
+		t.Fatalf("platform CPU usage was dropped: %#v", snapshot.Platform.CPUUsageMilli)
+	}
+	if snapshot.Business.CPUUsageMilli == nil || *snapshot.Business.CPUUsageMilli != 0 {
+		t.Fatalf("empty business scope must be reported as zero: %#v", snapshot.Business.CPUUsageMilli)
+	}
+	if snapshot.Business.MemoryUsage == nil || *snapshot.Business.MemoryUsage != 0 {
+		t.Fatalf("empty business scope must be reported as zero memory: %#v", snapshot.Business.MemoryUsage)
+	}
+}
+
+// 数据源真正不可用时仍要判为不可用，不能被上面的宽松处理掩盖成 0 使用率。
+func TestCapacityUsageKeepsMetricsUnavailableOnQueryFailure(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/namespaces":
+			w.Write([]byte(`{"items":[{"metadata":{"name":"addon"}}]}`))
+		case "/api/v1/nodes", "/api/v1/pods":
+			w.Write([]byte(`{"items":[]}`))
+		case "/api/v1/services":
+			w.Write([]byte(`{"items":[{"metadata":{"namespace":"monitoring","name":"prometheus","labels":{"app":"prometheus"}},"spec":{"ports":[{"name":"web","port":9090}]}}]}`))
+		case "/api/v1/namespaces/monitoring/services/http:prometheus:web/proxy/api/v1/query":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"status":"error","error":"boom"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	snapshot, err := NewKubernetesConnector(time.Second).Capacity(context.Background(), ParsedKubeconfig{APIServer: server.URL, CAData: ca, Token: "token"}, CapacityRule{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.MetricsAvailable {
+		t.Fatal("a failing Prometheus must not be reported as zero usage")
+	}
+	if snapshot.Platform.CPUUsageMilli != nil || snapshot.Business.CPUUsageMilli != nil {
+		t.Fatalf("usage must stay unset when the data source fails: %#v", snapshot.Platform)
+	}
+}

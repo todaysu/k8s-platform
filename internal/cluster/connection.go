@@ -227,32 +227,38 @@ func exactNamespacePattern(namespaces []string) string {
 
 func (connector *KubernetesConnector) collectCapacityUsage(ctx context.Context, clientset *kubernetes.Clientset, services []corev1.Service, rule CapacityRule, snapshot *ClusterCapacity) {
 	businessPattern := exactNamespacePattern(rule.BusinessNamespaces)
-	queries := []string{
+	// Platform usage covers every namespace outside the business scope, so it
+	// is expected to return data whenever workloads exist. Business usage is
+	// legitimately empty when no business namespace is configured or when no
+	// Pod is running in that scope, so an empty sum is a valid zero rather
+	// than a collection failure.
+	platformQueries := []string{
 		fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD",namespace!="",namespace!~%q}[5m]))`, businessPattern),
-		fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~%q}[5m]))`, businessPattern),
 		fmt.Sprintf(`sum(container_memory_working_set_bytes{container!="",container!="POD",namespace!="",namespace!~%q})`, businessPattern),
+	}
+	businessQueries := []string{
+		fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~%q}[5m]))`, businessPattern),
 		fmt.Sprintf(`sum(container_memory_working_set_bytes{container!="",container!="POD",namespace=~%q})`, businessPattern),
 	}
 	for _, candidate := range discoverPrometheusServices(services) {
-		values := make([]float64, len(queries))
-		allAvailable := true
-		for index, query := range queries {
-			value, ok := queryPrometheus(ctx, clientset, candidate, query)
-			if !ok {
-				allAvailable = false
-				break
-			}
-			values[index] = value
-		}
-		if !allAvailable {
+		platformCPU, ok := queryPrometheus(ctx, clientset, candidate, platformQueries[0])
+		if !ok {
 			continue
 		}
-		platformCPU, businessCPU := int64(math.Round(values[0]*1000)), int64(math.Round(values[1]*1000))
-		platformMemory, businessMemory := int64(math.Round(values[2])), int64(math.Round(values[3]))
-		snapshot.Platform.CPUUsageMilli = &platformCPU
-		snapshot.Business.CPUUsageMilli = &businessCPU
-		snapshot.Platform.MemoryUsage = &platformMemory
-		snapshot.Business.MemoryUsage = &businessMemory
+		platformMemory, ok := queryPrometheus(ctx, clientset, candidate, platformQueries[1])
+		if !ok {
+			continue
+		}
+		// Missing business data must not discard the platform values that were
+		// already collected successfully.
+		businessCPU, _ := queryPrometheusSum(ctx, clientset, candidate, businessQueries[0])
+		businessMemory, _ := queryPrometheusSum(ctx, clientset, candidate, businessQueries[1])
+		platformCPUValue, businessCPUValue := int64(math.Round(platformCPU*1000)), int64(math.Round(businessCPU*1000))
+		platformMemoryValue, businessMemoryValue := int64(math.Round(platformMemory)), int64(math.Round(businessMemory))
+		snapshot.Platform.CPUUsageMilli = &platformCPUValue
+		snapshot.Business.CPUUsageMilli = &businessCPUValue
+		snapshot.Platform.MemoryUsage = &platformMemoryValue
+		snapshot.Business.MemoryUsage = &businessMemoryValue
 		snapshot.MetricsAvailable = true
 		return
 	}
@@ -1336,6 +1342,37 @@ func discoverPrometheusServices(services []corev1.Service) []prometheusService {
 	return candidates
 }
 
+// queryPrometheusSum evaluates an aggregation query where an empty result set
+// is a meaningful zero: the sum over an empty set is 0, not missing data.
+// A request failure still reports the data source as unavailable, so a broken
+// Prometheus is never silently reported as zero usage.
+func queryPrometheusSum(ctx context.Context, clientset *kubernetes.Clientset, service prometheusService, query string) (float64, bool) {
+	raw, err := clientset.CoreV1().RESTClient().Get().
+		Namespace(service.namespace).
+		Resource("services").
+		Name(service.proxyName).
+		SubResource("proxy").
+		Suffix("api", "v1", "query").
+		Param("query", query).
+		Do(ctx).
+		Raw()
+	if err != nil {
+		return 0, false
+	}
+	var response prometheusQueryResponse
+	if err := json.Unmarshal(raw, &response); err != nil || response.Status != "success" {
+		return 0, false
+	}
+	if len(response.Data.Result) == 0 {
+		return 0, true
+	}
+	value, ok := prometheusSampleValue(response)
+	if !ok {
+		return 0, false
+	}
+	return value, true
+}
+
 func queryPrometheus(ctx context.Context, clientset *kubernetes.Clientset, service prometheusService, query string) (float64, bool) {
 	raw, err := clientset.CoreV1().RESTClient().Get().
 		Namespace(service.namespace).
@@ -1350,7 +1387,15 @@ func queryPrometheus(ctx context.Context, clientset *kubernetes.Clientset, servi
 		return 0, false
 	}
 	var response prometheusQueryResponse
-	if err := json.Unmarshal(raw, &response); err != nil || response.Status != "success" || len(response.Data.Result) == 0 || len(response.Data.Result[0].Value) < 2 {
+	if err := json.Unmarshal(raw, &response); err != nil || response.Status != "success" || len(response.Data.Result) == 0 {
+		return 0, false
+	}
+	return prometheusSampleValue(response)
+}
+
+// prometheusSampleValue extracts the first sample of a scalar/vector response.
+func prometheusSampleValue(response prometheusQueryResponse) (float64, bool) {
+	if len(response.Data.Result) == 0 || len(response.Data.Result[0].Value) < 2 {
 		return 0, false
 	}
 	var valueText string
