@@ -4,7 +4,7 @@
 
 一个参考 CNCF Headlamp 技术架构、聚焦集群稳定性的轻量多集群管理平台。
 
-当前正在实现第一个纵向功能：使用集群名称和上传的 Kubeconfig 纳管已有 Kubernetes 集群。
+**功能说明见 [`docs/product/features.md`](docs/product/features.md)**：按运维能力域组织，说明每个功能解决什么问题、关键概念、操作流程，以及数据来源与限制（含「面板为空为什么不是 Bug」这类边界）。
 
 ## 技术栈
 
