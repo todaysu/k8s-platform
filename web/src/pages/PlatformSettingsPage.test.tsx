@@ -7,7 +7,7 @@ const defaults = {
   runtime: { query_concurrency: 64, realtime_concurrency: 20, monitoring_concurrency: 8, session_concurrency: 10, per_cluster_concurrency: 2, auto_refresh_seconds: 30, operational_reports_enabled: false },
   collection: { health_interval_seconds: 60, health_timeout_seconds: 20, health_workers: 5, capacity_interval_seconds: 300, capacity_timeout_seconds: 45, capacity_workers: 3, resource_interval_seconds: 600, resource_timeout_seconds: 30, resource_workers: 2 },
   events: { normal_retention_days: 7, warning_retention_days: 30, rollup_retention_days: 365, daily_retention_days: 31, cleanup_batch_size: 5000 },
-  alerts: { resolved_retention_days: 180, cleanup_batch_size: 5000 },
+  alerts: { resolved_retention_days: 180, transition_retention_days: 180, hourly_retention_days: 400, daily_retention_days: 1095, coverage_retention_days: 400, cleanup_batch_size: 5000 },
   security: { kube_bench_image: 'repo/kube-bench:v1', kube_bench_image_amd64: '', kube_bench_image_arm64: '', image_pull_secret: '', namespace: 'kube-system', scan_workers: 2, host_workers: 5, scan_timeout_minutes: 30, pod_startup_timeout_minutes: 5 },
   java: { arthas_url: '', arthas_version: '4.3.5', arthas_sha256: '', download_timeout_seconds: 60, diagnostic_timeout_minutes: 30, max_concurrency: 2, heap_dump_enabled: false, heap_dump_max_gib: 4, temporary_retention_hours: 24 },
   database: { backup_enabled: false, backup_time: '02:00', backup_retention_days: 30, backup_target_node: '', backup_target_path: '', space_warning_percent: 80, space_critical_percent: 90, connection_check_seconds: 30 },
@@ -23,6 +23,7 @@ function mockSettingsFetch() {
       const value = init?.method === 'PUT' ? { ...JSON.parse(String(init.body)), api_key: undefined, clear_api_key: undefined, has_api_key: true } : modelConfig
       return { ok: true, json: async () => ({ data: value, error: null }) }
     }
+    if (url === '/api/v1/reports/config/test') return { ok: true, json: async () => ({ data: { ok: true, message: '模型连接成功（地址、网络与鉴权均正常）。AI 分析还要求模型稳定输出结构化 JSON，这一项单次测试覆盖不到。' }, error: null }) }
     return { ok: true, json: async () => ({ data: defaults, error: null }) }
   })
 }
@@ -106,7 +107,7 @@ describe('platform settings page', () => {
     expect(await screen.findByRole('textbox', { name: /^模型接口地址/ })).toHaveValue('https://model.internal/v1')
     expect(screen.getByRole('textbox', { name: /^模型名称/ })).toHaveValue('deepseek-chat')
     expect(screen.getByPlaceholderText('已保存，留空沿用')).toHaveAttribute('type', 'password')
-    expect(screen.getByText('认证密钥已加密保存；留空表示继续使用原密钥。')).toBeInTheDocument()
+    expect(screen.getByText(/认证密钥已加密保存，页面不再回显/)).toBeInTheDocument()
     await user.clear(screen.getByRole('textbox', { name: /^模型名称/ }))
     await user.type(screen.getByRole('textbox', { name: /^模型名称/ }), 'deepseek-v3')
     await user.click(screen.getByRole('button', { name: '保存配置' }))
@@ -126,6 +127,45 @@ describe('platform settings page', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/settings/runtime', expect.objectContaining({ method: 'PUT' })))
     const runtimeRequest = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/v1/settings/runtime' && init?.method === 'PUT')
     expect(JSON.parse(String(runtimeRequest?.[1]?.body))).toMatchObject({ operational_reports_enabled: true })
+  })
+
+  it('refuses to save an API Key that cannot be a credential', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=reports')
+    const fetchMock = mockSettingsFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<PlatformSettingsPage />)
+    const keyField = await screen.findByPlaceholderText('已保存，留空沿用')
+    await user.type(keyField, '想在平台里的ai模型中增加一个对话的功能，')
+    expect(await screen.findByText(/检测到不可打印字符/)).toBeInTheDocument()
+    expect(screen.getByText('有 1 项参数需要修正')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存配置' })).toBeDisabled()
+    await user.clear(keyField)
+    await user.type(keyField, 'abc')
+    expect(await screen.findByText(/至少需要 8 个字符/)).toBeInTheDocument()
+  })
+
+  it('probes the report model before saving and surfaces the failure', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=reports')
+    const fetchMock = mockSettingsFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<PlatformSettingsPage />)
+    await user.click(await screen.findByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/reports/config/test', expect.objectContaining({ method: 'POST' })))
+    expect(await screen.findByText('模型连接成功（地址、网络与鉴权均正常）。AI 分析还要求模型稳定输出结构化 JSON，这一项单次测试覆盖不到。')).toBeInTheDocument()
+  })
+
+  it('警告 API Key 无效时不隐藏模型原因', async () => {
+    window.history.replaceState({}, '', '/settings/access?tab=parameters&section=reports')
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/reports/config/test') return { ok: true, json: async () => ({ data: { ok: false, message: 'AI 分析未完成：API Key 无效或已过期（模型返回：invalid token）。已保留事实图表与规则建议。' }, error: null }) }
+      return mockSettingsFetch()(input as RequestInfo | URL, init)
+    })
+    const user = userEvent.setup()
+    render(<PlatformSettingsPage />)
+    await user.click(await screen.findByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText(/API Key 无效或已过期/)).toBeInTheDocument()
   })
 
   it('允许清空数字参数后重新输入', async () => {

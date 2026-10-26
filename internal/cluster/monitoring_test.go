@@ -18,7 +18,7 @@ func TestMonitoringQueryBoundaries(t *testing.T) {
 	if err := ValidateMonitoringQuery(base); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*MonitoringQuery){func(q *MonitoringQuery) { q.Start = now.Add(-8 * 24 * time.Hour) }, func(q *MonitoringQuery) { q.Pod = "pod"; q.Namespace = "" }, func(q *MonitoringQuery) { q.Namespace = `app"},x="` }, func(q *MonitoringQuery) { q.View = "arbitrary" }, func(q *MonitoringQuery) { q.End = q.Start }} {
+	for _, mutate := range []func(*MonitoringQuery){func(q *MonitoringQuery) { q.Start = now.Add(-8 * 24 * time.Hour) }, func(q *MonitoringQuery) { q.Pod = "pod"; q.Namespace = "" }, func(q *MonitoringQuery) { q.Namespace = `app"},x="` }, func(q *MonitoringQuery) { q.View = "arbitrary" }, func(q *MonitoringQuery) { q.Node = "worker-1" }, func(q *MonitoringQuery) { q.End = q.Start }} {
 		q := base
 		mutate(&q)
 		if ValidateMonitoringQuery(q) == nil {
@@ -31,11 +31,11 @@ func TestMonitoringQueryBoundaries(t *testing.T) {
 	}
 }
 func TestMonitoringPreservesZeroAndGaps(t *testing.T) {
-	rows, err := decodeMonitoring([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"pod":"web"},"values":[[1,"0"],[2,"NaN"],[3,"0.5"]]}]}}`))
+	rows, err := decodeMonitoring([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"pod":"web"},"values":[[1,"0"],[2,"NaN"],[3,"0.5"]]}]}}`), 40, "pods")
 	if err != nil || len(rows) != 1 || rows[0].Points[0].Value == nil || *rows[0].Points[0].Value != 0 || rows[0].Points[1].Value != nil {
 		t.Fatal(rows, err)
 	}
-	rows, err = decodeMonitoring([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"NaN"]]}]}}`))
+	rows, err = decodeMonitoring([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"NaN"]]}]}}`), 40, "pods")
 	if err != nil || len(rows) != 0 {
 		t.Fatal(rows, err)
 	}
@@ -46,7 +46,7 @@ func TestMonitoringSeriesLimit(t *testing.T) {
 		items = append(items, map[string]any{"metric": map[string]string{}, "values": [][]any{{1, "1"}}})
 	}
 	raw, _ := json.Marshal(map[string]any{"status": "success", "data": map[string]any{"resultType": "matrix", "result": items}})
-	if _, err := decodeMonitoring(raw); err == nil {
+	if _, err := decodeMonitoring(raw, 40, "pods"); err == nil {
 		t.Fatal("expected curve limit")
 	}
 }
@@ -126,5 +126,28 @@ func TestNodeMonitoringViewExposesHostPanels(t *testing.T) {
 		if !strings.Contains(queries[id], "device!~") {
 			t.Errorf("%s must exclude virtual network devices", id)
 		}
+	}
+	if strings.Contains(queries["node_filesystem_usage"], "sum by(node,instance)") || !strings.Contains(queries["node_filesystem_usage"], "max by(node,instance)") {
+		t.Error("filesystem panel must expose the fullest real filesystem per node")
+	}
+	if !strings.Contains(queries["node_network_errors"], "receive_drop_total") || !strings.Contains(queries["node_network_errors"], "transmit_drop_total") {
+		t.Error("network error panel must include dropped packets")
+	}
+}
+
+func TestNodeMonitoringCanFilterAtPrometheus(t *testing.T) {
+	now := time.Now()
+	q := MonitoringQuery{View: "nodes", Node: "worker-1", Start: now.Add(-time.Hour), End: now}
+	if err := ValidateMonitoringQuery(q); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range monitoringSpecs(q) {
+		if !strings.Contains(spec.query, `node="worker-1"`) {
+			t.Errorf("panel %s does not filter selected node: %s", spec.id, spec.query)
+		}
+	}
+	q.Node = `worker-1"}`
+	if ValidateMonitoringQuery(q) == nil {
+		t.Fatal("expected invalid node name")
 	}
 }

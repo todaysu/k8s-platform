@@ -188,7 +188,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: setup
-          image: ftc-platform:v1.0.1-amd64
+          image: ftc-platform:v1.1.0-amd64
           imagePullPolicy: IfNotPresent
           env:
             - name: SETUP_MODE

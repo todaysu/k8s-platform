@@ -10,6 +10,14 @@ export type ClusterAlert = {
   resource_kind: string
   resource_name: string
   summary: string
+  description: string
+  runbook_url: string
+  rule_url: string
+  labels: Record<string, string>
+  owner_kind: string
+  owner_name: string
+  source_type: string
+  occurrence_count: number
   state: string
   source: string
   starts_at: string
@@ -29,6 +37,8 @@ export type ClusterAlertPage = {
   total: number
   coverage: AlertCoverage[]
   collected_at: string
+  retention_days?: number
+  summary: { critical: number; warning: number; info: number; affected_clusters: number; affected_resources: number }
 }
 
 async function fetchCurrentAlerts(clusterId?: string): Promise<ClusterAlertPage> {

@@ -256,6 +256,17 @@ func (service *OnboardingService) activeCapacityClassification(ctx context.Conte
 	return CapacityClassification{BusinessNamespaces: []string{}, CommonPlatformNamespaces: []string{}, StackPlatformNamespaces: map[string][]string{}}, nil
 }
 
+// AlertBusinessNamespaces exposes only the global business namespace rule to
+// the alert collector. Historical alert rows keep the classification that was
+// active when the alert was observed.
+func (service *OnboardingService) AlertBusinessNamespaces(ctx context.Context) ([]string, error) {
+	value, err := service.activeCapacityClassification(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return normalizedNamespaces(value.BusinessNamespaces), nil
+}
+
 func capacityRuleForStack(value CapacityClassification, _ string) CapacityRule {
 	// Legacy platform lists remain in historical versions only. All non-business namespaces are platform.
 	return CapacityRule{VersionID: value.ID, BusinessNamespaces: normalizedNamespaces(value.BusinessNamespaces)}

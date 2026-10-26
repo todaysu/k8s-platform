@@ -58,6 +58,7 @@ import {
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
   FileAltIcon,
+  HistoryIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
@@ -165,18 +166,34 @@ const statusMeta: Record<ClusterStatus, {
 
 type NavigationSection = 'overview' | 'clusters' | 'capacity' | 'events' | 'alerts' | 'inspections' | 'reports' | 'security' | 'access' | 'tools' | 'monitoring'
 
+// 侧边栏入口统一为「领域 + 功能」四字结构，读起来成列对齐，也避免"跨集群"这类在多集群平台里冗余的前缀。
 const navItems = [
-  { icon: TachometerAltIcon, id: 'overview' as const, label: '概览' },
-  { icon: ServerIcon, id: 'clusters' as const, label: '集群' },
-  { icon: ChartLineIcon, id: 'monitoring' as const, label: '监控' },
-  { icon: BellIcon, id: 'alerts' as const, label: '告警' },
-  { icon: ChartPieIcon, id: 'capacity' as const, label: '容量' },
-  { icon: BellIcon, id: 'events' as const, label: '跨集群事件' },
-  { icon: SearchIcon, id: 'inspections' as const, label: '巡检分析' },
-  { icon: FileAltIcon, id: 'reports' as const, label: '运行报告' },
-  { icon: ShieldAltIcon, id: 'security' as const, label: '安全扫描' },
+  { icon: TachometerAltIcon, id: 'overview' as const, label: '健康总览' },
+  { icon: ServerIcon, id: 'clusters' as const, label: '集群管理' },
+  { icon: ChartLineIcon, id: 'monitoring' as const, label: '指标监控' },
+  { icon: BellIcon, id: 'alerts' as const, label: '告警中心' },
+  { icon: ChartPieIcon, id: 'capacity' as const, label: '资源容量' },
+  { icon: HistoryIcon, id: 'events' as const, label: '事件检索' },
+  { icon: SearchIcon, id: 'inspections' as const, label: '主动巡检' },
+  { icon: FileAltIcon, id: 'reports' as const, label: '运维报告' },
+  { icon: ShieldAltIcon, id: 'security' as const, label: '安全基线' },
   { icon: CubesIcon, id: 'tools' as const, label: '运维工具' },
 ]
+
+// 页面大标题与侧边栏共用同一套命名，避免同一个入口出现两种说法。
+const sectionTitles: Record<NavigationSection, string> = {
+  access: '平台管理',
+  alerts: '告警中心',
+  capacity: '资源池容量',
+  clusters: '集群管理',
+  events: '事件检索',
+  inspections: '主动巡检',
+  monitoring: '指标监控',
+  overview: '多集群健康概览',
+  reports: '运维报告',
+  security: '安全基线',
+  tools: '运维工具',
+}
 
 const statusFilters = [
   { label: '全部状态', value: 'ALL' },
@@ -852,7 +869,7 @@ function ClusterManagementPage() {
               <div className="ks-title-row">
                 <div>
                   <Title headingLevel="h1" size="2xl">
-                    {activeSection === 'overview' ? '多集群健康概览' : activeSection === 'capacity' ? '资源池容量' : activeSection === 'alerts' ? '告警' : activeSection === 'events' ? '跨集群事件' : activeSection === 'inspections' ? '主动巡检' : activeSection === 'reports' ? '运行报告' : activeSection === 'security' ? '安全扫描' : activeSection === 'access' ? '平台管理' : activeSection === 'tools' ? toolTitle : activeSection === 'monitoring' ? '监控' : '集群'}
+                    {activeSection === 'tools' ? toolTitle : sectionTitles[activeSection]}
                   </Title>
 
                 </div>

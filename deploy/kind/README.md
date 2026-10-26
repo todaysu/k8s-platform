@@ -47,13 +47,13 @@ ftc-platform:v1.0.1-amd64
 如果使用内部镜像仓库，只需修改 [`deploy/install.yaml`](../install.yaml) 中唯一的平台镜像：
 
 ```yaml
-image: ftc-platform:v1.0.1-amd64
+image: ftc-platform:v1.1.0-amd64
 ```
 
 例如改为：
 
 ```yaml
-image: registry.internal/ftc/ftc-platform:v1.0.1-amd64
+image: registry.internal/ftc/ftc-platform:v1.1.0-amd64
 ```
 
 ### 2.3 直接部署

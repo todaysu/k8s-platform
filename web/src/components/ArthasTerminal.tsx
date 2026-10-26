@@ -143,7 +143,7 @@ const ArthasTerminal = forwardRef<ArthasTerminalHandle, Props>(function ArthasTe
   }, [active, clusterId, container, namespace, podName])
 
   return <div className="ks-arthas-terminal-wrap" data-state={state}>
-    <div aria-label="Arthas 交互式终端" className="ks-arthas-terminal" ref={host} />
+    <div aria-label="Arthas 交互式终端" className="ks-arthas-terminal"><div className="ks-arthas-terminal-view" ref={host} /></div>
     {state === 'connecting' && <div className="ks-arthas-terminal-status" role="status">正在建立连接…</div>}
   </div>
 })

@@ -13,6 +13,23 @@ type monitorFixture struct{}
 func (monitorFixture) GetMonitoring(context.Context, string, cluster.MonitoringQuery) (cluster.MonitoringSnapshot, error) {
 	return cluster.MonitoringSnapshot{}, nil
 }
+
+type capturingMonitorFixture struct{ query cluster.MonitoringQuery }
+
+func (fixture *capturingMonitorFixture) GetMonitoring(_ context.Context, _ string, query cluster.MonitoringQuery) (cluster.MonitoringSnapshot, error) {
+	fixture.query = query
+	return cluster.MonitoringSnapshot{}, nil
+}
+
+func TestMonitoringPassesNodeFilter(t *testing.T) {
+	fixture := &capturingMonitorFixture{}
+	r := httptest.NewRequest("GET", "/clusters/a/monitoring?view=nodes&node=worker-1&start=2026-10-18T00:00:00Z&end=2026-10-19T00:00:00Z", nil)
+	w := httptest.NewRecorder()
+	monitoringHandler(fixture).ServeHTTP(w, r)
+	if w.Code != 200 || fixture.query.Node != "worker-1" {
+		t.Fatal(w.Code, fixture.query)
+	}
+}
 func TestMonitoringRejectsUnboundedQueries(t *testing.T) {
 	r := httptest.NewRequest("GET", "/clusters/a/monitoring?view=pods", nil)
 	w := httptest.NewRecorder()

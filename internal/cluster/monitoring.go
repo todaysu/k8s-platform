@@ -36,8 +36,8 @@ func monitoringConnectionError(err error) error {
 }
 
 type MonitoringQuery struct {
-	View, Namespace, Pod string
-	Start, End           time.Time
+	View, Namespace, Pod, Node string
+	Start, End                 time.Time
 }
 type MonitoringPoint struct {
 	Time  float64  `json:"time"`
@@ -88,6 +88,9 @@ func ValidateMonitoringQuery(q MonitoringQuery) error {
 	if q.Pod != "" && (q.Namespace == "" || len(validation.IsDNS1123Subdomain(q.Pod)) > 0) {
 		return fmt.Errorf("pod requires namespace")
 	}
+	if q.Node != "" && (q.View != "nodes" || len(validation.IsDNS1123Subdomain(q.Node)) > 0) {
+		return fmt.Errorf("node requires nodes view")
+	}
 	return nil
 }
 func monitoringSpecs(q MonitoringQuery) []monitoringSpec {
@@ -122,7 +125,7 @@ func monitoringSpecs(q MonitoringQuery) []monitoringSpec {
 		return etcd
 	}
 	if q.View == "nodes" {
-		return nodeSpecs()
+		return nodeSpecs(q.Node)
 	}
 	if q.View == "overview" {
 		return []monitoringSpec{{"cpu", "Pod CPU 使用总量", "cores", "容器 CPU 使用核数合计，不是主机 CPU 利用率。", `sum(` + cpu + `)`}, {"memory", "Pod 内存工作集总量", "bytes", "容器工作集合计，不是主机内存利用率。", `sum(` + memory + `)`}, api[1], etcd[0]}
@@ -144,26 +147,44 @@ func monitoringSpecs(q MonitoringQuery) []monitoringSpec {
 // different job names across environments (kube-prometheus-stack uses its own),
 // and the node_* metric names are unique to node-exporter, so filtering on job
 // would make these panels silently empty on otherwise healthy clusters.
-func nodeSpecs() []monitoringSpec {
+func nodeSpecs(node string) []monitoringSpec {
 	// Virtual filesystems report memory usage or container layers rather than
 	// real disk pressure; counting them would distort the usage percentage.
-	const realFilesystems = `fstype!~"tmpfs|ramfs|overlay|squashfs|iso9660|nfs.*|cifs|autofs"`
+	realFilesystems := `fstype!~"tmpfs|ramfs|overlay|squashfs|iso9660|nfs.*|cifs|autofs"`
 	// Loopback and CNI devices carry node-local traffic only. Counting them
 	// would multiply real throughput by the number of local pods.
-	const realDevices = `device!~"lo|veth.*|tunl.*|erspan.*|gre.*|sit.*|ip6.*|docker.*|br-.*|cni.*|flannel.*|cali.*"`
+	realDevices := `device!~"lo|veth.*|tunl.*|erspan.*|gre.*|sit.*|ip6.*|docker.*|br-.*|cni.*|flannel.*|cali.*"`
+	nodeSelector := ""
+	if node != "" {
+		nodeSelector = `node=` + strconv.Quote(node)
+		realFilesystems += `,` + nodeSelector
+		realDevices += `,` + nodeSelector
+	}
+	selector := func(extra string) string {
+		if nodeSelector == "" {
+			if extra == "" {
+				return ""
+			}
+			return `{` + extra + `}`
+		}
+		if extra == "" {
+			return `{` + nodeSelector + `}`
+		}
+		return `{` + extra + `,` + nodeSelector + `}`
+	}
 	byNode := "by(node,instance)"
 	return []monitoringSpec{
-		{"node_cpu_usage", "节点 CPU 使用率", "%", "按节点汇总所有核心的非 idle 占比；与 Pod CPU 之和不相等，差值来自系统进程。", `100 - (avg ` + byNode + `(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)`},
-		{"node_load1", "节点 1 分钟负载", "load", "负载包含不可中断 I/O 等待；需结合核心数判断，16 核负载 8 与 2 核负载 8 含义不同。", `max ` + byNode + `(node_load1)`},
-		{"node_memory_usage", "节点内存使用率", "%", "基于 MemAvailable 而非 MemFree，已计入可回收缓存，比 free 更接近真实压力。", `100 * (1 - sum ` + byNode + `(node_memory_MemAvailable_bytes) / sum ` + byNode + `(node_memory_MemTotal_bytes))`},
-		{"node_filesystem_usage", "节点磁盘空间使用率", "%", "排除 tmpfs/overlay 等虚拟文件系统后按节点合计；单分区环境即根分区使用率。", `100 * (1 - sum ` + byNode + `(node_filesystem_avail_bytes{` + realFilesystems + `}) / sum ` + byNode + `(node_filesystem_size_bytes{` + realFilesystems + `}))`},
-		{"node_disk_read", "节点磁盘读取吞吐量", "bytes/s", "5 分钟平均，按节点汇总全部块设备；含内核预读，可能高于应用实际读取量。", `sum ` + byNode + `(rate(node_disk_read_bytes_total[5m]))`},
-		{"node_disk_write", "节点磁盘写入吞吐量", "bytes/s", "5 分钟平均，按节点汇总全部块设备。", `sum ` + byNode + `(rate(node_disk_written_bytes_total[5m]))`},
-		{"node_disk_iops", "节点磁盘 IOPS", "IOPS", "读写操作合计速率；小文件密集场景比吞吐量更能反映压力。", `sum ` + byNode + `(rate(node_disk_reads_completed_total[5m]) + rate(node_disk_writes_completed_total[5m]))`},
-		{"node_disk_utilization", "节点磁盘 I/O 利用率", "%", "设备处于忙碌状态的时间占比；持续接近 100% 表示磁盘成为瓶颈，多盘软 RAID 会相互掩盖。", `100 * max ` + byNode + `(rate(node_disk_io_time_seconds_total[5m]))`},
+		{"node_cpu_usage", "节点 CPU 使用率", "%", "按节点汇总所有核心的非 idle 占比；与 Pod CPU 之和不相等，差值来自系统进程。", `100 - (avg ` + byNode + `(rate(node_cpu_seconds_total` + selector(`mode="idle"`) + `[5m])) * 100)`},
+		{"node_load1", "节点 1 分钟负载", "load", "负载包含不可中断 I/O 等待；需结合核心数判断，16 核负载 8 与 2 核负载 8 含义不同。", `max ` + byNode + `(node_load1` + selector("") + `)`},
+		{"node_memory_usage", "节点内存使用率", "%", "基于 MemAvailable 而非 MemFree，已计入可回收缓存，比 free 更接近真实压力。", `100 * (1 - sum ` + byNode + `(node_memory_MemAvailable_bytes` + selector("") + `) / sum ` + byNode + `(node_memory_MemTotal_bytes` + selector("") + `))`},
+		{"node_filesystem_usage", "节点最满分区使用率", "%", "展示每个节点使用率最高的真实文件系统，避免整机汇总掩盖单个分区已满。", `max ` + byNode + `(100 * (1 - node_filesystem_avail_bytes{` + realFilesystems + `} / node_filesystem_size_bytes{` + realFilesystems + `}))`},
+		{"node_disk_read", "节点磁盘读取吞吐量", "bytes/s", "5 分钟平均，按节点汇总全部块设备；含内核预读，可能高于应用实际读取量。", `sum ` + byNode + `(rate(node_disk_read_bytes_total` + selector("") + `[5m]))`},
+		{"node_disk_write", "节点磁盘写入吞吐量", "bytes/s", "5 分钟平均，按节点汇总全部块设备。", `sum ` + byNode + `(rate(node_disk_written_bytes_total` + selector("") + `[5m]))`},
+		{"node_disk_iops", "节点磁盘 IOPS", "IOPS", "读写操作合计速率；小文件密集场景比吞吐量更能反映压力。", `sum ` + byNode + `(rate(node_disk_reads_completed_total` + selector("") + `[5m])) + sum ` + byNode + `(rate(node_disk_writes_completed_total` + selector("") + `[5m]))`},
+		{"node_disk_utilization", "节点磁盘 I/O 利用率", "%", "设备处于忙碌状态的时间占比；持续接近 100% 表示磁盘成为瓶颈，多盘软 RAID 会相互掩盖。", `100 * max ` + byNode + `(rate(node_disk_io_time_seconds_total` + selector("") + `[5m]))`},
 		{"node_network_receive", "节点网络接收速率", "bytes/s", "排除回环与 CNI 虚拟设备，避免把 Pod 间流量重复计入物理网卡。", `sum ` + byNode + `(rate(node_network_receive_bytes_total{` + realDevices + `}[5m]))`},
 		{"node_network_transmit", "节点网络发送速率", "bytes/s", "排除回环与 CNI 虚拟设备。", `sum ` + byNode + `(rate(node_network_transmit_bytes_total{` + realDevices + `}[5m]))`},
-		{"node_network_errors", "节点网络错误速率", "pps", "收发错误与丢包合计；持续非零需检查网卡、MTU 与对端链路。", `sum ` + byNode + `(rate(node_network_receive_errs_total{` + realDevices + `}[5m]) + rate(node_network_transmit_errs_total{` + realDevices + `}[5m]))`},
+		{"node_network_errors", "节点网络错误与丢包速率", "pps", "收发错误与丢包合计；持续非零需检查网卡、MTU 与对端链路。", `sum ` + byNode + `(rate(node_network_receive_errs_total{` + realDevices + `}[5m]) + rate(node_network_transmit_errs_total{` + realDevices + `}[5m]) + rate(node_network_receive_drop_total{` + realDevices + `}[5m]) + rate(node_network_transmit_drop_total{` + realDevices + `}[5m]))`},
 	}
 }
 func (service *OnboardingService) GetMonitoring(ctx context.Context, id string, q MonitoringQuery) (MonitoringSnapshot, error) {
@@ -178,7 +199,7 @@ func (service *OnboardingService) GetMonitoring(ctx context.Context, id string, 
 	if err != nil {
 		return MonitoringSnapshot{}, err
 	}
-	key := fmt.Sprintf("%s/%s/%s/%s/%d/%d", id, q.View, q.Namespace, q.Pod, q.Start.Unix(), q.End.Unix())
+	key := fmt.Sprintf("%s/%s/%s/%s/%s/%d/%d", id, q.View, q.Namespace, q.Pod, q.Node, q.Start.Unix(), q.End.Unix())
 	monitorCache.Lock()
 	entry, ok := monitorCache.items[key]
 	monitorCache.Unlock()
@@ -248,7 +269,11 @@ func (service *OnboardingService) GetMonitoring(ctx context.Context, id string, 
 }
 func queryMonitoringPanel(ctx context.Context, client *kubernetes.Clientset, source prometheusService, spec monitoringSpec, q MonitoringQuery, step int) MonitoringPanel {
 	panel := MonitoringPanel{ID: spec.id, Title: spec.title, Unit: spec.unit, Hint: spec.hint, Status: "error", Series: []MonitoringSeries{}}
-	stream, err := client.CoreV1().RESTClient().Get().Namespace(source.namespace).Resource("services").Name(source.proxyName).SubResource("proxy").Suffix("api", "v1", "query_range").Param("query", spec.query).Param("start", strconv.FormatInt(q.Start.Unix(), 10)).Param("end", strconv.FormatInt(q.End.Unix(), 10)).Param("step", strconv.Itoa(step)).Param("timeout", "8s").Param("limit", "41").Stream(ctx)
+	maxSeries := 40
+	if q.View == "nodes" && q.Node == "" {
+		maxSeries = 100
+	}
+	stream, err := client.CoreV1().RESTClient().Get().Namespace(source.namespace).Resource("services").Name(source.proxyName).SubResource("proxy").Suffix("api", "v1", "query_range").Param("query", spec.query).Param("start", strconv.FormatInt(q.Start.Unix(), 10)).Param("end", strconv.FormatInt(q.End.Unix(), 10)).Param("step", strconv.Itoa(step)).Param("timeout", "8s").Param("limit", strconv.Itoa(maxSeries+1)).Stream(ctx)
 	if err != nil {
 		switch {
 		case apierrors.IsForbidden(err):
@@ -268,7 +293,7 @@ func queryMonitoringPanel(ctx context.Context, client *kubernetes.Clientset, sou
 		panel.Message = "响应过大或读取失败，请缩小查询范围。"
 		return panel
 	}
-	series, err := decodeMonitoring(raw)
+	series, err := decodeMonitoring(raw, maxSeries, q.View)
 	if err != nil {
 		panel.Message = err.Error()
 		return panel
@@ -282,7 +307,7 @@ func queryMonitoringPanel(ctx context.Context, client *kubernetes.Clientset, sou
 	}
 	return panel
 }
-func decodeMonitoring(raw []byte) ([]MonitoringSeries, error) {
+func decodeMonitoring(raw []byte, maxSeries int, view string) ([]MonitoringSeries, error) {
 	var response struct {
 		Status string `json:"status"`
 		Data   struct {
@@ -296,8 +321,11 @@ func decodeMonitoring(raw []byte) ([]MonitoringSeries, error) {
 	if json.Unmarshal(raw, &response) != nil || response.Status != "success" || response.Data.ResultType != "matrix" {
 		return nil, fmt.Errorf("Prometheus 返回异常，未获取到历史序列")
 	}
-	if len(response.Data.Result) > 40 {
-		return nil, fmt.Errorf("曲线超过 40 条，请选择命名空间或指定 Pod")
+	if len(response.Data.Result) > maxSeries {
+		if view == "nodes" {
+			return nil, fmt.Errorf("节点曲线超过 %d 条，请选择具体节点", maxSeries)
+		}
+		return nil, fmt.Errorf("曲线超过 %d 条，请选择命名空间或指定 Pod", maxSeries)
 	}
 	result := []MonitoringSeries{}
 	for _, item := range response.Data.Result {

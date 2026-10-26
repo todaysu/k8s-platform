@@ -30,6 +30,10 @@ export type EventSettings = {
 
 export type AlertSettings = {
   resolved_retention_days: number
+  transition_retention_days: number
+  hourly_retention_days: number
+  daily_retention_days: number
+  coverage_retention_days: number
   cleanup_batch_size: number
 }
 

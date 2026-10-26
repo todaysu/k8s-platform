@@ -69,8 +69,12 @@ type Events struct {
 }
 
 type Alerts struct {
-	ResolvedRetentionDays int `json:"resolved_retention_days"`
-	CleanupBatchSize      int `json:"cleanup_batch_size"`
+	ResolvedRetentionDays   int `json:"resolved_retention_days"`
+	TransitionRetentionDays int `json:"transition_retention_days"`
+	HourlyRetentionDays     int `json:"hourly_retention_days"`
+	DailyRetentionDays      int `json:"daily_retention_days"`
+	CoverageRetentionDays   int `json:"coverage_retention_days"`
+	CleanupBatchSize        int `json:"cleanup_batch_size"`
 }
 
 type Security struct {
@@ -135,7 +139,7 @@ func Defaults() Settings {
 		Runtime:    Runtime{QueryConcurrency: 64, RealtimeConcurrency: 20, MonitoringConcurrency: 8, SessionConcurrency: 10, PerClusterConcurrency: 2, AutoRefreshSeconds: 30, OperationalReportsEnabled: false},
 		Collection: Collection{HealthIntervalSeconds: 60, HealthTimeoutSeconds: 20, HealthWorkers: 5, CapacityIntervalSeconds: 300, CapacityTimeoutSeconds: 45, CapacityWorkers: 3, ResourceIntervalSeconds: 600, ResourceTimeoutSeconds: 30, ResourceWorkers: 2},
 		Events:     Events{NormalRetentionDays: 7, WarningRetentionDays: 30, RollupRetentionDays: 365, DailyRetentionDays: 31, CleanupBatchSize: 5000},
-		Alerts:     Alerts{ResolvedRetentionDays: 180, CleanupBatchSize: 5000},
+		Alerts:     Alerts{ResolvedRetentionDays: 180, TransitionRetentionDays: 180, HourlyRetentionDays: 400, DailyRetentionDays: 1095, CoverageRetentionDays: 400, CleanupBatchSize: 5000},
 		Security:   Security{KubeBenchImage: "docker.io/aquasec/kube-bench:v0.16.0", Namespace: "kube-system", ScanWorkers: 2, HostWorkers: 5, ScanTimeoutMinutes: 30, PodStartupMinutes: 5},
 		Java:       Java{ArthasVersion: "4.3.5", DownloadTimeoutSeconds: 60, DiagnosticTimeoutMinutes: 30, MaxConcurrency: 2, HeapDumpMaxGiB: 4, TemporaryRetentionHours: 24},
 		Database:   Database{BackupEnabled: false, BackupTime: "02:00", BackupRetentionDays: 30, SpaceWarningPercent: 80, SpaceCriticalPercent: 90, ConnectionCheckSeconds: 30},
@@ -293,7 +297,7 @@ func validate(value Settings, section string) error {
 		checks := []struct {
 			name            string
 			value, min, max int
-		}{{"resolved_retention_days", value.Alerts.ResolvedRetentionDays, 1, 3650}, {"cleanup_batch_size", value.Alerts.CleanupBatchSize, 100, 50000}}
+		}{{"resolved_retention_days", value.Alerts.ResolvedRetentionDays, 1, 3650}, {"transition_retention_days", value.Alerts.TransitionRetentionDays, 1, 3650}, {"hourly_retention_days", value.Alerts.HourlyRetentionDays, 30, 3650}, {"daily_retention_days", value.Alerts.DailyRetentionDays, 90, 3650}, {"coverage_retention_days", value.Alerts.CoverageRetentionDays, 30, 3650}, {"cleanup_batch_size", value.Alerts.CleanupBatchSize, 100, 50000}}
 		for _, item := range checks {
 			if err := rangeCheck(item.name, item.value, item.min, item.max); err != nil {
 				return err

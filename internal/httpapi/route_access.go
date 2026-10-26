@@ -42,8 +42,14 @@ var privilegedRoutes = []routeAccess{
 	// Reports are visible to authenticated users; generation and model secrets
 	// remain administrator operations.
 	{pattern: "POST /api/v1/reports", minRole: roleAdmin},
+	{pattern: "DELETE /api/v1/reports/{id}", minRole: roleAdmin},
+	{pattern: "GET /api/v1/report-jobs", minRole: roleAdmin},
+	{pattern: "GET /api/v1/report-jobs/{id}", minRole: roleAdmin},
 	{pattern: "GET /api/v1/reports/config", minRole: roleAdmin},
 	{pattern: "PUT /api/v1/reports/config", minRole: roleAdmin},
+	// The probe sends one real request to the model endpoint, which costs quota
+	// and exposes whether a credential is valid, so it stays admin-only.
+	{pattern: "POST /api/v1/reports/config/test", minRole: roleAdmin},
 	// Pod terminal: operators may use it, but Arthas reaches into the
 	// container filesystem, so it is admin-only.
 	{pattern: "GET /api/v1/clusters/{id}/pods/{namespace}/{name}/exec", minRole: roleOperator, websocket: true, adminOnlyModeQuery: "mode", adminOnlyModeValue: "arthas"},

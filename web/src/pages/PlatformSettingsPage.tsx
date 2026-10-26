@@ -1,7 +1,7 @@
 import { Alert, Button, Card, CardBody, Spinner } from '@patternfly/react-core'
-import { BellIcon, ChartLineIcon, CheckCircleIcon, CogIcon, DatabaseIcon, JavaIcon, OutlinedBellIcon, SecurityIcon, TachometerAltIcon } from '@patternfly/react-icons'
+import { BellIcon, ChartLineIcon, CheckCircleIcon, CogIcon, DatabaseIcon, ExclamationCircleIcon, JavaIcon, OutlinedBellIcon, SecurityIcon, TachometerAltIcon } from '@patternfly/react-icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getReportModelConfig, saveReportModelConfig, type ReportModelConfig } from '../api/reports'
+import { getReportModelConfig, saveReportModelConfig, testReportModelConfig, type ReportModelConfig, type ReportModelProbe } from '../api/reports'
 import { fetchPlatformSettings, savePlatformSettings, type PlatformSettings, type SettingsApplyStatus, type SettingsSection } from '../api/settings'
 import { usePermission } from '../auth/context'
 import { validateSection, type FieldErrors } from './platformSettingsValidation'
@@ -162,7 +162,7 @@ export default function PlatformSettingsPage({ embedded = false }: { embedded?: 
               {dirty && <span className="ks-settings-dirty"><span aria-hidden="true" />未保存</span>}
             </div>
           </header>
-          <div className="ks-settings-form" ref={formScrollRef}>{active === 'reports' ? renderReportForm(reportDraft, setReportDraft, errors) : renderForm(active, draft, update, errors)}</div>
+          <div className="ks-settings-form" ref={formScrollRef}>{active === 'reports' ? <ReportModelForm errors={errors} setValue={setReportDraft} value={reportDraft} /> : renderForm(active, draft, update, errors)}</div>
           {!canConfigure && <p className="ks-settings-readonly">当前账号只能查看配置，修改需要平台管理员权限。</p>}
           <footer className="ks-settings-footer"><span>{active === 'reports' ? (reportConfig?.enabled ? (reportConfig.endpoint && reportConfig.model ? <><CheckCircleIcon /> AI 运行报告已启用，模型服务已配置{reportConfig.has_api_key ? '，认证密钥已保存' : ''}</> : 'AI 运行报告已启用，当前使用统计模式') : '运行报告入口当前已关闭') : updatedAt ? <><CheckCircleIcon /> 上次保存：{new Date(updatedAt).toLocaleString('zh-CN', { hour12: false })}</> : '当前使用平台推荐默认值'}</span><Button isDisabled={!dirty || saving} onClick={() => active === 'reports' ? reportConfig && setReportDraft({ ...reportConfig, api_key: '', clear_api_key: false }) : settings && setDraft(structuredClone(settings))} variant="link">放弃修改</Button><Button isDisabled={!canConfigure || !dirty || errorCount > 0} isLoading={saving} onClick={() => void save()}>保存配置</Button></footer>
         </CardBody>
@@ -184,18 +184,49 @@ function validateReportConfig(value: ReportModelConfig | null): FieldErrors {
     } catch { errors.endpoint = '请输入有效的 HTTP(S) 接口地址。' }
     if (!model) errors.model = '配置接口地址时必须填写模型名称。'
   }
+  const apiKeyError = validateAPIKey(value.api_key ?? '')
+  if (apiKeyError) errors.api_key = apiKeyError
   return errors
 }
 
-function renderReportForm(value: ReportModelConfig | null, setValue: React.Dispatch<React.SetStateAction<ReportModelConfig | null>>, errors: FieldErrors) {
+// A saved key is never shown again, so a pasted note would otherwise survive
+// unnoticed until every report failed at the model service.
+function validateAPIKey(value: string): string {
+  const key = value.trim()
+  if (!key) return ''
+  if (key.length < 8) return 'API Key 至少需要 8 个字符，疑似误填。'
+  if (key.length > 8192) return 'API Key 过长，请检查是否粘贴了多余内容。'
+  for (const char of key) {
+    const code = char.codePointAt(0) ?? 0
+    if (code < 32 || code > 126) return 'API Key 只能包含英文字母、数字和常见符号；检测到不可打印字符，请确认没有把说明文字填进来。'
+  }
+  return ''
+}
+
+function ReportModelForm({ value, setValue, errors }: { value: ReportModelConfig | null; setValue: React.Dispatch<React.SetStateAction<ReportModelConfig | null>>; errors: FieldErrors }) {
+  const canConfigure = usePermission('configure')
+  const [probing, setProbing] = useState(false)
+  const [probe, setProbe] = useState<ReportModelProbe | null>(null)
   if (!value) return <Alert isInline title="AI 报告模型配置加载失败" variant="danger">请刷新页面后重试。</Alert>
-  const patch = (change: Partial<ReportModelConfig>) => setValue((current) => current ? { ...current, ...change } : current)
+  const patch = (change: Partial<ReportModelConfig>) => { setProbe(null); setValue((current) => current ? { ...current, ...change } : current) }
+  const runProbe = async () => {
+    setProbing(true); setProbe(null)
+    try { setProbe(await testReportModelConfig(value)) } catch (error) { setProbe({ ok: false, message: error instanceof Error ? error.message : '测试模型连接失败。' }) } finally { setProbing(false) }
+  }
+  const unsavedKey = Boolean(value.api_key)
+  const missing = !value.endpoint.trim() || !value.model.trim()
   return <>
     <Field help="开启后在平台主导航显示运行报告；关闭不会删除已生成的报告。" label="运行报告"><span className="ks-settings-check"><input aria-label="在主页面启用运行报告" checked={value.enabled} onChange={(event) => patch({ enabled: event.target.checked })} type="checkbox" />在主页面启用运行报告</span></Field>
     <TextField error={errors.endpoint} help="兼容 OpenAI Chat Completions 的 API 基础地址，例如 https://model.internal/v1。" label="模型接口地址" onChange={(endpoint) => patch({ endpoint })} placeholder="https://model.internal/v1" type="url" value={value.endpoint} wide />
     <TextField error={errors.model} help="填写内网模型服务提供的模型标识。" label="模型名称" onChange={(model) => patch({ model })} placeholder="例如 deepseek-chat" value={value.model} />
-    <TextField help={value.has_api_key ? '认证密钥已加密保存；留空表示继续使用原密钥。' : '模型接口不需要认证时可以留空。'} label="API Key" onChange={(api_key) => patch({ api_key, clear_api_key: api_key ? false : value.clear_api_key })} placeholder={value.has_api_key ? '已保存，留空沿用' : '需要认证时填写'} type="password" value={value.api_key ?? ''} />
+    <TextField error={errors.api_key} help={value.has_api_key ? '认证密钥已加密保存，页面不再回显；留空表示继续使用原密钥。' : '模型接口不需要认证时可以留空。密钥只接受可打印字符，避免误把说明文字存进去。'} label="API Key" onChange={(api_key) => patch({ api_key, clear_api_key: api_key ? false : value.clear_api_key })} placeholder={value.has_api_key ? '已保存，留空沿用' : '需要认证时填写'} type="password" value={value.api_key ?? ''} />
     {value.has_api_key && <Field help="保存后删除平台已加密保存的模型认证密钥。" label="已保存密钥"><span className="ks-settings-check"><input aria-label="清除已保存的 API Key" checked={Boolean(value.clear_api_key)} onChange={(event) => patch({ clear_api_key: event.target.checked, api_key: event.target.checked ? '' : value.api_key })} type="checkbox" />清除已保存的 API Key</span></Field>}
+    {canConfigure && <div className="ks-settings-probe">
+      <Button isDisabled={probing || missing} isLoading={probing} onClick={() => void runProbe()} variant="secondary">{probing ? '正在测试' : '测试连接'}</Button>
+      <small>{missing ? '填写接口地址与模型名称后可测试。' : unsavedKey ? '将使用当前尚未保存的密钥发起一次真实调用（消耗少量额度），用于校验地址、网络和密钥是否有效。' : '将使用已保存的密钥发起一次真实调用，用于校验地址、网络和密钥是否有效。'}</small>
+      {probe && <Alert isInline title={probe.message} variant={probe.ok ? 'success' : 'warning'} />}
+      {probe?.ok && unsavedKey && <p className="ks-settings-probe-hint"><ExclamationCircleIcon />测试通过，但新密钥尚未保存，请点击“保存配置”。</p>}
+    </div>}
   </>
 }
 
@@ -242,6 +273,10 @@ function renderForm(active: SettingsSection, value: PlatformSettings, update: <K
     const v = value.alerts
     return <>
       <NumberField error={errors.resolved_retention_days} help="只清理已恢复告警；当前 firing 和 suppressed 告警不会因到期删除。" label="已恢复告警保留（天）" max={3650} onChange={(n) => update('alerts', { resolved_retention_days: n })} value={v.resolved_retention_days} />
+      <NumberField error={errors.transition_retention_days} help="保留 firing、suppressed、resolved 状态变化证据。" label="状态变化保留（天）" max={3650} onChange={(n) => update('alerts', { transition_retention_days: n })} value={v.transition_retention_days} />
+      <NumberField error={errors.hourly_retention_days} help="支撑周报、月报和近期趋势。" label="小时汇总保留（天）" max={3650} min={30} onChange={(n) => update('alerts', { hourly_retention_days: n })} value={v.hourly_retention_days} />
+      <NumberField error={errors.daily_retention_days} help="支撑季报和长期对比。" label="日汇总保留（天）" max={3650} min={90} onChange={(n) => update('alerts', { daily_retention_days: n })} value={v.daily_retention_days} />
+      <NumberField error={errors.coverage_retention_days} help="记录采集成功与失败时段，防止把未采到误判为无告警。" label="采集覆盖保留（天）" max={3650} min={30} onChange={(n) => update('alerts', { coverage_retention_days: n })} value={v.coverage_retention_days} />
       <NumberField error={errors.cleanup_batch_size} help="每轮最多删除的告警记录数，避免大表清理形成长事务。" label="单次清理批次" max={50000} min={100} onChange={(n) => update('alerts', { cleanup_batch_size: n })} value={v.cleanup_batch_size} />
     </>
   }

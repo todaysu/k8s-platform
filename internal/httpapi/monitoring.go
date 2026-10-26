@@ -21,7 +21,7 @@ func monitoringHandler(manager any) http.HandlerFunc {
 		}
 		start, _ := time.Parse(time.RFC3339, r.URL.Query().Get("start"))
 		end, _ := time.Parse(time.RFC3339, r.URL.Query().Get("end"))
-		q := cluster.MonitoringQuery{View: r.URL.Query().Get("view"), Namespace: r.URL.Query().Get("namespace"), Pod: r.URL.Query().Get("pod"), Start: start, End: end}
+		q := cluster.MonitoringQuery{View: r.URL.Query().Get("view"), Namespace: r.URL.Query().Get("namespace"), Pod: r.URL.Query().Get("pod"), Node: r.URL.Query().Get("node"), Start: start, End: end}
 		if cluster.ValidateMonitoringQuery(q) != nil {
 			writeJSON(w, 400, response{Error: errorResponse{Code: "INVALID_MONITORING_QUERY", Message: "请选择有效视图、命名空间和最多 7 天的时间范围。指定 Pod 时必须选择命名空间。"}})
 			return

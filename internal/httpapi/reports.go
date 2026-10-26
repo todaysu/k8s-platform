@@ -30,6 +30,26 @@ func listReports(service *reportsvc.Service) http.HandlerFunc {
 	}
 }
 
+func deleteReport(service *reportsvc.Service) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORTS_UNAVAILABLE", "运行报告服务尚未就绪。")
+			return
+		}
+		ctx, cancel := requestTimeout(request, 5*time.Second)
+		defer cancel()
+		if err := service.Delete(ctx, request.PathValue("id")); err != nil {
+			if errors.Is(err, reportsvc.ErrNotFound) {
+				writeReportError(writer, http.StatusNotFound, "REPORT_NOT_FOUND", reportsvc.ErrNotFound.Error())
+				return
+			}
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORT_DELETE_FAILED", "删除报告失败。")
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: map[string]string{"id": request.PathValue("id")}})
+	}
+}
+
 func generateReport(service *reportsvc.Service) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		if service == nil {
@@ -45,13 +65,11 @@ func generateReport(service *reportsvc.Service) http.HandlerFunc {
 			writeReportError(writer, http.StatusUnprocessableEntity, "REPORT_PERIOD_INVALID", err.Error())
 			return
 		}
-		ctx, cancel := requestTimeout(request, 60*time.Second)
+		ctx, cancel := requestTimeout(request, 5*time.Second)
 		defer cancel()
-		report, err := service.Generate(ctx, payload, time.Now())
+		job, err := service.Submit(ctx, payload, time.Now())
 		if err != nil {
 			switch {
-			case errors.Is(err, reportsvc.ErrBusy):
-				writeReportError(writer, http.StatusConflict, "REPORT_BUSY", reportsvc.ErrBusy.Error())
 			case strings.Contains(err.Error(), "当前筛选范围") || strings.Contains(err.Error(), "资源池类型") || strings.Contains(err.Error(), "筛选范围"):
 				writeReportError(writer, http.StatusUnprocessableEntity, "REPORT_SCOPE_INVALID", err.Error())
 			default:
@@ -59,7 +77,45 @@ func generateReport(service *reportsvc.Service) http.HandlerFunc {
 			}
 			return
 		}
-		writeJSON(writer, http.StatusCreated, response{Data: report})
+		writeJSON(writer, http.StatusAccepted, response{Data: job})
+	}
+}
+
+func listReportJobs(service *reportsvc.Service) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORTS_UNAVAILABLE", "运行报告服务尚未就绪。")
+			return
+		}
+		ctx, cancel := requestTimeout(request, 5*time.Second)
+		defer cancel()
+		jobs, err := service.ListJobs(ctx)
+		if err != nil {
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORT_JOBS_READ_FAILED", "读取后台报告任务失败。")
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: map[string]any{"items": jobs}})
+	}
+}
+
+func getReportJob(service *reportsvc.Service) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORTS_UNAVAILABLE", "运行报告服务尚未就绪。")
+			return
+		}
+		ctx, cancel := requestTimeout(request, 5*time.Second)
+		defer cancel()
+		job, err := service.GetJob(ctx, request.PathValue("id"))
+		if errors.Is(err, reportsvc.ErrJobNotFound) {
+			writeReportError(writer, http.StatusNotFound, "REPORT_JOB_NOT_FOUND", reportsvc.ErrJobNotFound.Error())
+			return
+		}
+		if err != nil {
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORT_JOB_READ_FAILED", "读取后台报告任务失败。")
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: job})
 	}
 }
 
@@ -91,6 +147,29 @@ func getReportHTML(service *reportsvc.Service) http.HandlerFunc {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write(page)
+	}
+}
+
+func probeReportModelConfig(service *reportsvc.Service) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeReportError(writer, http.StatusServiceUnavailable, "REPORTS_UNAVAILABLE", "运行报告服务尚未就绪。")
+			return
+		}
+		var payload reportsvc.ModelConfig
+		if err := decodeReportJSON(writer, request, &payload); err != nil {
+			writeReportError(writer, http.StatusBadRequest, "REPORT_MODEL_INVALID", "请检查模型接口、模型名称和 API Key。")
+			return
+		}
+		// A probe issues a real model call, so it gets its own budget rather
+		// than the short read/write timeout used for configuration reads.
+		ctx, cancel := requestTimeout(request, 45*time.Second)
+		defer cancel()
+		if err := service.ProbeModel(ctx, payload); err != nil {
+			writeJSON(writer, http.StatusOK, response{Data: map[string]any{"ok": false, "message": reportsvc.ModelFailureMessage(err)}})
+			return
+		}
+		writeJSON(writer, http.StatusOK, response{Data: map[string]any{"ok": true, "message": "模型连接成功（地址、网络与鉴权均正常）。AI 分析还要求模型稳定输出结构化 JSON，这一项单次测试覆盖不到。"}})
 	}
 }
 

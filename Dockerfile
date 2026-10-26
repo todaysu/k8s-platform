@@ -14,7 +14,7 @@ RUN npm run build
 
 FROM golang:1.27-alpine AS go-build
 ARG GOPROXY
-ARG VERSION=v1.0.1
+ARG VERSION=v1.1.0
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./

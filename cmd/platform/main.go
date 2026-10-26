@@ -114,7 +114,7 @@ func main() {
 	if alertsErr != nil {
 		log.Fatalf("initialize alerts: %v", alertsErr)
 	}
-	alertService.ConfigureRetention(storedSettings.Alerts.ResolvedRetentionDays, storedSettings.Alerts.CleanupBatchSize)
+	alertService.ConfigureRetention(storedSettings.Alerts.ResolvedRetentionDays, storedSettings.Alerts.TransitionRetentionDays, storedSettings.Alerts.HourlyRetentionDays, storedSettings.Alerts.DailyRetentionDays, storedSettings.Alerts.CoverageRetentionDays, storedSettings.Alerts.CleanupBatchSize)
 	if cfg.RunsWorker() {
 		go manager.RunSecurityWorker(applicationContext, os.Getenv("POD_NAME"))
 	}
@@ -199,6 +199,7 @@ func main() {
 		if reportErr != nil {
 			log.Fatalf("initialize operational reports: %v", reportErr)
 		}
+		reportService.StartWorker(applicationContext)
 		routerOptions := httpapi.RouterOptions{PodExecEnabled: cfg.PodExecEnabled, Reports: reportService, Alerts: alertService, Authenticator: authentication, SettingsRepository: database, Admission: httpapi.AdmissionLimits{Queries: cfg.HTTPQueryConcurrency, Realtime: cfg.HTTPRealtimeConcurrency, Monitoring: cfg.HTTPMonitoringConcurrency, Sessions: cfg.HTTPSessionConcurrency, PerCluster: cfg.HTTPClusterConcurrency}}
 		if restartErr == nil {
 			routerOptions.SettingsRestarter = restarter
@@ -211,6 +212,13 @@ func main() {
 		apiHandler = collectorHealth(database.SQLDB())
 	}
 	var handler http.Handler = apiHandler
+	// `make dev-backend` runs without WEB_DIST_DIR; fall back to the local build
+	// output so the UI is reachable instead of 404 on every page route.
+	if cfg.WebDistDir == "" {
+		if info, err := os.Stat("./web/dist"); err == nil && info.IsDir() {
+			cfg.WebDistDir = "./web/dist"
+		}
+	}
 	if cfg.ServesAPI() && cfg.WebDistDir != "" {
 		mux := http.NewServeMux()
 		mux.Handle("/api/", apiHandler)

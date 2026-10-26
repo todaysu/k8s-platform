@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import PodTerminal from './PodTerminal'
 
+const mocks = vi.hoisted(() => ({ opened: null as null | HTMLElement }))
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     loadAddon() {}
-    open() {}
+    open(element: HTMLElement) { mocks.opened = element }
     clear() {}
     write() {}
     writeln() {}
@@ -22,6 +23,14 @@ vi.mock('../api/clusters', () => ({
 }))
 
 afterEach(() => { vi.unstubAllGlobals() })
+
+it('mounts xterm into a padding-free inner view so the bottom row is not clipped', () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  render(<PodTerminal clusterId="a" containers={['app']} namespace="ops" podName="web-0" running />)
+  // FitAddon 只按宿主的 border-box 高度换算行数，宿主带 padding 会多算行数，导致终端底部被裁掉
+  expect(mocks.opened?.className).toContain('ks-pod-terminal-view')
+  expect(mocks.opened?.parentElement?.className).toContain('ks-pod-terminal')
+})
 
 it('toggles fullscreen while keeping the terminal mounted', async () => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })

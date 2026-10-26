@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-version="${VERSION:-v1.0.0}"
+version="${VERSION:-v1.1.0}"
 local_image="${LOCAL_IMAGE:-ftc-platform:${version}}"
 go_binary="${GO:-go}"
 kubectl_version="${KUBECTL_VERSION:-v1.32.13}"

@@ -1,4 +1,4 @@
-.PHONY: test dev-backend dev-frontend build-frontend build-image build-image-amd64 build-image-arm64 build-image-multi package-images push-image-amd64 kind-create kind-load kind-deploy
+.PHONY: test dev-backend run dev-frontend build-frontend build-image build-image-amd64 build-image-arm64 build-image-multi package-images push-image-amd64 kind-create kind-load kind-deploy
 
 GO ?= $(firstword $(wildcard /opt/homebrew/bin/go) go)
 
@@ -6,7 +6,7 @@ GO ?= $(firstword $(wildcard /opt/homebrew/bin/go) go)
 #   make build-image-amd64 REGISTRY=registry.cmbchina.com/ops IMAGE_TAG=0.2.0
 REGISTRY ?= your-registry.example.com
 IMAGE_NAME ?= ftc-platform
-VERSION ?= v1.0.1
+VERSION ?= v1.1.0
 IMAGE_TAG ?= $(VERSION)
 FULL_IMAGE ?= $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 LOCAL_IMAGE ?= ftc-platform:$(VERSION)
@@ -25,6 +25,16 @@ test:
 dev-backend:
 	@set -a; if [ -f .env ]; then . ./.env; fi; set +a; \
 		ENABLE_POD_EXEC=$${ENABLE_POD_EXEC:-true} $(GO) run ./cmd/platform
+
+# Run the whole platform on this workstation: rebuild the UI first so the
+# browser never shows a stale bundle, then serve it from the Go process.
+# SECURE_COOKIES defaults to off because local access is plain HTTP.
+run: build-frontend
+	@set -a; if [ -f .env ]; then . ./.env; fi; set +a; \
+		ENABLE_POD_EXEC=$${ENABLE_POD_EXEC:-true} \
+		SECURE_COOKIES=$${SECURE_COOKIES:-false} \
+		WEB_DIST_DIR=$${WEB_DIST_DIR:-./web/dist} \
+		$(GO) run ./cmd/platform
 
 dev-frontend:
 	cd web && npm run dev
@@ -68,5 +78,5 @@ kind-load:
 	kind load docker-image $(LOCAL_IMAGE)-arm64 --name ftc-v1
 
 kind-deploy:
-	sed 's|ftc-platform:v1.0.1-amd64|$(LOCAL_IMAGE)-arm64|' deploy/install.yaml | kubectl --context kind-ftc-v1 apply -f -
+	sed 's|ftc-platform:v1.1.0-amd64|$(LOCAL_IMAGE)-arm64|' deploy/install.yaml | kubectl --context kind-ftc-v1 apply -f -
 	kubectl --context kind-ftc-v1 -n ftc-platform rollout status deployment/ftc-platform-setup --timeout=5m

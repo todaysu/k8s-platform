@@ -193,13 +193,13 @@ describe('cluster management UI', () => {
 
     await screen.findByRole('heading', { name: '多集群健康概览' })
 
-    const clustersNavigation = screen.getByText('集群', { selector: '.ks-nav-label' })
-    const overviewNavigation = screen.getByText('概览', { selector: '.ks-nav-label' })
+    const clustersNavigation = screen.getByText('集群管理', { selector: '.ks-nav-label' })
+    const overviewNavigation = screen.getByText('健康总览', { selector: '.ks-nav-label' })
 
     await user.click(clustersNavigation)
     expect(window.location.pathname).toBe('/clusters')
     expect(clustersNavigation.closest('.pf-m-current')).not.toBeNull()
-    expect(await screen.findByRole('heading', { name: '集群' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '集群管理' })).toBeInTheDocument()
     expect(screen.getByText('cluster-a')).toBeInTheDocument()
 
     await user.click(overviewNavigation)
@@ -225,8 +225,8 @@ describe('cluster management UI', () => {
     expect(screen.getByRole('grid', { name: '巡检发现列表' })).toBeInTheDocument()
     expect(screen.getByText('实例未全部就绪')).toBeInTheDocument()
 
-    await user.click(screen.getByText('概览', { selector: '.ks-nav-label' }))
-    await user.click(screen.getByText('巡检分析', { selector: '.ks-nav-label' }))
+    await user.click(screen.getByText('健康总览', { selector: '.ks-nav-label' }))
+    await user.click(screen.getByText('主动巡检', { selector: '.ks-nav-label' }))
     expect(window.location.pathname).toBe('/inspections')
   })
 
@@ -259,7 +259,7 @@ describe('cluster management UI', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    const capacityNavigation = screen.getByText('容量', { selector: '.ks-nav-label' })
+    const capacityNavigation = screen.getByText('资源容量', { selector: '.ks-nav-label' })
     await user.click(capacityNavigation)
 
     expect(window.location.pathname).toBe('/capacity')
@@ -311,7 +311,7 @@ describe('cluster management UI', () => {
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: '资源池容量' })).toBeInTheDocument()
-    expect(screen.getByText('容量', { selector: '.ks-nav-label' }).closest('.pf-m-current')).not.toBeNull()
+    expect(screen.getByText('资源容量', { selector: '.ks-nav-label' }).closest('.pf-m-current')).not.toBeNull()
   })
 
   it('edits one global business namespace list without technology-stack classifications', async () => {
@@ -346,7 +346,7 @@ describe('cluster management UI', () => {
     render(<App />)
 
     expect(screen.queryByRole('button', { name: '添加集群' })).not.toBeInTheDocument()
-    const clustersNavigation = screen.getByText('集群', { selector: '.ks-nav-label' })
+    const clustersNavigation = screen.getByText('集群管理', { selector: '.ks-nav-label' })
     await user.click(clustersNavigation)
     await user.click(screen.getByRole('button', { name: '添加集群' }))
 

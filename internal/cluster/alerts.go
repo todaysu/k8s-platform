@@ -22,6 +22,9 @@ type Alert struct {
 	Fingerprint string            `json:"fingerprint"`
 	Labels      map[string]string `json:"labels"`
 	Summary     string            `json:"summary"`
+	Description string            `json:"description"`
+	RunbookURL  string            `json:"runbook_url"`
+	RuleURL     string            `json:"rule_url"`
 	StartsAt    time.Time         `json:"starts_at"`
 	EndsAt      *time.Time        `json:"ends_at,omitempty"`
 	State       string            `json:"state"`
@@ -88,7 +91,7 @@ func (service *OnboardingService) alertsForRecord(ctx context.Context, record Cl
 		result := AlertSnapshot{Source: source.namespace + "/" + source.name, CollectedAt: time.Now().UTC(), Alerts: make([]Alert, 0, len(items))}
 		for _, item := range items {
 			labels := make(map[string]string, 8)
-			for _, key := range []string{"alertname", "severity", "namespace", "pod", "node", "instance", "deployment", "job"} {
+			for _, key := range []string{"alertname", "severity", "namespace", "pod", "node", "instance", "deployment", "statefulset", "daemonset", "replicaset", "service", "container", "job", "prometheus", "alertstate"} {
 				if value := item.Labels[key]; value != "" {
 					labels[key] = truncateAlert(value, 200)
 				}
@@ -101,7 +104,21 @@ func (service *OnboardingService) alertsForRecord(ctx context.Context, record Cl
 			if len(fingerprint) > 128 {
 				fingerprint = fingerprint[:128]
 			}
-			result.Alerts = append(result.Alerts, Alert{Fingerprint: fingerprint, Labels: labels, Summary: truncateAlert(item.Annotations["summary"], 500), StartsAt: item.StartsAt, EndsAt: item.EndsAt, State: item.Status.State})
+			runbook := item.Annotations["runbook_url"]
+			if runbook == "" {
+				runbook = item.Annotations["runbookUrl"]
+			}
+			result.Alerts = append(result.Alerts, Alert{
+				Fingerprint: fingerprint,
+				Labels:      labels,
+				Summary:     truncateAlert(item.Annotations["summary"], 500),
+				Description: truncateAlert(item.Annotations["description"], 2000),
+				RunbookURL:  truncateAlert(runbook, 1024),
+				RuleURL:     truncateAlert(item.Annotations["prometheus"], 1024),
+				StartsAt:    item.StartsAt,
+				EndsAt:      item.EndsAt,
+				State:       item.Status.State,
+			})
 		}
 		return result, nil
 	}

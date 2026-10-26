@@ -62,6 +62,10 @@ export function validateSection(section: SettingsSection, settings: PlatformSett
   if (section === 'alerts') {
     const value = settings.alerts
     integer(errors, 'resolved_retention_days', value.resolved_retention_days, 1, 3650)
+    integer(errors, 'transition_retention_days', value.transition_retention_days, 1, 3650)
+    integer(errors, 'hourly_retention_days', value.hourly_retention_days, 30, 3650)
+    integer(errors, 'daily_retention_days', value.daily_retention_days, 90, 3650)
+    integer(errors, 'coverage_retention_days', value.coverage_retention_days, 30, 3650)
     integer(errors, 'cleanup_batch_size', value.cleanup_batch_size, 100, 50000)
     return errors
   }

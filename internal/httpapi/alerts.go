@@ -21,11 +21,26 @@ func listAlerts(service *alertsvc.Service) http.HandlerFunc {
 			writeJSON(w, 400, response{Error: errorResponse{Code: "INVALID_ALERT_QUERY", Message: "告警视图无效。"}})
 			return
 		}
-		for _, key := range []string{"cluster", "severity", "namespace", "q"} {
+		for _, key := range []string{"cluster", "severity", "namespace", "q", "state", "source", "sort", "duration", "resource"} {
 			if len(values.Get(key)) > 200 {
 				writeJSON(w, 400, response{Error: errorResponse{Code: "INVALID_ALERT_QUERY", Message: "筛选条件过长。"}})
 				return
 			}
+		}
+		valid := func(value string, allowed ...string) bool {
+			if value == "" {
+				return true
+			}
+			for _, item := range allowed {
+				if value == item {
+					return true
+				}
+			}
+			return false
+		}
+		if !valid(values.Get("state"), "firing", "suppressed", "resolved") || !valid(values.Get("source"), "platform", "business") || !valid(values.Get("sort"), "severity", "duration", "recent", "recurrence") || !valid(values.Get("duration"), "lt1h", "1h-6h", "6h-24h", "gt24h") || !valid(values.Get("resource"), "linked") {
+			writeJSON(w, 400, response{Error: errorResponse{Code: "INVALID_ALERT_QUERY", Message: "告警筛选条件无效。"}})
+			return
 		}
 		page, err := strconv.Atoi(values.Get("page"))
 		if values.Get("page") != "" && (err != nil || page < 1 || page > 10000) {
@@ -39,8 +54,8 @@ func listAlerts(service *alertsvc.Service) http.HandlerFunc {
 			writeJSON(w, 400, response{Error: errorResponse{Code: "INVALID_ALERT_QUERY", Message: "告警时间范围无效。"}})
 			return
 		}
-		q := alertsvc.Query{View: view, ClusterID: values.Get("cluster"), Severity: values.Get("severity"), Namespace: values.Get("namespace"), Search: strings.TrimSpace(values.Get("q")), Page: page, PageSize: 30}
-		if duration > 0 {
+		q := alertsvc.Query{View: view, ClusterID: values.Get("cluster"), Severity: values.Get("severity"), Namespace: values.Get("namespace"), Search: strings.TrimSpace(values.Get("q")), State: values.Get("state"), SourceType: values.Get("source"), Sort: values.Get("sort"), Duration: values.Get("duration"), ResourceOnly: values.Get("resource") == "linked", Page: page, PageSize: 30}
+		if view == "history" && duration > 0 {
 			q.Since = time.Now().UTC().Add(-duration)
 		}
 		ctx, cancel := requestTimeout(r, 5*time.Second)

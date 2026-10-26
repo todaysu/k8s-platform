@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("报告不存在")
-	ErrBusy     = errors.New("已有报告正在生成，请稍后重试")
+	ErrNotFound    = errors.New("报告不存在")
+	ErrJobNotFound = errors.New("报告任务不存在")
+	ErrBusy        = errors.New("已有报告正在生成，请稍后重试")
 )
 
 var reportZone = time.FixedZone("Asia/Shanghai", 8*60*60)
@@ -68,6 +69,18 @@ type Reason struct {
 	Reason string `json:"reason"`
 	Count  int64  `json:"count"`
 }
+
+// ReasonCluster locates a Warning reason on a specific cluster. Without it the
+// report can only rank global counts, which cannot answer "which cluster should
+// I open first".
+type ReasonCluster struct {
+	Reason      string `json:"reason"`
+	ClusterID   string `json:"cluster_id"`
+	ClusterName string `json:"cluster_name"`
+	ClusterType string `json:"cluster_type"`
+	Environment string `json:"environment"`
+	Count       int64  `json:"count"`
+}
 type ClusterSummary struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
@@ -90,21 +103,49 @@ type Pool struct {
 	MemoryRequestedGiB float64   `json:"memory_requested_gib"`
 	CollectedAt        time.Time `json:"collected_at"`
 }
+type AlertProblem struct {
+	Name             string `json:"name"`
+	Severity         string `json:"severity"`
+	Occurrences      int64  `json:"occurrences"`
+	Resolved         int64  `json:"resolved"`
+	DurationSeconds  int64  `json:"duration_seconds"`
+	AffectedClusters int    `json:"affected_clusters"`
+}
+type AlertEvidence struct {
+	Critical             int64          `json:"critical"`
+	Warning              int64          `json:"warning"`
+	Info                 int64          `json:"info"`
+	Resolved             int64          `json:"resolved"`
+	ResolvedGroups       int            `json:"resolved_groups"`
+	AffectedClusters     int            `json:"affected_clusters"`
+	AffectedResources    int64          `json:"affected_resources"`
+	RepeatedProblemTypes int            `json:"repeated_problem_types"`
+	AverageDurationSec   int64          `json:"average_duration_seconds"`
+	CollectionSuccessPct float64        `json:"collection_success_percent"`
+	Top                  []AlertProblem `json:"top"`
+}
 type Evidence struct {
-	Clusters          []ClusterSummary `json:"clusters"`
-	Trend             []Point          `json:"trend"`
-	Reasons           []Reason         `json:"reasons"`
-	Pools             []Pool           `json:"pools"`
-	Normal            int64            `json:"normal"`
-	Warning           int64            `json:"warning"`
-	PreviousWarning   int64            `json:"previous_warning"`
-	ObservedDays      int              `json:"observed_days"`
-	ExpectedDays      int              `json:"expected_days"`
-	EarliestEvent     string           `json:"earliest_event"`
-	LatestEvent       string           `json:"latest_event"`
-	SecurityCompleted int              `json:"security_completed"`
-	SecurityFailed    int              `json:"security_failed"`
-	Notes             []string         `json:"notes"`
+	Clusters                []ClusterSummary `json:"clusters"`
+	Trend                   []Point          `json:"trend"`
+	Reasons                 []Reason         `json:"reasons"`
+	ReasonClusters          []ReasonCluster  `json:"reason_clusters"`
+	Pools                   []Pool           `json:"pools"`
+	Alerts                  AlertEvidence    `json:"alerts"`
+	Normal                  int64            `json:"normal"`
+	Warning                 int64            `json:"warning"`
+	PreviousWarning         int64            `json:"previous_warning"`
+	ProblemClusters         int              `json:"problem_clusters"`
+	NewProblemClusters      int              `json:"new_problem_clusters"`
+	OngoingProblemClusters  int              `json:"ongoing_problem_clusters"`
+	PreviousProblemClusters int              `json:"previous_problem_clusters"`
+	PreviousReasons         []Reason         `json:"previous_reasons"`
+	ObservedDays            int              `json:"observed_days"`
+	ExpectedDays            int              `json:"expected_days"`
+	EarliestEvent           string           `json:"earliest_event"`
+	LatestEvent             string           `json:"latest_event"`
+	SecurityCompleted       int              `json:"security_completed"`
+	SecurityFailed          int              `json:"security_failed"`
+	Notes                   []string         `json:"notes"`
 }
 type Analysis struct {
 	Summary      string   `json:"summary"`
@@ -134,6 +175,18 @@ type Item struct {
 	GeneratedAt time.Time `json:"generated_at"`
 	AIStatus    string    `json:"ai_status"`
 	URL         string    `json:"url"`
+}
+type Job struct {
+	ID           string    `json:"id"`
+	Status       string    `json:"status"`
+	Stage        string    `json:"stage"`
+	Message      string    `json:"message"`
+	ErrorMessage string    `json:"error_message"`
+	ReportID     string    `json:"report_id"`
+	Request      Request   `json:"request"`
+	CreatedAt    time.Time `json:"created_at"`
+	StartedAt    time.Time `json:"started_at,omitempty"`
+	FinishedAt   time.Time `json:"finished_at,omitempty"`
 }
 type ModelConfig struct {
 	Endpoint    string `json:"endpoint"`

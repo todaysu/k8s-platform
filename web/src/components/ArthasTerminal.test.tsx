@@ -3,9 +3,10 @@ import { act, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ArthasTerminal, { type ArthasTerminalHandle } from './ArthasTerminal'
 
+const mocks=vi.hoisted(()=>({opened:null as null|HTMLElement}))
 vi.mock('@xterm/xterm', () => ({Terminal: class {
   cols=100; rows=28
-  loadAddon(){} open(){} focus(){} dispose(){} write(){} writeln(){}
+  loadAddon(){} open(element:HTMLElement){mocks.opened=element} focus(){} dispose(){} write(){} writeln(){}
   onData(){return {dispose(){}}} onResize(){return {dispose(){}}}
 }}))
 vi.mock('@xterm/addon-fit', () => ({FitAddon: class {fit(){}}}))
@@ -32,6 +33,13 @@ beforeEach(()=>{
 afterEach(()=>{vi.clearAllTimers();vi.useRealTimers();vi.unstubAllGlobals()})
 const defaults={active:true,clusterId:'c1',namespace:'myapp',podName:'java-a',container:'java'}
 describe('Arthas terminal lifecycle',()=>{
+  it('mounts xterm into a padding-free inner view so the bottom row is not clipped',()=>{
+    render(<ArthasTerminal {...defaults} onAttached={vi.fn()} onState={vi.fn()} onError={vi.fn()}/>)
+    act(()=>vi.advanceTimersByTime(1))
+    // FitAddon 只按宿主的 border-box 高度换算行数，宿主带 padding 会多算行数，导致终端底部溢出被裁
+    expect(mocks.opened?.className).toContain('ks-arthas-terminal-view')
+    expect(mocks.opened?.parentElement?.className).toContain('ks-arthas-terminal')
+  })
   it('opens only one remote session in StrictMode and detects a prompt split across frames',()=>{
     const attached=vi.fn(), state=vi.fn(), ref=createRef<ArthasTerminalHandle>()
     render(<StrictMode><ArthasTerminal {...defaults} onAttached={attached} onState={state} onError={vi.fn()} ref={ref}/></StrictMode>)

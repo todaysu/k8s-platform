@@ -14,6 +14,7 @@ import (
 type testSource struct {
 	snapshot cluster.AlertSnapshot
 	err      error
+	business []string
 }
 
 func (source *testSource) ListRecords(context.Context) ([]cluster.ClusterRecord, error) {
@@ -21,6 +22,9 @@ func (source *testSource) ListRecords(context.Context) ([]cluster.ClusterRecord,
 }
 func (source *testSource) GetClusterAlerts(context.Context, string) (cluster.AlertSnapshot, error) {
 	return source.snapshot, source.err
+}
+func (source *testSource) AlertBusinessNamespaces(context.Context) ([]string, error) {
+	return source.business, nil
 }
 
 func TestAlertStateTransitionsAndCollectionFailure(t *testing.T) {
@@ -32,15 +36,19 @@ func TestAlertStateTransitionsAndCollectionFailure(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	started := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
-	source := &testSource{snapshot: cluster.AlertSnapshot{Source: "monitoring/alertmanager", CollectedAt: started.Add(time.Minute), Alerts: []cluster.Alert{{Fingerprint: "fp1", Labels: map[string]string{"alertname": "PodCrashLooping", "severity": "warning", "namespace": "myapp", "pod": "web-1"}, StartsAt: started, State: "active"}}}}
+	source := &testSource{business: []string{"myapp"}, snapshot: cluster.AlertSnapshot{Source: "monitoring/alertmanager", CollectedAt: started.Add(time.Minute), Alerts: []cluster.Alert{{Fingerprint: "fp1", Labels: map[string]string{"alertname": "PodCrashLooping", "severity": "warning", "namespace": "myapp", "pod": "web-1", "deployment": "web"}, Summary: "pod restarts", Description: "container repeatedly exits", RunbookURL: "https://runbooks.example/pod", StartsAt: started, State: "active"}}}}
 	service, err := New(ctx, db, source)
 	if err != nil {
 		t.Fatal(err)
 	}
 	service.CollectOnce(ctx)
 	current, err := service.List(ctx, Query{View: "current"})
-	if err != nil || current.Total != 1 || current.Items[0].ResourceName != "web-1" {
+	if err != nil || current.Total != 1 || current.Items[0].ResourceName != "web-1" || current.Items[0].SourceType != "business" || current.Items[0].OwnerName != "web" || current.Summary.Warning != 1 {
 		t.Fatalf("current = %+v, %v", current, err)
+	}
+	linked, err := service.List(ctx, Query{View: "current", ResourceOnly: true})
+	if err != nil || linked.Total != 1 || linked.Items[0].ResourceName != "web-1" {
+		t.Fatalf("linked resources = %+v, %v", linked, err)
 	}
 	service.CollectOnce(ctx)
 	current, err = service.List(ctx, Query{View: "current"})
@@ -66,6 +74,19 @@ func TestAlertStateTransitionsAndCollectionFailure(t *testing.T) {
 	history, err := service.List(ctx, Query{View: "history", ClusterID: "c1", Severity: "warning"})
 	if err != nil || history.Total != 1 || history.Items[0].EndsAt == nil {
 		t.Fatalf("history = %+v, %v", history, err)
+	}
+	var transitions, hourly, coverage int
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alert_state_transitions`).Scan(&transitions); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alert_rollup_hourly`).Scan(&hourly); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alert_collection_history`).Scan(&coverage); err != nil {
+		t.Fatal(err)
+	}
+	if transitions != 3 || hourly == 0 || coverage < 2 {
+		t.Fatalf("unexpected evidence rows: transitions=%d hourly=%d coverage=%d", transitions, hourly, coverage)
 	}
 }
 
@@ -102,7 +123,7 @@ func TestListFiltersByTriggerOrRecoveryTime(t *testing.T) {
 		}
 	}
 	current, err := service.List(ctx, Query{View: "current", Since: now.Add(-time.Hour)})
-	if err != nil || current.Total != 1 || current.Items[0].ID != "recent" {
+	if err != nil || current.Total != 2 {
 		t.Fatalf("current range = %+v, %v", current, err)
 	}
 	history, err := service.List(ctx, Query{View: "history", Since: now.Add(-time.Hour)})
@@ -123,7 +144,7 @@ func TestRetentionOnlyPrunesResolvedAlerts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.ConfigureRetention(30, 100)
+	service.ConfigureRetention(30, 180, 400, 1095, 400, 100)
 	if service.resolvedRetentionDays != 30 || service.cleanupBatchSize != 100 {
 		t.Fatalf("configuration not applied: %+v", service)
 	}

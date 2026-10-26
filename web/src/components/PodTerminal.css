@@ -148,12 +148,17 @@
   width: 100%;
 }
 
-.ks-pod-terminal .xterm {
+.ks-pod-terminal-view {
+  height: 100%;
+  overflow: hidden;
+}
+
+.ks-pod-terminal-view .xterm {
   height: 100%;
   max-width: 100%;
 }
 
-.ks-pod-terminal .xterm-screen {
+.ks-pod-terminal-view .xterm-screen {
   max-width: 100%;
 }
 
