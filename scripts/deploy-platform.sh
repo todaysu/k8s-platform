@@ -160,6 +160,7 @@ printf '  本脚本不会部署 MySQL。\n'
 printf '  请确认已经准备 MySQL 8.0/8.4、ftc_platform 数据库和最小权限账号。\n'
 printf '  请确认平台 Pod 网络能够访问 MySQL 地址和 TCP 3306（或实际配置端口）。\n'
 printf '  MySQL 地址、数据库、用户名、密码和 TLS 设置将在初始化页面中填写。\n\n'
+printf '  如果尚未准备数据库，可在 EL8/EL9 x86_64 独立服务器运行交付包 mysql-rpm/install-mysql.sh。\n\n'
 
 if [[ "$DRY_RUN" != true && "$ASSUME_YES" != true ]]; then
   [[ -t 0 ]] || die "当前不是交互终端；确认镜像已导入且 MySQL 已就绪后使用 --yes"
