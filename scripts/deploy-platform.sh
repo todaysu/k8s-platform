@@ -27,14 +27,15 @@ FTC 集群运维平台部署入口（普通 Kubernetes）
   --version <版本>       平台版本；默认 v1.1.0
   --arch <架构>          auto、amd64 或 arm64；默认 auto
   --manifest <路径>      安装清单；默认 deploy/install.yaml
-  --yes                  确认镜像已导入，不再交互询问
+  --yes                  确认镜像已导入且 MySQL 已就绪，不再交互询问
   --dry-run              只检测和校验，不向集群部署
   -h, --help             显示帮助
 
 说明：
   1. 本脚本不处理 kind，也不负责将镜像导入 Kubernetes 节点。
   2. 请先把对应架构的平台镜像导入所有可能运行平台 Pod 的节点。
-  3. 初始化页面必须通过节点 IP 和 NodePort 访问，不能使用 127.0.0.1。
+  3. 本脚本不部署 MySQL；请提前准备平台 Pod 可以访问的 MySQL 8.0/8.4。
+  4. 初始化页面必须通过节点 IP 和 NodePort 访问，不能使用 127.0.0.1。
 EOF
 }
 
@@ -154,13 +155,26 @@ fi
 printf '  请确认镜像 %s 已导入所有可能调度平台 Pod 的 Kubernetes 节点。\n' "$IMAGE"
 printf '  本脚本不会上传或导入镜像；请按节点容器运行时的方式完成导入。\n\n'
 
+printf '部署前 MySQL 检查：\n'
+printf '  本脚本不会部署 MySQL。\n'
+printf '  请确认已经准备 MySQL 8.0/8.4、ftc_platform 数据库和最小权限账号。\n'
+printf '  请确认平台 Pod 网络能够访问 MySQL 地址和 TCP 3306（或实际配置端口）。\n'
+printf '  MySQL 地址、数据库、用户名、密码和 TLS 设置将在初始化页面中填写。\n\n'
+
 if [[ "$DRY_RUN" != true && "$ASSUME_YES" != true ]]; then
-  [[ -t 0 ]] || die "当前不是交互终端；确认镜像已导入后使用 --yes"
+  [[ -t 0 ]] || die "当前不是交互终端；确认镜像已导入且 MySQL 已就绪后使用 --yes"
   read -r -p "镜像已导入全部目标节点，是否继续部署？[y/N] " answer
   case "$answer" in
     y|Y|yes|YES) ;;
     *) printf '已取消部署。\n'; exit 0 ;;
   esac
+  read -r -p "MySQL 已部署且平台 Pod 可以访问，是否继续部署？[y/N] " answer
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) printf 'MySQL 尚未就绪，已取消部署。请准备数据库后重新运行脚本。\n'; exit 0 ;;
+  esac
+elif [[ "$DRY_RUN" != true ]]; then
+  printf '已通过 --yes 确认：镜像已导入，MySQL 已部署且网络可达。\n\n'
 fi
 
 IMAGE_LINES="$(grep -Ec '^[[:space:]]*image:[[:space:]]+ftc-platform:' "$MANIFEST" || true)"
