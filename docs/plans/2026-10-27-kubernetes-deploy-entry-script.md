@@ -15,6 +15,8 @@
 **Files:**
 - Create: `scripts/deploy-platform.sh`
 
+源码保留在 `scripts/`，离线交付时复制到交付包根目录，与 `manifests/` 同级。
+
 **Step 1: 实现参数与前置检查**
 
 - 支持 `--context`、`--version`、`--arch`、`--yes`、`--dry-run` 和 `--help`。

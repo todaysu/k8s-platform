@@ -1,6 +1,6 @@
 # FTC 平台交付：普通 Kubernetes
 
-标准交付入口是 [`scripts/deploy-platform.sh`](../../scripts/deploy-platform.sh)，底层使用 [`deploy/install.yaml`](../../deploy/install.yaml) 渲染临时清单。安装清单只部署平台初始化服务与必要 RBAC，不部署 MySQL；脚本会根据节点架构选择 `ftc-platform:v1.1.0-amd64` 或 `ftc-platform:v1.1.0-arm64`。
+交付包根目录的标准入口是 `deploy-platform.sh`，它与 `manifests/` 文件夹同级；源码位于 [`scripts/deploy-platform.sh`](../../scripts/deploy-platform.sh)。脚本使用 `manifests/install.yaml`（源码仓库中对应 [`deploy/install.yaml`](../../deploy/install.yaml)）渲染临时清单。安装清单只部署平台初始化服务与必要 RBAC，不部署 MySQL；脚本会根据节点架构选择 `ftc-platform:v1.1.0-amd64` 或 `ftc-platform:v1.1.0-arm64`。
 
 ## 1. 前置条件
 
@@ -28,8 +28,8 @@ FLUSH PRIVILEGES;
 推荐使用自动架构部署入口。脚本只面向普通 Kubernetes，不处理 kind，也不会把本地镜像自动导入远程节点：
 
 ```bash
-chmod +x scripts/deploy-platform.sh
-./scripts/deploy-platform.sh
+chmod +x deploy-platform.sh
+./deploy-platform.sh
 ```
 
 脚本会读取 Ready 节点的 `kubernetes.io/arch`：
@@ -44,7 +44,7 @@ chmod +x scripts/deploy-platform.sh
 脚本只会用中文显示所需镜像和本地镜像包位置，无法通过 Kubernetes API 验证节点运行时内的镜像是否完整，也不会代替初始化页面测试 MySQL 账号。非交互环境确认镜像和 MySQL 均已就绪后使用：
 
 ```bash
-./scripts/deploy-platform.sh --yes
+./deploy-platform.sh --yes
 ```
 
 `--yes` 表示操作者已经确认镜像与 MySQL 两项前置条件，不只是跳过镜像询问。
@@ -52,13 +52,13 @@ chmod +x scripts/deploy-platform.sh
 仅检查架构和渲染结果、不部署：
 
 ```bash
-./scripts/deploy-platform.sh --dry-run
+./deploy-platform.sh --dry-run
 ```
 
 指定其他 Context 或版本：
 
 ```bash
-./scripts/deploy-platform.sh --context <context名称> --version v1.1.0
+./deploy-platform.sh --context <context名称> --version v1.1.0
 ```
 
 部署完成后，脚本会列出节点地址。初始化页面必须通过客户端可达的节点 IP 和 NodePort 访问：

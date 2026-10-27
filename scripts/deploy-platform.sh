@@ -3,10 +3,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-if [[ -f "${PROJECT_ROOT}/deploy/install.yaml" ]]; then
-  MANIFEST="${PROJECT_ROOT}/deploy/install.yaml"
+if [[ -f "${SCRIPT_DIR}/manifests/install.yaml" ]]; then
+  PROJECT_ROOT="${SCRIPT_DIR}"
+  MANIFEST="${PROJECT_ROOT}/manifests/install.yaml"
 else
+  PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+if [[ -z "${MANIFEST:-}" && -f "${PROJECT_ROOT}/deploy/install.yaml" ]]; then
+  MANIFEST="${PROJECT_ROOT}/deploy/install.yaml"
+elif [[ -z "${MANIFEST:-}" ]]; then
   MANIFEST="${PROJECT_ROOT}/manifests/install.yaml"
 fi
 VERSION="v1.1.0"
@@ -20,13 +25,14 @@ usage() {
 FTC 集群运维平台部署入口（普通 Kubernetes）
 
 用法：
-  ./scripts/deploy-platform.sh [选项]
+  交付包：./deploy-platform.sh [选项]
+  源码仓库：./scripts/deploy-platform.sh [选项]
 
 选项：
   --context <名称>       使用指定的 kubectl Context；默认使用当前 Context
   --version <版本>       平台版本；默认 v1.1.0
   --arch <架构>          auto、amd64 或 arm64；默认 auto
-  --manifest <路径>      安装清单；默认 deploy/install.yaml
+  --manifest <路径>      安装清单；默认自动识别 deploy/ 或 manifests/install.yaml
   --yes                  确认镜像已导入且 MySQL 已就绪，不再交互询问
   --dry-run              只检测和校验，不向集群部署
   -h, --help             显示帮助
@@ -139,6 +145,7 @@ FOUND_ARCHIVE=""
 for candidate in \
   "${PWD}/${ARCHIVE_NAME}" \
   "${PWD}/images/${ARCHIVE_NAME}" \
+  "${PROJECT_ROOT}/images/${ARCHIVE_NAME}" \
   "${PROJECT_ROOT}/dist/ftc-platform-${VERSION}-delivery/images/${ARCHIVE_NAME}"; do
   if [[ -f "$candidate" ]]; then
     FOUND_ARCHIVE="$candidate"
